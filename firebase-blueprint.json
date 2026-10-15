@@ -47,7 +47,7 @@
     },
     "StoreSettings": {
       "title": "StoreSettings",
-      "description": "Store branding configuration including store name and custom logo image",
+      "description": "Store branding configuration including store name, custom logo image, and access password",
       "type": "object",
       "properties": {
         "storeName": { "type": "string", "maxLength": 200 },
@@ -55,6 +55,7 @@
         "logoUrl": { "type": "string", "maxLength": 500000 },
         "phone": { "type": "string", "maxLength": 50 },
         "address": { "type": "string", "maxLength": 500 },
+        "accessPassword": { "type": "string", "maxLength": 100 },
         "updatedAt": { "type": "number" }
       },
       "required": ["storeName"]

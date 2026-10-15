@@ -51,6 +51,7 @@ service cloud.firestore {
              (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 500000)) &&
              (!('phone' in data) || (data.phone is string && data.phone.size() <= 50)) &&
              (!('address' in data) || (data.address is string && data.address.size() <= 500)) &&
+             (!('accessPassword' in data) || (data.accessPassword is string && data.accessPassword.size() <= 100)) &&
              (!('updatedAt' in data) || (data.updatedAt is number || data.updatedAt is string));
     }
 

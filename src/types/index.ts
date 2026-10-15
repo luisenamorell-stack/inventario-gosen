@@ -63,6 +63,7 @@ export interface StoreSettings {
   logoUrl?: string;
   phone?: string;
   address?: string;
+  accessPassword?: string;
   updatedAt?: number;
 }
 

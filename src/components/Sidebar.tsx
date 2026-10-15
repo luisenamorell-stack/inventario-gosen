@@ -13,7 +13,8 @@ import {
   ChevronRight,
   X,
   PanelLeftClose,
-  PanelLeftOpen
+  PanelLeftOpen,
+  LogOut
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -25,6 +26,7 @@ export interface SidebarProps {
   onToggleCollapse?: () => void;
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
+  onLogout?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -36,6 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
   isMobileOpen = false,
   onCloseMobile = () => {},
+  onLogout,
 }) => {
   const storeName = storeSettings?.storeName || 'StockMaster';
   const logoUrl = storeSettings?.logoUrl;
@@ -193,6 +196,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <RotateCcw className="w-4 h-4 shrink-0" />
               <span>Reiniciar Datos</span>
             </button>
+
+            {onLogout && (
+              <button
+                type="button"
+                onClick={() => {
+                  onCloseMobile();
+                  onLogout();
+                }}
+                className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 transition-colors cursor-pointer text-sm font-medium"
+              >
+                <LogOut className="w-4 h-4 shrink-0" />
+                <span>Cerrar Sesión</span>
+              </button>
+            )}
           </div>
         </div>
       </aside>
@@ -324,6 +341,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <PanelLeftClose className="w-4 h-4 shrink-0 text-slate-400" />
                   <span className="ml-3 truncate text-xs text-slate-400">Contraer Menú</span>
                 </>
+              )}
+            </button>
+          )}
+
+          {/* Desktop Logout Button */}
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className={`w-full flex items-center rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 transition-colors cursor-pointer text-sm font-medium ${
+                isCollapsed ? 'justify-center p-3' : 'justify-start px-3.5 py-2'
+              }`}
+              title="Cerrar Sesión"
+              aria-label="Cerrar Sesión"
+            >
+              <LogOut className="w-4 h-4 shrink-0" />
+              {!isCollapsed && (
+                <span className="ml-3 truncate">Cerrar Sesión</span>
               )}
             </button>
           )}

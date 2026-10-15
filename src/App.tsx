@@ -9,6 +9,7 @@ import { PriceCheckerTab } from './components/PriceCheckerTab';
 import { SuppliersView } from './components/SuppliersView';
 import { StoreSettingsView } from './components/StoreSettingsView';
 import { ToastContainer } from './components/ToastContainer';
+import { LoginView } from './components/LoginView';
 import {
   subscribeToInventory,
   subscribeToSuppliers,
@@ -24,7 +25,7 @@ import {
   seedInitialDataIfEmpty,
   pingFirestore
 } from './firebase/firestoreService';
-import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen, LogOut } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
 
 export const App: React.FC = () => {
@@ -53,6 +54,38 @@ export const App: React.FC = () => {
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  // Authentication State (Simple Password: GOSEN2026)
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      const localAuth = localStorage.getItem('stockmaster_authenticated');
+      const sessionAuth = sessionStorage.getItem('stockmaster_authenticated');
+      return localAuth === 'true' || sessionAuth === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleLoginSuccess = (remember: boolean) => {
+    setIsAuthenticated(true);
+    try {
+      if (remember) {
+        localStorage.setItem('stockmaster_authenticated', 'true');
+      } else {
+        sessionStorage.setItem('stockmaster_authenticated', 'true');
+      }
+    } catch {}
+    showToast('¡Bienvenido al sistema!', 'success');
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    try {
+      localStorage.removeItem('stockmaster_authenticated');
+      sessionStorage.removeItem('stockmaster_authenticated');
+    } catch {}
+    showToast('Sesión cerrada correctamente', 'info');
+  };
 
   // Sidebar Collapsible and Mobile Drawer State
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
@@ -353,6 +386,19 @@ export const App: React.FC = () => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
+  // If not authenticated, show protected login view with password GOSEN2026
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen w-screen overflow-auto bg-slate-950">
+        <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
+        <LoginView
+          storeSettings={storeSettings}
+          onLoginSuccess={handleLoginSuccess}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen flex flex-col md:flex-row overflow-hidden text-slate-800 bg-slate-50">
       {/* Toast notifications */}
@@ -371,6 +417,7 @@ export const App: React.FC = () => {
         onToggleCollapse={toggleSidebarCollapse}
         isMobileOpen={isMobileMenuOpen}
         onCloseMobile={() => setIsMobileMenuOpen(false)}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Area */}
@@ -477,6 +524,16 @@ export const App: React.FC = () => {
             >
               <RefreshCw className={`w-3 h-3 text-indigo-400 ${isPinging ? 'animate-spin' : ''}`} />
               <span>{isPinging ? 'Probando...' : 'Probar Conexión'}</span>
+            </button>
+
+            {/* Logout button */}
+            <button
+              onClick={handleLogout}
+              title="Cerrar sesión del sistema"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-rose-200 transition-colors text-[11px] font-medium border border-rose-800/60 cursor-pointer"
+            >
+              <LogOut className="w-3 h-3 text-rose-400" />
+              <span className="hidden sm:inline">Cerrar Sesión</span>
             </button>
           </div>
         </div>

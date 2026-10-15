@@ -377,6 +377,7 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   logoUrl: '',
   phone: '',
   address: '',
+  accessPassword: 'GOSEN2026',
 };
 
 export function subscribeToStoreSettings(
@@ -395,6 +396,7 @@ export function subscribeToStoreSettings(
           logoUrl: data.logoUrl || '',
           phone: data.phone || '',
           address: data.address || '',
+          accessPassword: data.accessPassword || 'GOSEN2026',
           updatedAt: Number(data.updatedAt) || Date.now(),
         });
       } else {
@@ -417,6 +419,7 @@ export async function saveStoreSettingsToFirestore(settings: StoreSettings): Pro
     logoUrl: settings.logoUrl?.trim() || '',
     phone: settings.phone?.trim() || '',
     address: settings.address?.trim() || '',
+    accessPassword: settings.accessPassword?.trim() || 'GOSEN2026',
     updatedAt: Date.now(),
   };
 

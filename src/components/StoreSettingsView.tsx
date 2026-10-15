@@ -17,7 +17,10 @@ import {
   FileText,
   Boxes,
   HelpCircle,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Lock,
+  EyeOff,
+  KeyRound
 } from 'lucide-react';
 
 interface StoreSettingsViewProps {
@@ -39,6 +42,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   const [logoUrl, setLogoUrl] = useState(currentSettings.logoUrl || '');
   const [phone, setPhone] = useState(currentSettings.phone || '');
   const [address, setAddress] = useState(currentSettings.address || '');
+  const [accessPassword, setAccessPassword] = useState(currentSettings.accessPassword || 'GOSEN2026');
+  const [showAccessPassword, setShowAccessPassword] = useState(false);
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -58,6 +63,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     setLogoUrl(currentSettings.logoUrl || '');
     setPhone(currentSettings.phone || '');
     setAddress(currentSettings.address || '');
+    setAccessPassword(currentSettings.accessPassword || 'GOSEN2026');
   }, [currentSettings]);
 
   const hasUnsavedChanges =
@@ -65,7 +71,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     tagline !== (currentSettings.tagline || '') ||
     logoUrl !== (currentSettings.logoUrl || '') ||
     phone !== (currentSettings.phone || '') ||
-    address !== (currentSettings.address || '');
+    address !== (currentSettings.address || '') ||
+    accessPassword !== (currentSettings.accessPassword || 'GOSEN2026');
 
   // File upload handler
   const handleProcessLogoFile = async (file: File) => {
@@ -141,6 +148,16 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
       return;
     }
 
+    if (!accessPassword.trim()) {
+      if (showToast) showToast('Por favor ingresa una contraseña para el acceso a la app', 'warning');
+      return;
+    }
+
+    if (accessPassword.trim().length < 4) {
+      if (showToast) showToast('La contraseña debe tener un mínimo de 4 caracteres', 'warning');
+      return;
+    }
+
     setIsSaving(true);
     try {
       const updatedSettings: StoreSettings = {
@@ -149,6 +166,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
         logoUrl: logoUrl.trim(),
         phone: phone.trim(),
         address: address.trim(),
+        accessPassword: accessPassword.trim(),
         updatedAt: Date.now(),
       };
 
@@ -172,6 +190,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     setLogoUrl('');
     setPhone('');
     setAddress('');
+    setAccessPassword('GOSEN2026');
     if (showToast) {
       showToast('Campos restablecidos a valores por defecto (haz clic en Guardar para confirmar)', 'info');
     }
@@ -503,6 +522,83 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                     maxLength={150}
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 text-sm text-slate-800 placeholder-slate-400 shadow-sm"
                   />
+                </div>
+              </div>
+            </div>
+
+            {/* Card 4: Seguridad & Contraseña de Acceso */}
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold shrink-0">
+                    <Lock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-800">Contraseña de Acceso a la App</h2>
+                    <p className="text-xs text-slate-400">Protege el sistema de inventario requiriendo esta clave en el inicio de sesión.</p>
+                  </div>
+                </div>
+
+                {accessPassword === 'GOSEN2026' ? (
+                  <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold border border-slate-200">
+                    Clave Predeterminada
+                  </span>
+                ) : (
+                  <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-200">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                    Clave Personalizada Activa
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                  Contraseña de Acceso <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <KeyRound className="w-4 h-4" />
+                  </div>
+                  <input
+                    type={showAccessPassword ? 'text' : 'password'}
+                    value={accessPassword}
+                    onChange={(e) => setAccessPassword(e.target.value)}
+                    placeholder="Ingresa la contraseña para ingresar a la app"
+                    maxLength={60}
+                    required
+                    className="w-full pl-10 pr-12 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-semibold text-slate-800 placeholder-slate-400 shadow-sm transition-all text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAccessPassword(!showAccessPassword)}
+                    tabIndex={-1}
+                    className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                    title={showAccessPassword ? 'Ocultar contraseña' : 'Ver contraseña'}
+                  >
+                    {showAccessPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 mt-2.5">
+                  <p className="text-xs text-slate-400 font-medium">
+                    Mínimo 4 caracteres. Ya no se mostrará en la pantalla de inicio por seguridad.
+                  </p>
+                  {accessPassword !== 'GOSEN2026' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccessPassword('GOSEN2026');
+                        if (showToast) showToast('Contraseña reestablecida a GOSEN2026 (haz clic en Guardar)', 'info');
+                      }}
+                      className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+                    >
+                      Restablecer a GOSEN2026
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
