@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "An inventory item in the store catalog",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 100 },
+        "name": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 100 },
+        "size": { "type": "string", "maxLength": 50 },
+        "supplier": { "type": "string", "maxLength": 200 },
+        "cost": { "type": "number" },
+        "price": { "type": "number" },
+        "stock": { "type": "integer" },
+        "img": { "type": "string", "maxLength": 1000 }
+      },
+      "required": ["code", "name", "category", "price", "stock"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "A supplier or vendor company providing merchandise",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 200 },
+        "contact": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "email": { "type": "string", "maxLength": 200 },
+        "address": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["name"]
+    },
+    "AuditHistory": {
+      "title": "AuditHistory",
+      "description": "Historical log of an inventory physical count audit",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 100 },
+        "timestamp": { "type": "number" },
+        "match": { "type": "integer" },
+        "missing": { "type": "integer" },
+        "extra": { "type": "integer" },
+        "netImpact": { "type": "number" },
+        "totalItems": { "type": "integer" }
+      },
+      "required": ["date", "match", "missing", "extra"]
+    }
+  },
+  "firestore": {
+    "/inventory/{productId}": {
+      "schema": "Product",
+      "description": "Collection of all retail inventory products and stock counts"
+    },
+    "/suppliers/{supplierId}": {
+      "schema": "Supplier",
+      "description": "Collection of wholesale suppliers and vendor contact directories"
+    },
+    "/audit_history/{auditId}": {
+      "schema": "AuditHistory",
+      "description": "Collection of closed audit reconciliation sessions"
+    }
+  }
+}

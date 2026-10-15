@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['code', 'name', 'category', 'price', 'stock']) &&
+             data.keys().hasOnly(['code', 'name', 'category', 'size', 'supplier', 'cost', 'price', 'stock', 'img']) &&
+             data.code is string && data.code.size() <= 100 &&
+             data.name is string && data.name.size() <= 200 &&
+             data.category is string && data.category.size() <= 100 &&
+             (!('size' in data) || (data.size is string && data.size.size() <= 50)) &&
+             (!('supplier' in data) || (data.supplier is string && data.supplier.size() <= 200)) &&
+             (!('cost' in data) || (data.cost is number)) &&
+             data.price is number &&
+             data.stock is int &&
+             (!('img' in data) || (data.img is string && data.img.size() <= 1000));
+    }
+
+    function isValidSupplier(data) {
+      return data.keys().hasAll(['name']) &&
+             data.keys().hasOnly(['name', 'contact', 'phone', 'email', 'address']) &&
+             data.name is string && data.name.size() <= 200 &&
+             (!('contact' in data) || (data.contact is string && data.contact.size() <= 200)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 50)) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 200)) &&
+             (!('address' in data) || (data.address is string && data.address.size() <= 500));
+    }
+
+    function isValidAuditHistory(data) {
+      return data.keys().hasAll(['date', 'match', 'missing', 'extra']) &&
+             data.keys().hasOnly(['date', 'timestamp', 'match', 'missing', 'extra', 'netImpact', 'totalItems']) &&
+             data.date is string && data.date.size() <= 100 &&
+             data.match is int &&
+             data.missing is int &&
+             data.extra is int &&
+             (!('netImpact' in data) || (data.netImpact is number)) &&
+             (!('totalItems' in data) || (data.totalItems is int));
+    }
+
+    // Global Safety Net Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /inventory/{productId} {
+      allow read: if true;
+      allow create: if isValidId(productId) && isValidProduct(incoming());
+      allow update: if isValidId(productId) && isValidProduct(incoming());
+      allow delete: if isValidId(productId);
+    }
+
+    match /suppliers/{supplierId} {
+      allow read: if true;
+      allow create: if isValidId(supplierId) && isValidSupplier(incoming());
+      allow update: if isValidId(supplierId) && isValidSupplier(incoming());
+      allow delete: if isValidId(supplierId);
+    }
+
+    match /audit_history/{auditId} {
+      allow read: if true;
+      allow create: if isValidId(auditId) && isValidAuditHistory(incoming());
+      allow update: if false;
+      allow delete: if isValidId(auditId);
+    }
+
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

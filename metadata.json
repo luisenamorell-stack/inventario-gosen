@@ -1,0 +1,7 @@
+{
+  "name": "StockMaster - Control de Inventario y Auditoría",
+  "description": "Sistema integral de control de inventario, auditoría física con escáner de códigos de barras, verificador de precios y gestión de proveedores con análisis financiero de discrepancias por IA.",
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

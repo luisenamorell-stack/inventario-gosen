@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background-color: #f8fafc;
+    color: #1e293b;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* Hide scrollbar for clean horizontal/vertical lists */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+#reader video,
+#price-reader video {
+  object-fit: cover;
+  border-radius: 0.75rem;
+}
+
+/* Print Styles */
+@media print {
+  body > * {
+    display: none !important;
+  }
+  #root {
+    display: block !important;
+  }
+  #root > * {
+    display: none !important;
+  }
+  #root > #printable-report {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    margin: 0;
+    padding: 1.5cm;
+    background: white !important;
+    color: black !important;
+  }
+  @page {
+    margin: 1cm;
+  }
+}
