@@ -104,7 +104,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
       {aiAnalysisText && (
         <div className="mb-6 p-4 bg-gray-50 border border-gray-300 rounded-lg text-sm text-gray-900">
           <h4 className="font-bold mb-1 flex items-center gap-2">
-            <span>Análisis Financiero de IA (Gemini)</span>
+            <span>Análisis Financiero con GOSEN IA</span>
           </h4>
           <p className="leading-relaxed text-xs">{aiAnalysisText}</p>
         </div>
