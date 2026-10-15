@@ -5,10 +5,11 @@ import {
   deleteDoc,
   onSnapshot,
   writeBatch,
-  getDocs
+  getDocs,
+  getDocFromServer
 } from 'firebase/firestore';
 import { db, auth } from './config';
-import { Product, Supplier, AuditHistoryRecord } from '../types';
+import { Product, Supplier, AuditHistoryRecord, StoreSettings } from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
 
 export enum OperationType {
@@ -63,7 +64,7 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-// ----------------- INVENTORY -----------------
+// ----------------- REAL-TIME INVENTORY -----------------
 
 export function subscribeToInventory(
   onData: (items: Product[]) => void,
@@ -89,6 +90,8 @@ export function subscribeToInventory(
           img: data.img || '',
         });
       });
+      // Sort alphabetically for stable UI rendering
+      items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
       onData(items);
     },
     (error) => {
@@ -98,10 +101,20 @@ export function subscribeToInventory(
   );
 }
 
-export async function saveProductToFirestore(product: Product): Promise<void> {
+export async function saveProductToFirestore(product: Product, oldCode?: string): Promise<void> {
   const docId = product.code.trim().replace(/\//g, '_');
   const path = `inventory/${docId}`;
   try {
+    // If the product code changed, remove previous document to prevent duplicates
+    if (oldCode && oldCode.trim() !== product.code.trim()) {
+      const oldDocId = oldCode.trim().replace(/\//g, '_');
+      try {
+        await deleteDoc(doc(db, 'inventory', oldDocId));
+      } catch (err) {
+        console.warn('Could not delete old product doc during rename:', err);
+      }
+    }
+
     const docRef = doc(db, 'inventory', docId);
     const payload: Record<string, any> = {
       code: product.code.trim(),
@@ -138,7 +151,7 @@ export async function deleteProductFromFirestore(id: string, code?: string): Pro
   }
 }
 
-// ----------------- SUPPLIERS -----------------
+// ----------------- REAL-TIME SUPPLIERS -----------------
 
 export function subscribeToSuppliers(
   onData: (suppliers: Supplier[]) => void,
@@ -160,6 +173,7 @@ export function subscribeToSuppliers(
           address: data.address || '',
         });
       });
+      suppliers.sort((a, b) => a.name.localeCompare(b.name));
       onData(suppliers);
     },
     (error) => {
@@ -225,7 +239,7 @@ export async function deleteSupplierFromFirestore(id: string, name?: string): Pr
   }
 }
 
-// ----------------- AUDIT HISTORY & ATOMIC COMMIT -----------------
+// ----------------- REAL-TIME AUDIT HISTORY & ATOMIC COMMIT -----------------
 
 export function subscribeToAuditHistory(
   onData: (records: AuditHistoryRecord[]) => void,
@@ -249,7 +263,7 @@ export function subscribeToAuditHistory(
           totalItems: Number(data.totalItems) || 0,
         });
       });
-      // Sort chronologically
+      // Sort chronologically ascending
       records.sort((a, b) => a.timestamp - b.timestamp);
       onData(records);
     },
@@ -295,7 +309,7 @@ export async function applyAuditChangesToFirestore(
 
 // ----------------- SEED INITIAL DATA IF EMPTY -----------------
 
-export async function seedInitialDataIfEmpty(): Promise<void> {
+export async function seedInitialDataIfEmpty(): Promise<boolean> {
   try {
     const invSnap = await getDocs(collection(db, 'inventory'));
     if (invSnap.empty) {
@@ -332,8 +346,84 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
 
       await batch.commit();
       console.log('Successfully seeded initial inventory and suppliers to Firestore.');
+      return true;
     }
+    return false;
   } catch (err) {
-    console.warn('Initial seeding skipped or error:', err);
+    console.warn('Initial seeding check skipped or failed:', err);
+    return false;
   }
 }
+
+// ----------------- PING / HEALTH CHECK -----------------
+
+export async function pingFirestore(): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+  const start = Date.now();
+  try {
+    const testDocRef = doc(db, 'test', 'connection');
+    await setDoc(testDocRef, { ping: Date.now() }, { merge: true });
+    await getDocFromServer(testDocRef);
+    return { ok: true, latencyMs: Date.now() - start };
+  } catch (err: any) {
+    return { ok: false, latencyMs: Date.now() - start, error: err?.message || String(err) };
+  }
+}
+
+// ----------------- STORE BRANDING & PROFILE SETTINGS -----------------
+
+export const DEFAULT_STORE_SETTINGS: StoreSettings = {
+  storeName: 'StockMaster',
+  tagline: 'Control de Inventario y Auditoría',
+  logoUrl: '',
+  phone: '',
+  address: '',
+};
+
+export function subscribeToStoreSettings(
+  onData: (settings: StoreSettings) => void,
+  onError?: (err: any) => void
+) {
+  const docRef = doc(db, 'settings', 'store_profile');
+  return onSnapshot(
+    docRef,
+    (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        onData({
+          storeName: data.storeName || 'StockMaster',
+          tagline: data.tagline || '',
+          logoUrl: data.logoUrl || '',
+          phone: data.phone || '',
+          address: data.address || '',
+          updatedAt: Number(data.updatedAt) || Date.now(),
+        });
+      } else {
+        // Return defaults if not configured yet
+        onData(DEFAULT_STORE_SETTINGS);
+      }
+    },
+    (error) => {
+      if (onError) onError(error);
+      handleFirestoreError(error, OperationType.GET, 'settings/store_profile');
+    }
+  );
+}
+
+export async function saveStoreSettingsToFirestore(settings: StoreSettings): Promise<void> {
+  const docRef = doc(db, 'settings', 'store_profile');
+  const payload: any = {
+    storeName: settings.storeName.trim() || 'StockMaster',
+    tagline: settings.tagline?.trim() || '',
+    logoUrl: settings.logoUrl?.trim() || '',
+    phone: settings.phone?.trim() || '',
+    address: settings.address?.trim() || '',
+    updatedAt: Date.now(),
+  };
+
+  try {
+    await setDoc(docRef, payload, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'settings/store_profile');
+  }
+}
+

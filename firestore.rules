@@ -20,8 +20,8 @@ service cloud.firestore {
              (!('supplier' in data) || (data.supplier is string && data.supplier.size() <= 200)) &&
              (!('cost' in data) || (data.cost is number)) &&
              data.price is number &&
-             data.stock is int &&
-             (!('img' in data) || (data.img is string && data.img.size() <= 1000));
+             (data.stock is number || data.stock is int) &&
+             (!('img' in data) || (data.img is string && data.img.size() <= 500000));
     }
 
     function isValidSupplier(data) {
@@ -38,11 +38,20 @@ service cloud.firestore {
       return data.keys().hasAll(['date', 'match', 'missing', 'extra']) &&
              data.keys().hasOnly(['date', 'timestamp', 'match', 'missing', 'extra', 'netImpact', 'totalItems']) &&
              data.date is string && data.date.size() <= 100 &&
-             data.match is int &&
-             data.missing is int &&
-             data.extra is int &&
+             (data.match is number || data.match is int) &&
+             (data.missing is number || data.missing is int) &&
+             (data.extra is number || data.extra is int) &&
              (!('netImpact' in data) || (data.netImpact is number)) &&
-             (!('totalItems' in data) || (data.totalItems is int));
+             (!('totalItems' in data) || (data.totalItems is number || data.totalItems is int));
+    }
+
+    function isValidStoreSettings(data) {
+      return (!('storeName' in data) || (data.storeName is string && data.storeName.size() <= 200)) &&
+             (!('tagline' in data) || (data.tagline is string && data.tagline.size() <= 200)) &&
+             (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 500000)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 50)) &&
+             (!('address' in data) || (data.address is string && data.address.size() <= 500)) &&
+             (!('updatedAt' in data) || (data.updatedAt is number || data.updatedAt is string));
     }
 
     // Global Safety Net Default Deny
@@ -71,8 +80,15 @@ service cloud.firestore {
       allow delete: if isValidId(auditId);
     }
 
+    match /settings/{settingId} {
+      allow read: if true;
+      allow create, update: if isValidId(settingId) && isValidStoreSettings(incoming());
+      allow delete: if isValidId(settingId);
+    }
+
     match /test/connection {
       allow read: if true;
+      allow write: if true;
     }
   }
 }

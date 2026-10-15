@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Product, AuditSessionItem, GroupedAuditItem, AuditHistoryRecord } from '../types';
+import { Product, AuditSessionItem, GroupedAuditItem, AuditHistoryRecord, StoreSettings } from '../types';
 import { playSound } from '../utils/audio';
 import { PrintableReport } from './PrintableReport';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -16,7 +16,15 @@ import {
   X,
   Bot,
   RotateCcw,
-  Check
+  Check,
+  Plus,
+  Minus,
+  ChevronDown,
+  ChevronRight,
+  Calculator,
+  Search,
+  SlidersHorizontal,
+  CheckCheck
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Html5Qrcode, Html5QrcodeScannerState } from 'html5-qrcode';
@@ -25,24 +33,41 @@ interface AuditViewProps {
   inventory: Product[];
   onApplyAuditChanges: (updatedInventory: Product[], historyRecord: AuditHistoryRecord) => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+  storeSettings?: StoreSettings;
 }
 
 export const AuditView: React.FC<AuditViewProps> = ({
   inventory,
   onApplyAuditChanges,
   showToast,
+  storeSettings,
 }) => {
   const [isAuditing, setIsAuditing] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showMatchAllConfirm, setShowMatchAllConfirm] = useState(false);
   const [auditSession, setAuditSession] = useState<Record<string, AuditSessionItem>>({});
+  
+  // Scanning & Manual input states
   const [manualCode, setManualCode] = useState('');
+  const [scanQuantity, setScanQuantity] = useState<number>(1);
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
   const [lastScannedGroup, setLastScannedGroup] = useState<string | null>(null);
   const [lastScannedItemInfo, setLastScannedItemInfo] = useState<{
     name: string;
     code: string;
+    qtyAdded?: number;
     isError?: boolean;
   }>({ name: '-', code: '-' });
+
+  // Table expansion state for variants
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  // Batch Count Modal state
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [batchSearch, setBatchSearch] = useState('');
+  const [batchSelectedCode, setBatchSelectedCode] = useState('');
+  const [batchQuantity, setBatchQuantity] = useState<number>(0);
+  const [batchMode, setBatchMode] = useState<'set' | 'add'>('set');
 
   // Camera state
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -94,12 +119,93 @@ export const AuditView: React.FC<AuditViewProps> = ({
     setLastScannedCode(null);
     setLastScannedGroup(null);
     setLastScannedItemInfo({ name: '-', code: '-' });
+    setExpandedGroups({});
   };
 
-  // Process a scanned or typed barcode
-  const processScanCode = (code: string) => {
+  // Direct count setters
+  const handleSetCount = (code: string, newCount: number) => {
+    const validCount = Math.max(0, Math.round(Number(newCount) || 0));
+    setAuditSession((prev) => {
+      if (!prev[code]) return prev;
+      return {
+        ...prev,
+        [code]: {
+          ...prev[code],
+          counted: validCount,
+        },
+      };
+    });
+    playSound('beep');
+    setLastScannedCode(code);
+    if (auditSession[code]) {
+      setLastScannedGroup(auditSession[code].item.name);
+      setLastScannedItemInfo({
+        name: `${auditSession[code].item.name}${auditSession[code].item.size ? ` (Talla: ${auditSession[code].item.size})` : ''}`,
+        code,
+        qtyAdded: validCount,
+        isError: false,
+      });
+    }
+  };
+
+  const handleAddCount = (code: string, delta: number) => {
+    setAuditSession((prev) => {
+      if (!prev[code]) return prev;
+      const nextCount = Math.max(0, prev[code].counted + delta);
+      return {
+        ...prev,
+        [code]: {
+          ...prev[code],
+          counted: nextCount,
+        },
+      };
+    });
+    playSound('beep');
+  };
+
+  const handleMatchItem = (code: string) => {
+    setAuditSession((prev) => {
+      if (!prev[code]) return prev;
+      return {
+        ...prev,
+        [code]: {
+          ...prev[code],
+          counted: prev[code].expected,
+        },
+      };
+    });
+    playSound('beep');
+    showToast(`Stock de "${auditSession[code]?.item.name || code}" fijado a ${auditSession[code]?.expected || 0}`, 'info');
+  };
+
+  const handleMatchAll = () => {
+    setAuditSession((prev) => {
+      const updated: Record<string, AuditSessionItem> = {};
+      Object.entries(prev).forEach(([code, data]) => {
+        updated[code] = {
+          ...data,
+          counted: data.expected,
+        };
+      });
+      return updated;
+    });
+    setShowMatchAllConfirm(false);
+    playSound('beep');
+    showToast('Todos los artículos se igualaron al stock del sistema. Puedes ajustar las discrepancias.', 'success');
+  };
+
+  const toggleGroupExpand = (groupName: string) => {
+    setExpandedGroups((prev) => ({
+      ...prev,
+      [groupName]: !prev[groupName],
+    }));
+  };
+
+  // Process a scanned or typed barcode with custom quantity
+  const processScanCode = (code: string, qty: number = scanQuantity) => {
     const trimmedCode = code.trim();
     if (!trimmedCode) return;
+    const quantityToAdd = Math.max(1, Math.round(Number(qty) || 1));
 
     if (auditSession[trimmedCode]) {
       // Recognized product
@@ -109,7 +215,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
         ...prev,
         [trimmedCode]: {
           ...prev[trimmedCode],
-          counted: prev[trimmedCode].counted + 1,
+          counted: prev[trimmedCode].counted + quantityToAdd,
         },
       }));
 
@@ -118,8 +224,11 @@ export const AuditView: React.FC<AuditViewProps> = ({
       setLastScannedItemInfo({
         name: `${item.name}${item.size ? ` (Talla: ${item.size})` : ''}`,
         code: trimmedCode,
+        qtyAdded: quantityToAdd,
         isError: false,
       });
+
+      showToast(`+${quantityToAdd} "${item.name}" registrado`, 'success');
     } else {
       // Unrecognized product
       playSound('error');
@@ -135,9 +244,32 @@ export const AuditView: React.FC<AuditViewProps> = ({
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (manualCode.trim()) {
-      processScanCode(manualCode);
+      processScanCode(manualCode, scanQuantity);
       setManualCode('');
     }
+  };
+
+  // Handle batch count modal submission
+  const handleBatchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!batchSelectedCode) {
+      showToast('Por favor selecciona un artículo', 'warning');
+      return;
+    }
+
+    const qty = Math.max(0, Math.round(Number(batchQuantity) || 0));
+
+    if (batchMode === 'set') {
+      handleSetCount(batchSelectedCode, qty);
+      showToast(`Total de "${auditSession[batchSelectedCode]?.item.name}" fijado en ${qty}`, 'success');
+    } else {
+      handleAddCount(batchSelectedCode, qty);
+      showToast(`+${qty} unidades añadidas al conteo`, 'success');
+    }
+
+    setIsBatchModalOpen(false);
+    setBatchSelectedCode('');
+    setBatchQuantity(0);
   };
 
   // Camera scanner control
@@ -164,7 +296,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
           // Pause briefly to prevent duplicate multi-scans of same code
           if (scannerRef.current && scannerRef.current.getState() === Html5QrcodeScannerState.SCANNING) {
             scannerRef.current.pause();
-            processScanCode(decodedText);
+            processScanCode(decodedText, scanQuantity);
             setTimeout(() => {
               if (scannerRef.current && scannerRef.current.getState() === Html5QrcodeScannerState.PAUSED) {
                 scannerRef.current.resume();
@@ -251,6 +383,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
   }, [auditSession]);
 
   const uniqueScannedCount = Object.values(auditSession).filter((s) => s.counted > 0).length;
+  const totalPhysicalUnits = Object.values(auditSession).reduce((sum, s) => sum + s.counted, 0);
 
   // In-progress AI Analysis
   const handleAnalyzeWithAI = async () => {
@@ -373,7 +506,6 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
   // Apply Changes to inventory
   const handleApplyChanges = () => {
-    // Build updated inventory
     const updatedInventory = inventory.map((product) => {
       if (auditSession[product.code]) {
         return {
@@ -402,7 +534,6 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
     onApplyAuditChanges(updatedInventory, newRecord);
 
-    // Confetti celebration
     confetti({
       particleCount: 80,
       spread: 70,
@@ -418,6 +549,17 @@ export const AuditView: React.FC<AuditViewProps> = ({
     window.print();
   };
 
+  // Filtered products for Batch Modal
+  const batchFilteredProducts = inventory.filter((item) => {
+    const q = batchSearch.toLowerCase().trim();
+    return (
+      !q ||
+      item.name.toLowerCase().includes(q) ||
+      item.code.toLowerCase().includes(q) ||
+      (item.size && item.size.toLowerCase().includes(q))
+    );
+  });
+
   // ================= RENDER START SCREEN =================
   if (!isAuditing) {
     return (
@@ -425,7 +567,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-slate-800">Auditoría de Inventario</h1>
           <p className="text-sm text-slate-500">
-            Escanea códigos para contar y cuadrar el stock físico vs sistema.
+            Escanea códigos o ingresa totales por lote para cuadrar el stock físico vs sistema.
           </p>
         </header>
 
@@ -435,12 +577,12 @@ export const AuditView: React.FC<AuditViewProps> = ({
               <ClipboardList className="w-10 h-10" />
             </div>
             <h2 className="text-xl font-bold text-slate-800 mb-2">Iniciar Nuevo Conteo</h2>
-            <p className="text-slate-500 text-sm mb-8 leading-relaxed">
-              El sistema registrará todo lo que escanees por cámara o teclado y lo comparará en tiempo real con el inventario actual.
+            <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+              El sistema te permite contar escaneando uno a uno o ingresando cantidades totales de forma manual y directa por artículo.
             </p>
             <button
               onClick={startAudit}
-              className="w-full bg-emerald-600 text-white py-3.5 rounded-xl font-bold hover:bg-emerald-700 transition-colors shadow-md shadow-emerald-500/20 cursor-pointer"
+              className="w-full bg-emerald-600 text-white py-3.5 rounded-xl font-bold hover:bg-emerald-700 transition-colors shadow-md shadow-emerald-500/20 cursor-pointer text-base"
             >
               Comenzar Auditoría
             </button>
@@ -456,43 +598,133 @@ export const AuditView: React.FC<AuditViewProps> = ({
       {/* Header with action controls */}
       <header className="mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-3 shrink-0">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Auditoría en Progreso</h1>
-          <p className="text-sm text-slate-500">
-            Escanea artículos con la cámara o ingresa códigos SKU directamente.
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-slate-800">Auditoría en Progreso</h1>
+            <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-0.5 rounded-full">
+              {totalPhysicalUnits} unidades contadas
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+            Ingresa cantidades totales directamente en la tabla, por lote o con el escáner.
           </p>
         </div>
-        <div className="flex gap-2 w-full sm:w-auto">
+        <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+          {/* Quick Batch Entry Button */}
+          <button
+            onClick={() => {
+              setBatchQuantity(0);
+              setBatchMode('set');
+              setIsBatchModalOpen(true);
+            }}
+            className="bg-emerald-600 text-white px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold hover:bg-emerald-700 transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+            title="Ingresar o ajustar cantidad total por artículo"
+          >
+            <Calculator className="w-4 h-4" />
+            <span>Ingreso por Lote</span>
+          </button>
+
+          {/* Match All Button */}
+          <button
+            onClick={() => setShowMatchAllConfirm(true)}
+            className="bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium hover:bg-slate-50 transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+            title="Cuadrar todo con el stock del sistema"
+          >
+            <CheckCheck className="w-4 h-4 text-emerald-600" />
+            <span>Cuadrar Todo</span>
+          </button>
+
+          {/* AI Analysis Button */}
           <button
             onClick={handleAnalyzeWithAI}
-            className="flex-1 sm:flex-none bg-purple-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+            className="bg-purple-600 text-white px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold hover:bg-purple-700 transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
             title="Analizar patrones y discrepancias con IA"
           >
             <Sparkles className="w-4 h-4" />
             <span>Analizar con IA</span>
           </button>
+
+          {/* Finalize Button */}
           <button
             onClick={handleFinishAudit}
-            className="flex-1 sm:flex-none bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+            className="bg-blue-600 text-white px-4 py-2 rounded-xl text-xs sm:text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
           >
             <Printer className="w-4 h-4" />
-            <span>Finalizar y Reportar</span>
+            <span>Finalizar Conteo</span>
           </button>
         </div>
       </header>
 
       {/* Main Dual Columns */}
       <div className="flex-1 flex flex-col lg:flex-row gap-6 h-full overflow-hidden">
-        {/* Left Column: Scanner and Input (1/3) */}
-        <div className="w-full lg:w-1/3 flex flex-col gap-4 overflow-y-auto no-scrollbar">
-          {/* Scanner Card */}
+        {/* Left Column: Scanner, Multiplier, and Manual Entry (1/3) */}
+        <div className="w-full lg:w-1/3 flex flex-col gap-4 overflow-y-auto no-scrollbar shrink-0">
+          {/* Scanner Card with Multiplier */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
-            <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm">
-              <Barcode className="w-4 h-4 text-slate-400" />
-              <span>Escáner de Código de Barras</span>
-            </h3>
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm">
+                <Barcode className="w-4 h-4 text-slate-400" />
+                <span>Escáner y Multiplicador</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setBatchQuantity(0);
+                  setBatchMode('set');
+                  setIsBatchModalOpen(true);
+                }}
+                className="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1 cursor-pointer"
+              >
+                <Calculator className="w-3.5 h-3.5" />
+                <span>Ingreso Total</span>
+              </button>
+            </div>
+
+            {/* Quantity Multiplier Toolbar */}
+            <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 mb-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1">
+                  <SlidersHorizontal className="w-3 h-3 text-slate-400" />
+                  <span>Cantidad por Escaneo / Ingreso:</span>
+                </label>
+                <span className="text-xs font-bold text-blue-600 font-mono">
+                  +{scanQuantity} unids
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min="1"
+                  value={scanQuantity}
+                  onChange={(e) =>
+                    setScanQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))
+                  }
+                  className="w-16 p-1.5 border border-slate-300 rounded-lg text-center font-bold text-sm bg-white outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <div className="flex flex-1 gap-1 overflow-x-auto no-scrollbar">
+                  {[1, 5, 10, 25, 50].map((val) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setScanQuantity(val)}
+                      className={`px-2 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        scanQuantity === val
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      +{val}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
 
             {/* Camera Viewport */}
-            <div className={`w-full rounded-xl overflow-hidden bg-slate-50 relative ${isCameraActive ? 'block' : 'hidden'}`}>
+            <div
+              className={`w-full rounded-xl overflow-hidden bg-slate-50 relative ${
+                isCameraActive ? 'block' : 'hidden'
+              }`}
+            >
               <div id="audit-reader" className="w-full min-h-[180px]"></div>
               {isCameraActive && (
                 <div className="absolute bottom-3 left-0 right-0 flex justify-center z-10">
@@ -509,7 +741,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
             {/* Camera Placeholder */}
             {!isCameraActive && (
-              <div className="text-center py-6 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
+              <div className="text-center py-5 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
                 <button
                   onClick={startScanner}
                   className="px-4 py-2 bg-slate-800 text-white rounded-xl text-sm font-medium hover:bg-slate-700 transition-colors shadow-sm flex items-center gap-2 mx-auto cursor-pointer"
@@ -521,43 +753,62 @@ export const AuditView: React.FC<AuditViewProps> = ({
             )}
 
             {/* Manual Barcode Input Divider */}
-            <div className="mt-4 flex items-center gap-3">
+            <div className="mt-3 flex items-center gap-3">
               <div className="flex-1 h-px bg-slate-200"></div>
-              <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
-                O INGRESO MANUAL
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                O INGRESO POR CÓDIGO
               </span>
               <div className="flex-1 h-px bg-slate-200"></div>
             </div>
 
             {/* Manual Form */}
-            <form onSubmit={handleManualSubmit} className="mt-3">
-              <input
-                type="text"
-                value={manualCode}
-                onChange={(e) => setManualCode(e.target.value)}
-                placeholder="Escribe el código y presiona Enter..."
-                className="w-full p-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm bg-slate-50 font-mono"
-              />
+            <form onSubmit={handleManualSubmit} className="mt-2.5">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={manualCode}
+                  onChange={(e) => setManualCode(e.target.value)}
+                  placeholder={`Escribe SKU y suma +${scanQuantity}...`}
+                  className="w-full p-2.5 pr-20 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm bg-slate-50 font-mono"
+                />
+                <button
+                  type="submit"
+                  className="absolute right-1.5 top-1.5 bottom-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                >
+                  Sumar
+                </button>
+              </div>
             </form>
           </div>
 
           {/* Quick Session Progress Card */}
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-3">
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-3">
             <div className="flex justify-between items-center text-sm">
-              <span className="text-slate-500 font-medium">Modelos Escaneados</span>
+              <span className="text-slate-500 font-medium">Modelos con Conteo</span>
               <span className="font-bold text-slate-800 text-base">{uniqueScannedCount}</span>
             </div>
 
-            <div className={`p-3 rounded-xl border transition-colors ${
-              lastScannedItemInfo.isError
-                ? 'bg-rose-50 border-rose-200'
-                : 'bg-blue-50 border-blue-100'
-            }`}>
-              <p className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 ${
-                lastScannedItemInfo.isError ? 'text-rose-600' : 'text-blue-600'
-              }`}>
-                Último Escaneo
-              </p>
+            <div
+              className={`p-3 rounded-xl border transition-colors ${
+                lastScannedItemInfo.isError
+                  ? 'bg-rose-50 border-rose-200'
+                  : 'bg-blue-50 border-blue-100'
+              }`}
+            >
+              <div className="flex justify-between items-center mb-0.5">
+                <p
+                  className={`text-[10px] font-bold uppercase tracking-wider ${
+                    lastScannedItemInfo.isError ? 'text-rose-600' : 'text-blue-600'
+                  }`}
+                >
+                  Último Registro
+                </p>
+                {lastScannedItemInfo.qtyAdded && (
+                  <span className="text-[10px] font-bold bg-blue-200 text-blue-800 px-1.5 py-0.2 rounded">
+                    +{lastScannedItemInfo.qtyAdded}
+                  </span>
+                )}
+              </div>
               <p
                 className={`font-semibold text-sm truncate ${
                   lastScannedItemInfo.isError ? 'text-rose-700' : 'text-slate-800'
@@ -574,26 +825,33 @@ export const AuditView: React.FC<AuditViewProps> = ({
             <button
               type="button"
               onClick={() => setShowResetConfirm(true)}
-              className="mt-2 text-xs text-slate-400 hover:text-slate-600 flex items-center justify-center gap-1 cursor-pointer py-1"
+              className="mt-1 text-xs text-slate-400 hover:text-slate-600 flex items-center justify-center gap-1 cursor-pointer py-1"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reiniciar conteos de sesión</span>
+              <span>Reiniciar conteos de sesión a 0</span>
             </button>
           </div>
         </div>
 
-        {/* Right Column: Grouped Audit Table (2/3) */}
+        {/* Right Column: Grouped Audit Table with Inline Quantity Inputs (2/3) */}
         <div className="w-full lg:w-2/3 bg-white border border-slate-200 rounded-2xl flex flex-col shadow-sm overflow-hidden h-full">
-          <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
-            <h3 className="font-bold text-slate-800 text-sm">Detalle de Auditoría Agrupado</h3>
-            <div className="flex gap-2">
-              <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700">
+          <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-wrap justify-between items-center gap-2 shrink-0">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm">
+                Detalle de Auditoría & Conteo Directo
+              </h3>
+              <p className="text-xs text-slate-500">
+                Escribe la cantidad directamente en cada casilla para ajustar el total.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700">
                 <CheckCircle2 className="w-3 h-3" /> Exacto
               </span>
-              <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-md bg-red-50 text-red-700">
+              <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md bg-red-50 text-red-700">
                 <ArrowDown className="w-3 h-3" /> Faltante
               </span>
-              <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-md bg-orange-50 text-orange-700">
+              <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md bg-orange-50 text-orange-700">
                 <ArrowUp className="w-3 h-3" /> Sobrante
               </span>
             </div>
@@ -604,15 +862,17 @@ export const AuditView: React.FC<AuditViewProps> = ({
               <thead className="sticky top-0 bg-white z-10 shadow-sm">
                 <tr className="text-slate-500 text-xs uppercase tracking-wider border-b border-slate-200">
                   <th className="p-3 pl-4 font-semibold">Producto / Modelo</th>
-                  <th className="p-3 font-semibold text-center">Stock Sist.</th>
-                  <th className="p-3 font-semibold text-center">Conteo Físico</th>
-                  <th className="p-3 pr-4 font-semibold text-right">Diferencia</th>
+                  <th className="p-3 font-semibold text-center w-24">Stock Sist.</th>
+                  <th className="p-3 font-semibold text-center w-48">Conteo Físico Total</th>
+                  <th className="p-3 pr-4 font-semibold text-right w-28">Diferencia</th>
                 </tr>
               </thead>
               <tbody className="text-sm divide-y divide-slate-100">
                 {groupedItems.map((group) => {
                   const diff = group.counted - group.expected;
                   const isLastScanned = group.name === lastScannedGroup;
+                  const hasMultipleVariants = group.details.length > 1;
+                  const isExpanded = !!expandedGroups[group.name];
 
                   let statusBadge = (
                     <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-bold text-emerald-600 bg-emerald-50">
@@ -635,41 +895,224 @@ export const AuditView: React.FC<AuditViewProps> = ({
                   }
 
                   return (
-                    <tr
-                      key={group.name}
-                      ref={isLastScanned ? lastScannedRowRef : null}
-                      className={
-                        isLastScanned
-                          ? 'bg-blue-50/90 transition-colors duration-300'
-                          : 'hover:bg-slate-50 transition-colors'
-                      }
-                    >
-                      <td className="p-3 pl-4 border-b border-slate-100">
-                        <p className="font-semibold text-slate-800 text-sm truncate max-w-[240px]" title={group.name}>
-                          {group.name}
-                        </p>
-                        <p className="text-xs text-slate-400 font-mono">
-                          Agrupado ({group.codes.length} vars)
-                        </p>
-                      </td>
-                      <td className="p-3 border-b border-slate-100 text-center font-medium text-slate-500">
-                        {group.expected}
-                      </td>
-                      <td className="p-3 border-b border-slate-100 text-center">
-                        <span
-                          className={`inline-block px-2.5 py-1 rounded-lg font-bold min-w-[2.2rem] ${
-                            group.counted > 0
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'bg-slate-100 text-slate-500'
-                          }`}
-                        >
-                          {group.counted}
-                        </span>
-                      </td>
-                      <td className="p-3 pr-4 border-b border-slate-100 text-right">
-                        {statusBadge}
-                      </td>
-                    </tr>
+                    <React.Fragment key={group.name}>
+                      <tr
+                        ref={isLastScanned ? lastScannedRowRef : null}
+                        className={
+                          isLastScanned
+                            ? 'bg-blue-50/80 transition-colors duration-300'
+                            : 'hover:bg-slate-50 transition-colors'
+                        }
+                      >
+                        {/* Product Info & Expand button */}
+                        <td className="p-3 pl-4 border-b border-slate-100">
+                          <div className="flex items-center gap-2">
+                            {hasMultipleVariants ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleGroupExpand(group.name)}
+                                className="p-1 hover:bg-slate-200 rounded-md text-slate-500 transition-colors cursor-pointer"
+                                title={isExpanded ? 'Ocultar tallas' : 'Ver y editar tallas'}
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="w-4 h-4 text-blue-600" />
+                                ) : (
+                                  <ChevronRight className="w-4 h-4" />
+                                )}
+                              </button>
+                            ) : (
+                              <div className="w-6"></div>
+                            )}
+                            <div>
+                              <p
+                                className="font-semibold text-slate-800 text-sm truncate max-w-[200px]"
+                                title={group.name}
+                              >
+                                {group.name}
+                              </p>
+                              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                                <span>{group.category || 'General'}</span>
+                                {hasMultipleVariants && (
+                                  <span className="font-medium text-blue-600">
+                                    · {group.details.length} tallas
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Expected System Stock */}
+                        <td className="p-3 border-b border-slate-100 text-center font-semibold text-slate-500">
+                          {group.expected}
+                        </td>
+
+                        {/* Physical Count Field (Inline editor for single variant or group total) */}
+                        <td className="p-3 border-b border-slate-100 text-center">
+                          {!hasMultipleVariants ? (
+                            // Single variant: direct numeric input with stepper!
+                            <div className="inline-flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200">
+                              <button
+                                type="button"
+                                onClick={() => handleAddCount(group.details[0].code, -1)}
+                                className="w-6 h-6 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 cursor-pointer shadow-2xs text-xs"
+                                title="Restar 1"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input
+                                type="number"
+                                min="0"
+                                value={group.counted}
+                                onChange={(e) =>
+                                  handleSetCount(
+                                    group.details[0].code,
+                                    parseInt(e.target.value, 10) || 0
+                                  )
+                                }
+                                className="w-16 p-1 text-center font-black text-slate-800 text-sm bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleAddCount(group.details[0].code, 1)}
+                                className="w-6 h-6 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 cursor-pointer shadow-2xs text-xs"
+                                title="Sumar 1"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ) : (
+                            // Multi-variant group: show total + expand/edit button
+                            <div className="inline-flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleGroupExpand(group.name)}
+                                className={`px-2.5 py-1 rounded-lg font-black text-sm transition-all cursor-pointer flex items-center gap-1.5 ${
+                                  group.counted > 0
+                                    ? 'bg-blue-100 text-blue-800 hover:bg-blue-200'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                                title="Haz clic para ver y editar el conteo de cada talla"
+                              >
+                                <span>{group.counted}</span>
+                                <span className="text-[10px] font-normal uppercase opacity-75">
+                                  {isExpanded ? 'cerrar' : 'editar'}
+                                </span>
+                              </button>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Difference Badge */}
+                        <td className="p-3 pr-4 border-b border-slate-100 text-right">
+                          {statusBadge}
+                        </td>
+                      </tr>
+
+                      {/* Sub-rows for Multi-variant items when expanded */}
+                      {hasMultipleVariants && isExpanded && (
+                        <tr className="bg-slate-50/70">
+                          <td colSpan={4} className="p-3 pl-10 pr-4 border-b border-slate-200">
+                            <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
+                              <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                                <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                                  Desglose por Talla / SKU ({group.name})
+                                </p>
+                                <p className="text-xs text-slate-400">
+                                  Ingresa el número físico de cada talla:
+                                </p>
+                              </div>
+                              <div className="divide-y divide-slate-100">
+                                {group.details.map((detail) => {
+                                  const itemDiff = detail.counted - detail.expected;
+                                  return (
+                                    <div
+                                      key={detail.code}
+                                      className="py-2 flex items-center justify-between gap-4 text-xs"
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded text-xs">
+                                          Talla: {detail.size || 'Única'}
+                                        </span>
+                                        <span className="font-mono text-slate-400 text-[11px]">
+                                          {detail.code}
+                                        </span>
+                                      </div>
+
+                                      <div className="flex items-center gap-6">
+                                        <div className="text-slate-500">
+                                          <span>Sist: </span>
+                                          <strong className="text-slate-700">
+                                            {detail.expected}
+                                          </strong>
+                                        </div>
+
+                                        {/* Direct numeric input for this specific variant */}
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleAddCount(detail.code, -1)}
+                                            className="w-5 h-5 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+                                          >
+                                            <Minus className="w-2.5 h-2.5" />
+                                          </button>
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            value={detail.counted}
+                                            onChange={(e) =>
+                                              handleSetCount(
+                                                detail.code,
+                                                parseInt(e.target.value, 10) || 0
+                                              )
+                                            }
+                                            className="w-14 p-1 text-center font-bold text-slate-800 bg-slate-50 border border-slate-200 rounded focus:ring-1 focus:ring-blue-500 outline-none text-xs"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => handleAddCount(detail.code, 1)}
+                                            className="w-5 h-5 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+                                          >
+                                            <Plus className="w-2.5 h-2.5" />
+                                          </button>
+                                        </div>
+
+                                        {/* Quick match this variant */}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleMatchItem(detail.code)}
+                                          className="text-[11px] text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                                          title="Igualar al stock del sistema"
+                                        >
+                                          = Cuadrar
+                                        </button>
+
+                                        {/* Diff badge */}
+                                        <span
+                                          className={`font-bold w-12 text-right ${
+                                            itemDiff === 0
+                                              ? 'text-emerald-600'
+                                              : itemDiff < 0
+                                              ? 'text-red-600'
+                                              : 'text-orange-600'
+                                          }`}
+                                        >
+                                          {itemDiff === 0
+                                            ? 'Exacto'
+                                            : itemDiff > 0
+                                            ? `+${itemDiff}`
+                                            : itemDiff}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -677,6 +1120,166 @@ export const AuditView: React.FC<AuditViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Batch / Total Quantity Entry Modal */}
+      {isBatchModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 z-[80] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[85vh]">
+            <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <Calculator className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-base">
+                    Ingresar Conteo por Lote o Total
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Establece el número total de unidades contadas para un artículo.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBatchModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBatchSubmit} className="p-6 overflow-y-auto space-y-4">
+              {/* Product Search & Selection */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
+                  1. Buscar y Seleccionar Artículo
+                </label>
+                <div className="relative mb-2">
+                  <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type="text"
+                    value={batchSearch}
+                    onChange={(e) => setBatchSearch(e.target.value)}
+                    placeholder="Filtrar por nombre o SKU..."
+                    className="w-full p-2.5 pl-9 border border-slate-300 rounded-xl text-sm bg-slate-50 outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white">
+                  {batchFilteredProducts.map((p) => {
+                    const isSelected = batchSelectedCode === p.code;
+                    const currentCounted = auditSession[p.code]?.counted || 0;
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => {
+                          setBatchSelectedCode(p.code);
+                          setBatchQuantity(currentCounted || p.stock || 0);
+                        }}
+                        className={`p-2.5 text-xs flex items-center justify-between cursor-pointer transition-colors ${
+                          isSelected
+                            ? 'bg-emerald-50 text-emerald-900 font-bold border-l-4 border-emerald-600'
+                            : 'hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <p className="font-semibold text-sm">
+                            {p.name} {p.size ? `(Talla: ${p.size})` : ''}
+                          </p>
+                          <p className="font-mono text-slate-400 text-[11px]">{p.code}</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-slate-400">Sist: {p.stock} unids</span>
+                          <p className="text-blue-600 font-bold">Contado: {currentCounted}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Mode Selection */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
+                  2. Acción a Realizar
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBatchMode('set')}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer text-center ${
+                      batchMode === 'set'
+                        ? 'border-emerald-600 bg-emerald-50 text-emerald-800 ring-2 ring-emerald-500/20'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    Fijar como Conteo Total
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBatchMode('add')}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer text-center ${
+                      batchMode === 'add'
+                        ? 'border-blue-600 bg-blue-50 text-blue-800 ring-2 ring-blue-500/20'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    Sumar a lo ya Contado
+                  </button>
+                </div>
+              </div>
+
+              {/* Quantity Input */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
+                  3. Cantidad de Unidades {batchMode === 'set' ? '(Total Físico)' : '(A Sumar)'}
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={batchQuantity}
+                    onChange={(e) =>
+                      setBatchQuantity(Math.max(0, parseInt(e.target.value, 10) || 0))
+                    }
+                    className="w-full p-3 border-2 border-slate-300 rounded-xl text-center font-black text-2xl text-slate-800 outline-none focus:border-emerald-500 bg-slate-50"
+                  />
+                </div>
+                <div className="flex gap-1.5 mt-2">
+                  {[5, 10, 20, 50, 100].map((num) => (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => setBatchQuantity(num)}
+                      className="flex-1 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold text-slate-700 cursor-pointer"
+                    >
+                      {num}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsBatchModalOpen(false)}
+                  className="px-4 py-2 text-slate-600 text-sm font-semibold hover:bg-slate-100 rounded-xl cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={!batchSelectedCode}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+                >
+                  {batchMode === 'set' ? 'Establecer Total' : 'Sumar al Conteo'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* AI Loading Overlay */}
       {isAiLoading && (
@@ -904,6 +1507,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
         netImpact={summaryData.netImpact}
         groupedItems={groupedItems}
         aiAnalysisText={summaryData.aiSummary}
+        storeSettings={storeSettings}
       />
 
       {/* Confirmation Dialog for Audit Count Reset */}
@@ -919,6 +1523,18 @@ export const AuditView: React.FC<AuditViewProps> = ({
           startAudit();
         }}
         onCancel={() => setShowResetConfirm(false)}
+      />
+
+      {/* Confirmation Dialog for Match All */}
+      <ConfirmDialog
+        isOpen={showMatchAllConfirm}
+        title="¿Cuadrar todos los artículos con el sistema?"
+        message="Se asignará el stock esperado del sistema como conteo físico actual para todos los artículos. Podrás modificar individualmente cualquier discrepancia."
+        confirmLabel="Sí, Cuadrar Todo"
+        cancelLabel="Cancelar"
+        isDestructive={false}
+        onConfirm={handleMatchAll}
+        onCancel={() => setShowMatchAllConfirm(false)}
       />
     </div>
   );

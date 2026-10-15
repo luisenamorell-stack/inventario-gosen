@@ -7,7 +7,6 @@ import {
   Camera,
   CameraOff,
   Box,
-  Cubes,
   AlertCircle,
   Layers
 } from 'lucide-react';

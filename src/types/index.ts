@@ -55,7 +55,16 @@ export interface AuditHistoryRecord {
   totalItems: number;
 }
 
-export type ActiveTab = 'dashboard' | 'inventory' | 'audit' | 'price-checker' | 'suppliers';
+export type ActiveTab = 'dashboard' | 'inventory' | 'audit' | 'price-checker' | 'suppliers' | 'settings';
+
+export interface StoreSettings {
+  storeName: string;
+  tagline?: string;
+  logoUrl?: string;
+  phone?: string;
+  address?: string;
+  updatedAt?: number;
+}
 
 export interface ToastMessage {
   id: string;

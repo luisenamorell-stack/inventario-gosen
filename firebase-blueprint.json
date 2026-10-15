@@ -13,7 +13,7 @@
         "cost": { "type": "number" },
         "price": { "type": "number" },
         "stock": { "type": "integer" },
-        "img": { "type": "string", "maxLength": 1000 }
+        "img": { "type": "string", "maxLength": 500000 }
       },
       "required": ["code", "name", "category", "price", "stock"]
     },
@@ -44,6 +44,20 @@
         "totalItems": { "type": "integer" }
       },
       "required": ["date", "match", "missing", "extra"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Store branding configuration including store name and custom logo image",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string", "maxLength": 200 },
+        "tagline": { "type": "string", "maxLength": 200 },
+        "logoUrl": { "type": "string", "maxLength": 500000 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "address": { "type": "string", "maxLength": 500 },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["storeName"]
     }
   },
   "firestore": {
@@ -58,6 +72,10 @@
     "/audit_history/{auditId}": {
       "schema": "AuditHistory",
       "description": "Collection of closed audit reconciliation sessions"
+    },
+    "/settings/{settingId}": {
+      "schema": "StoreSettings",
+      "description": "Store profile configuration including custom store name and brand logo"
     }
   }
 }

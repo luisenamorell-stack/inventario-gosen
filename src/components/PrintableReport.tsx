@@ -1,5 +1,5 @@
 import React from 'react';
-import { GroupedAuditItem } from '../types';
+import { GroupedAuditItem, StoreSettings } from '../types';
 import { Boxes } from 'lucide-react';
 
 interface PrintableReportProps {
@@ -10,6 +10,7 @@ interface PrintableReportProps {
   netImpact: number;
   groupedItems: GroupedAuditItem[];
   aiAnalysisText?: string;
+  storeSettings?: StoreSettings;
 }
 
 export const PrintableReport: React.FC<PrintableReportProps> = ({
@@ -20,7 +21,14 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
   netImpact,
   groupedItems,
   aiAnalysisText,
+  storeSettings,
 }) => {
+  const storeName = storeSettings?.storeName || 'StockMaster';
+  const logoUrl = storeSettings?.logoUrl;
+  const tagline = storeSettings?.tagline;
+  const phone = storeSettings?.phone;
+  const address = storeSettings?.address;
+
   const impactLabel =
     netImpact < 0 ? 'Pérdida Estimada' : netImpact > 0 ? 'Ganancia Estimada' : 'Impacto Neto';
 
@@ -31,17 +39,34 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
     <div id="printable-report" className="hidden print:block bg-white text-black p-8 max-w-4xl mx-auto">
       {/* Report Header */}
       <div className="text-center mb-8 border-b-2 border-gray-800 pb-6 relative">
-        <div className="absolute right-0 top-0 text-gray-400 text-4xl">
-          <Boxes className="w-12 h-12" />
+        <div className="absolute right-0 top-0">
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt={storeName}
+              className="w-16 h-16 object-contain rounded"
+            />
+          ) : (
+            <Boxes className="w-12 h-12 text-gray-400" />
+          )}
         </div>
-        <h1 className="text-3xl font-black text-gray-900 mb-2 uppercase tracking-wide">
+        <h2 className="text-xl font-bold text-gray-700 uppercase tracking-widest mb-1">
+          {storeName}
+        </h2>
+        {tagline && <p className="text-xs text-gray-500 font-medium mb-1">{tagline}</p>}
+        {(phone || address) && (
+          <p className="text-[11px] text-gray-500 mb-2">
+            {[phone, address].filter(Boolean).join(' • ')}
+          </p>
+        )}
+        <h1 className="text-2xl font-black text-gray-900 mb-2 uppercase tracking-wide">
           Reporte de Auditoría de Inventario
         </h1>
-        <p className="text-gray-700 text-base">
+        <p className="text-gray-700 text-sm">
           Fecha de emisión: <strong>{dateStr}</strong>
         </p>
         <p className="text-gray-500 mt-1 text-xs">
-          Documento oficial generado por Sistema StockMaster
+          Documento oficial generado por {storeName}
         </p>
       </div>
 

@@ -12,16 +12,18 @@ import {
 } from 'lucide-react';
 
 import { ConfirmDialog } from './ConfirmDialog';
+import { ImageUploader } from './ImageUploader';
 
 interface InventoryViewProps {
   inventory: Product[];
   suppliers: Supplier[];
   initialSearchCode?: string;
-  onSaveProduct: (product: Product) => void;
+  onSaveProduct: (product: Product, oldCode?: string) => void;
   onDeleteProduct: (id: string) => void;
   onOpenSupplierModal: () => void;
   showModalInitially?: boolean;
   onCloseInitialModal?: () => void;
+  showToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
 export const InventoryView: React.FC<InventoryViewProps> = ({
@@ -33,6 +35,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   onOpenSupplierModal,
   showModalInitially = false,
   onCloseInitialModal,
+  showToast,
 }) => {
   const [searchText, setSearchText] = useState(initialSearchCode);
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -41,6 +44,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(showModalInitially);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   // Deletion confirmation state
   const [itemToDelete, setItemToDelete] = useState<Product | null>(null);
@@ -133,7 +137,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       img: formData.img.trim(),
     };
 
-    onSaveProduct(savedItem);
+    onSaveProduct(savedItem, editingProduct?.code);
     handleCloseModal();
   };
 
@@ -524,15 +528,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                        URL de Imagen (Opcional)
-                      </label>
-                      <input
-                        type="url"
+                      <ImageUploader
                         value={formData.img}
-                        onChange={(e) => setFormData({ ...formData, img: e.target.value })}
-                        placeholder="https://ejemplo.com/imagen.jpg"
-                        className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                        onChange={(url) => setFormData({ ...formData, img: url })}
+                        productCode={formData.code || 'PROD'}
+                        isUploading={isUploadingImage}
+                        setIsUploading={setIsUploadingImage}
+                        showToast={showToast}
                       />
                     </div>
                   </div>
@@ -563,9 +565,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     </button>
                     <button
                       type="submit"
-                      className="px-6 py-2.5 bg-emerald-600 text-white font-medium hover:bg-emerald-700 rounded-xl shadow-sm transition-colors text-sm cursor-pointer"
+                      disabled={isUploadingImage}
+                      className="px-6 py-2.5 bg-emerald-600 text-white font-medium hover:bg-emerald-700 rounded-xl shadow-sm transition-colors text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
-                      Guardar Artículo
+                      <span>{isUploadingImage ? 'Subiendo Foto...' : 'Guardar Artículo'}</span>
                     </button>
                   </div>
                 </div>
