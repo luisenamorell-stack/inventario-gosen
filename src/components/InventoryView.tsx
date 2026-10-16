@@ -8,7 +8,10 @@ import {
   Trash2,
   X,
   Barcode,
-  Sparkles
+  Sparkles,
+  ArrowUpDown,
+  ArrowDown,
+  ArrowUp
 } from 'lucide-react';
 
 import { ConfirmDialog } from './ConfirmDialog';
@@ -40,6 +43,19 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [searchText, setSearchText] = useState(initialSearchCode);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedSupplier, setSelectedSupplier] = useState('all');
+  const [sortOption, setSortOption] = useState<
+    | 'default'
+    | 'stock-desc'
+    | 'stock-asc'
+    | 'price-desc'
+    | 'price-asc'
+    | 'cost-desc'
+    | 'cost-asc'
+    | 'name-asc'
+    | 'name-desc'
+    | 'code-asc'
+    | 'code-desc'
+  >('stock-desc');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(showModalInitially);
@@ -144,23 +160,53 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     handleCloseModal();
   };
 
-  // Filter inventory items
-  const filteredInventory = inventory.filter((item) => {
+  // Filter & Sort inventory items (Mayor a menor stock, precio, costo, etc.)
+  const filteredInventory = React.useMemo(() => {
     const query = searchText.toLowerCase().trim();
-    const matchesSearch =
-      !query ||
-      item.code.toLowerCase().includes(query) ||
-      item.name.toLowerCase().includes(query) ||
-      (item.size && item.size.toLowerCase().includes(query));
+    const filtered = inventory.filter((item) => {
+      const matchesSearch =
+        !query ||
+        item.code.toLowerCase().includes(query) ||
+        item.name.toLowerCase().includes(query) ||
+        (item.size && item.size.toLowerCase().includes(query));
 
-    const matchesCategory =
-      selectedCategory === 'all' || item.category === selectedCategory;
+      const matchesCategory =
+        selectedCategory === 'all' || item.category === selectedCategory;
 
-    const matchesSupplier =
-      selectedSupplier === 'all' || item.supplier === selectedSupplier;
+      const matchesSupplier =
+        selectedSupplier === 'all' || item.supplier === selectedSupplier;
 
-    return matchesSearch && matchesCategory && matchesSupplier;
-  });
+      return matchesSearch && matchesCategory && matchesSupplier;
+    });
+
+    return [...filtered].sort((a, b) => {
+      switch (sortOption) {
+        case 'stock-desc':
+          return (Number(b.stock) || 0) - (Number(a.stock) || 0);
+        case 'stock-asc':
+          return (Number(a.stock) || 0) - (Number(b.stock) || 0);
+        case 'price-desc':
+          return (Number(b.price) || 0) - (Number(a.price) || 0);
+        case 'price-asc':
+          return (Number(a.price) || 0) - (Number(b.price) || 0);
+        case 'cost-desc':
+          return (Number(b.cost) || 0) - (Number(a.cost) || 0);
+        case 'cost-asc':
+          return (Number(a.cost) || 0) - (Number(b.cost) || 0);
+        case 'name-asc':
+          return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+        case 'name-desc':
+          return b.name.localeCompare(a.name, 'es', { sensitivity: 'base' });
+        case 'code-asc':
+          return a.code.localeCompare(b.code, 'es', { sensitivity: 'base' });
+        case 'code-desc':
+          return b.code.localeCompare(a.code, 'es', { sensitivity: 'base' });
+        case 'default':
+        default:
+          return 0;
+      }
+    });
+  }, [inventory, searchText, selectedCategory, selectedSupplier, sortOption]);
 
   // Extract unique categories
   const categories = Array.from(
@@ -209,12 +255,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:flex sm:items-center sm:gap-2.5">
             {/* Category filter */}
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700 w-full"
+              className="border border-slate-200 rounded-xl px-3 sm:px-3.5 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700 w-full"
             >
               <option value="all">Categorías (Todas)</option>
               {categories.map((cat) => (
@@ -228,7 +274,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             <select
               value={selectedSupplier}
               onChange={(e) => setSelectedSupplier(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700 w-full"
+              className="border border-slate-200 rounded-xl px-3 sm:px-3.5 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700 w-full"
             >
               <option value="all">Proveedores (Todos)</option>
               {suppliers.map((sup) => (
@@ -237,7 +283,70 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 </option>
               ))}
             </select>
+
+            {/* Sort Order Selector (Mayor a Menor, etc.) */}
+            <div className="col-span-2 sm:col-span-1 relative flex items-center">
+              <select
+                value={sortOption}
+                onChange={(e) => setSortOption(e.target.value as any)}
+                className="border border-slate-200 rounded-xl px-3 sm:px-3.5 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-semibold text-emerald-800 w-full focus:ring-2 focus:ring-emerald-500/20"
+                title="Ordenar artículos en el inventario"
+              >
+                <option value="stock-desc">📦 Stock: Mayor a Menor</option>
+                <option value="stock-asc">📦 Stock: Menor a Mayor</option>
+                <option value="price-desc">💰 Precio: Mayor a Menor</option>
+                <option value="price-asc">💰 Precio: Menor a Mayor</option>
+                <option value="cost-desc">🏷️ Costo: Mayor a Menor</option>
+                <option value="cost-asc">🏷️ Costo: Menor a Mayor</option>
+                <option value="name-asc">🔤 Nombre: A - Z</option>
+                <option value="name-desc">🔤 Nombre: Z - A</option>
+                <option value="code-asc">🔢 Código / SKU: A - Z</option>
+                <option value="default">📋 Predeterminado</option>
+              </select>
+            </div>
           </div>
+        </div>
+
+        {/* Quick Sort / Active indicator bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-slate-100/70 border-b border-slate-200 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-slate-400 font-semibold flex items-center gap-1 mr-1">
+              <ArrowUpDown className="w-3.5 h-3.5 text-slate-500" />
+              <span>Ordenar rápido:</span>
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setSortOption((prev) => (prev === 'stock-desc' ? 'stock-asc' : 'stock-desc'))}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                sortOption === 'stock-desc'
+                  ? 'bg-emerald-600 text-white shadow-2xs font-bold'
+                  : sortOption === 'stock-asc'
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold'
+                  : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              <span>Stock: {sortOption === 'stock-desc' ? 'Mayor a Menor ↓' : sortOption === 'stock-asc' ? 'Menor a Mayor ↑' : 'Mayor a Menor'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSortOption((prev) => (prev === 'price-desc' ? 'price-asc' : 'price-desc'))}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                sortOption === 'price-desc'
+                  ? 'bg-emerald-600 text-white shadow-2xs font-bold'
+                  : sortOption === 'price-asc'
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold'
+                  : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              <span>Precio: {sortOption === 'price-desc' ? 'Mayor a Menor ↓' : sortOption === 'price-asc' ? 'Menor a Mayor ↑' : 'Mayor a Menor'}</span>
+            </button>
+          </div>
+
+          <span className="text-slate-400 font-medium">
+            {filteredInventory.length} {filteredInventory.length === 1 ? 'artículo' : 'artículos'}
+          </span>
         </div>
 
         {/* Mobile Product Cards List (< sm) */}
@@ -347,11 +456,88 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <table className="w-full text-left border-collapse whitespace-nowrap">
             <thead className="sticky top-0 bg-slate-50 z-10 shadow-sm">
               <tr className="text-slate-500 text-xs uppercase tracking-wider border-b border-slate-200">
-                <th className="p-4 font-semibold">Imagen / Info</th>
-                <th className="p-4 font-semibold">Código / SKU</th>
+                <th
+                  onClick={() =>
+                    setSortOption((prev) => (prev === 'name-asc' ? 'name-desc' : 'name-asc'))
+                  }
+                  className="p-4 font-semibold cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  title="Ordenar por nombre alfabéticamente"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Imagen / Info</span>
+                    {sortOption === 'name-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-emerald-600 font-bold" />
+                    ) : sortOption === 'name-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-emerald-600 font-bold" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300" />
+                    )}
+                  </div>
+                </th>
+
+                <th
+                  onClick={() =>
+                    setSortOption((prev) => (prev === 'code-asc' ? 'code-desc' : 'code-asc'))
+                  }
+                  className="p-4 font-semibold cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  title="Ordenar por código SKU"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Código / SKU</span>
+                    {sortOption === 'code-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-emerald-600 font-bold" />
+                    ) : sortOption === 'code-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-emerald-600 font-bold" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300" />
+                    )}
+                  </div>
+                </th>
+
                 <th className="p-4 font-semibold">Proveedor</th>
-                <th className="p-4 font-semibold text-right">Costo / Precio</th>
-                <th className="p-4 font-semibold text-center">Stock</th>
+
+                <th
+                  onClick={() =>
+                    setSortOption((prev) =>
+                      prev === 'price-desc' ? 'price-asc' : 'price-desc'
+                    )
+                  }
+                  className="p-4 font-semibold text-right cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  title="Ordenar por precio (Mayor a menor / Menor a mayor)"
+                >
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span>Costo / Precio</span>
+                    {sortOption === 'price-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-emerald-600 font-bold" />
+                    ) : sortOption === 'price-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-emerald-600 font-bold" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300" />
+                    )}
+                  </div>
+                </th>
+
+                <th
+                  onClick={() =>
+                    setSortOption((prev) =>
+                      prev === 'stock-desc' ? 'stock-asc' : 'stock-desc'
+                    )
+                  }
+                  className="p-4 font-semibold text-center cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  title="Ordenar por stock (Mayor a menor / Menor a mayor)"
+                >
+                  <div className="flex items-center justify-center gap-1.5">
+                    <span>Stock</span>
+                    {sortOption === 'stock-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-emerald-600 font-bold" />
+                    ) : sortOption === 'stock-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-emerald-600 font-bold" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300" />
+                    )}
+                  </div>
+                </th>
+
                 <th className="p-4 font-semibold text-center">Acciones</th>
               </tr>
             </thead>
