@@ -33,7 +33,10 @@ import {
   Download,
   Percent,
   Check,
-  Ban
+  Ban,
+  Barcode,
+  Tag,
+  ChevronLeft
 } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -56,6 +59,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
 }) => {
   // Navigation between POS Terminal and Sales History
   const [activeSubTab, setActiveSubTab] = useState<'pos' | 'history'>('pos');
+  // Mobile / Tablet POS active view: 'catalog' | 'cart' (< lg)
+  const [mobilePosTab, setMobilePosTab] = useState<'catalog' | 'cart'>('catalog');
 
   // ------------------ POS STATE ------------------
   const [cart, setCart] = useState<SaleItem[]>([]);
@@ -97,41 +102,105 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return Array.from(set).sort();
   }, [inventory]);
 
-  // Filtered inventory catalog for POS
+  // Filtered inventory catalog for POS (supports name, SKU code, barcode)
   const filteredCatalog = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const raw = searchQuery.trim().toLowerCase();
+    if (!raw) {
+      return selectedCategory === 'all'
+        ? inventory
+        : inventory.filter((item) => item.category === selectedCategory);
+    }
+
+    const searchTokens = raw.split(/\s+/).filter(Boolean);
+
     return inventory.filter((item) => {
-      const matchCat = selectedCategory === 'all' || item.category === selectedCategory;
-      const matchQuery =
-        !q ||
-        item.name.toLowerCase().includes(q) ||
-        item.code.toLowerCase().includes(q) ||
-        (item.size && item.size.toLowerCase().includes(q)) ||
-        (item.supplier && item.supplier.toLowerCase().includes(q));
-      return matchCat && matchQuery;
+      // Category filter
+      if (selectedCategory !== 'all' && item.category !== selectedCategory) {
+        return false;
+      }
+
+      const itemName = (item.name || '').toLowerCase();
+      const itemCode = (item.code || '').toLowerCase();
+      const itemSize = (item.size || '').toLowerCase();
+      const itemCategory = (item.category || '').toLowerCase();
+      const itemSupplier = (item.supplier || '').toLowerCase();
+
+      // Check if code or barcode matches directly
+      if (itemCode.includes(raw) || itemCode.replace(/[-_\s]/g, '').includes(raw.replace(/[-_\s]/g, ''))) {
+        return true;
+      }
+
+      // Check if all token words match the product name, size or category
+      const matchesAllTokens = searchTokens.every(
+        (token) =>
+          itemName.includes(token) ||
+          itemCode.includes(token) ||
+          itemSize.includes(token) ||
+          itemCategory.includes(token) ||
+          itemSupplier.includes(token)
+      );
+
+      return matchesAllTokens;
     });
   }, [inventory, searchQuery, selectedCategory]);
 
-  // Handle direct Enter in search bar (Barcode scanner fast input)
+  // Handle direct Enter in search bar (Barcode scanner instant scan or fast name/code entry)
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const code = searchQuery.trim();
-      if (!code) return;
+      const query = searchQuery.trim();
+      if (!query) return;
 
-      const exactMatch = inventory.find(
-        (p) => p.code.toLowerCase() === code.toLowerCase()
+      const cleanQuery = query.toLowerCase();
+      const cleanRaw = cleanQuery.replace(/[-_\s]/g, '');
+
+      // 1. Exact match by code or barcode
+      const exactCodeMatch = inventory.find(
+        (p) =>
+          p.code.trim().toLowerCase() === cleanQuery ||
+          p.code.trim().toLowerCase().replace(/[-_\s]/g, '') === cleanRaw
       );
 
-      if (exactMatch) {
-        addToCart(exactMatch);
+      if (exactCodeMatch) {
+        addToCart(exactCodeMatch);
         setSearchQuery('');
-      } else if (filteredCatalog.length === 1) {
+        return;
+      }
+
+      // 2. Exact match by article name
+      const exactNameMatch = inventory.find(
+        (p) => p.name.trim().toLowerCase() === cleanQuery
+      );
+
+      if (exactNameMatch) {
+        addToCart(exactNameMatch);
+        setSearchQuery('');
+        return;
+      }
+
+      // 3. If filtered results has exactly 1 matching product
+      if (filteredCatalog.length === 1) {
         addToCart(filteredCatalog[0]);
         setSearchQuery('');
-      } else {
-        showToast(`No se encontró producto con código "${code}"`, 'warning');
+        return;
       }
+
+      // 4. If filtered results has multiple matches, add the top match and inform cashier
+      if (filteredCatalog.length > 1) {
+        addToCart(filteredCatalog[0]);
+        showToast(
+          `Agregado: "${filteredCatalog[0].name}" (${filteredCatalog.length} artículos encontrados para "${query}")`,
+          'info'
+        );
+        setSearchQuery('');
+        return;
+      }
+
+      // 5. No matches found
+      showToast(
+        `No se encontró ningún artículo por nombre, código o código de barra: "${query}"`,
+        'warning'
+      );
     }
   };
 
@@ -227,6 +296,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setCustomerRtn('');
     setCustomerPhone('');
     setSaleNotes('');
+    setMobilePosTab('catalog');
   };
 
   // Calculations for current cart
@@ -584,33 +654,98 @@ export const SalesView: React.FC<SalesViewProps> = ({
       {/* Main Content Area */}
       {activeSubTab === 'pos' ? (
         /* ==================== POS TERMINAL VIEW ==================== */
-        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+          {/* Mobile / Tablet Segmented POS Switcher (< lg) */}
+          <div className="lg:hidden p-2.5 bg-white border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 shadow-2xs">
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-full">
+              <button
+                type="button"
+                onClick={() => setMobilePosTab('catalog')}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  mobilePosTab === 'catalog'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Tag className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Catálogo ({filteredCatalog.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobilePosTab('cart')}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  mobilePosTab === 'cart'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <ShoppingCart className="w-3.5 h-3.5" />
+                <span>Ticket / Cobrar</span>
+                {cart.length > 0 && (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                      mobilePosTab === 'cart'
+                        ? 'bg-white text-emerald-700'
+                        : 'bg-emerald-600 text-white'
+                    }`}
+                  >
+                    {totalCartItemsCount}
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+
           {/* Left Column: Product Catalog & Search (60% on desktop) */}
-          <div className="flex-1 flex flex-col border-r border-slate-200 bg-slate-50/70 overflow-hidden">
+          <div
+            className={`flex-1 flex flex-col border-r border-slate-200 bg-slate-50/70 overflow-hidden relative ${
+              mobilePosTab === 'cart' ? 'hidden lg:flex' : 'flex'
+            }`}
+          >
             {/* Search and Category Filter Toolbar */}
             <div className="p-3 sm:p-4 bg-white border-b border-slate-200 space-y-3 shrink-0">
-              <div className="relative">
-                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Escanear código de barra o buscar por nombre (presiona Enter para agregar)..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={handleSearchKeyDown}
-                  className="w-full pl-10 pr-24 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all"
-                  autoFocus
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-12 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-lg"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-slate-200/70 px-1.5 py-0.5 rounded">
-                  Enter
-                </span>
+              <div className="space-y-1.5">
+                <div className="relative">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar por nombre del artículo, código SKU o escanear código de barra..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={handleSearchKeyDown}
+                    className="w-full pl-10 pr-24 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all font-medium"
+                    autoFocus
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-14 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+                      title="Limpiar búsqueda"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
+                    Enter
+                  </span>
+                </div>
+
+                {/* Helper chips for search capabilities */}
+                <div className="flex items-center gap-2 text-[10px] text-slate-400 font-medium px-1">
+                  <span>Búsqueda activa por:</span>
+                  <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-semibold flex items-center gap-1">
+                    <Tag className="w-2.5 h-2.5 text-emerald-600" />
+                    Nombre
+                  </span>
+                  <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-semibold flex items-center gap-1">
+                    <Barcode className="w-2.5 h-2.5 text-indigo-600" />
+                    Código / SKU
+                  </span>
+                  <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-semibold flex items-center gap-1">
+                    <Sparkles className="w-2.5 h-2.5 text-amber-500" />
+                    Código de Barra
+                  </span>
+                </div>
               </div>
 
               {/* Category Pills */}
@@ -750,10 +885,53 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Floating Mobile Cart Pill Bar (< lg) */}
+            {cart.length > 0 && (
+              <div className="lg:hidden sticky bottom-2 mx-3 my-2 z-20">
+                <button
+                  type="button"
+                  onClick={() => setMobilePosTab('cart')}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-2xl shadow-xl flex items-center justify-between transition-all cursor-pointer font-bold text-sm border border-emerald-500/40"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-7 h-7 rounded-lg bg-emerald-800 text-white flex items-center justify-center text-xs font-black shrink-0">
+                      {totalCartItemsCount}
+                    </span>
+                    <div className="text-left">
+                      <div className="text-[10px] text-emerald-100 font-medium">Total a cobrar</div>
+                      <div className="text-sm font-black">L. {cartTotal.toFixed(2)}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs bg-white text-emerald-800 px-3.5 py-1.5 rounded-xl font-black shadow-xs shrink-0">
+                    <span>Cobrar</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </div>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Right Column: Checkout Ticket & Cart Summary (40% on desktop) */}
-          <div className="w-full lg:w-[420px] xl:w-[460px] flex flex-col bg-white border-l border-slate-200 shadow-xl overflow-hidden shrink-0">
+          <div
+            className={`w-full lg:w-[420px] xl:w-[460px] flex flex-col bg-white border-l border-slate-200 shadow-xl overflow-hidden shrink-0 ${
+              mobilePosTab === 'catalog' ? 'hidden lg:flex' : 'flex'
+            }`}
+          >
+            {/* Mobile Back Button to Catalog (< lg) */}
+            <div className="lg:hidden px-3.5 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setMobilePosTab('catalog')}
+                className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1.5 cursor-pointer py-1"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>Volver al Catálogo</span>
+              </button>
+              <span className="text-xs font-bold text-slate-700 font-mono">
+                Total: L. {cartTotal.toFixed(2)}
+              </span>
+            </div>
             {/* Cart Header */}
             <div className="p-3.5 sm:p-4 border-b border-slate-200 bg-slate-50/80 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
@@ -1278,9 +1456,99 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs sm:text-sm">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] uppercase tracking-wider font-semibold">
+              <div>
+                {/* Mobile Card List (< sm) */}
+                <div className="sm:hidden divide-y divide-slate-100 p-2 space-y-2.5">
+                  {filteredSalesHistory.map((sale) => {
+                    const isCancelled = sale.status === 'cancelled';
+                    return (
+                      <div
+                        key={sale.id}
+                        className={`p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-2 bg-white ${
+                          isCancelled ? 'bg-rose-50/30 border-rose-200' : ''
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-bold text-xs text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
+                            {sale.saleNumber}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              isCancelled ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'
+                            }`}
+                          >
+                            {isCancelled ? 'Anulada' : 'Completada'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-baseline justify-between">
+                          <div>
+                            <div className="font-bold text-sm text-slate-800">
+                              {sale.customerName || 'Consumidor Final'}
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">
+                              {sale.date}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-400 block">Total</span>
+                            <span
+                              className={`text-base font-black ${
+                                isCancelled ? 'line-through text-slate-400' : 'text-emerald-700'
+                              }`}
+                            >
+                              L. {sale.total.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-500">
+                          <span className="flex items-center gap-1 font-medium">
+                            <Package className="w-3.5 h-3.5 text-slate-400" />
+                            {sale.totalItems} {sale.totalItems === 1 ? 'artículo' : 'artículos'}
+                            <span className="text-slate-300">·</span>
+                            <span className="capitalize">
+                              {sale.paymentMethod === 'cash'
+                                ? 'Efectivo'
+                                : sale.paymentMethod === 'card'
+                                ? 'Tarjeta'
+                                : 'Transferencia'}
+                            </span>
+                          </span>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCompletedSale(sale);
+                                setShowReceiptModal(true);
+                              }}
+                              className="px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg flex items-center gap-1 cursor-pointer"
+                            >
+                              <Receipt className="w-3.5 h-3.5" />
+                              <span>Ticket</span>
+                            </button>
+                            {!isCancelled && (
+                              <button
+                                type="button"
+                                onClick={() => setSaleToCancel(sale)}
+                                className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer"
+                                title="Anular venta"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop / Tablet Table (>= sm) */}
+                <div className="hidden sm:block overflow-x-auto">
+                  <table className="w-full text-left text-xs sm:text-sm">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] uppercase tracking-wider font-semibold">
                     <tr>
                       <th className="py-3 px-4">N° Venta</th>
                       <th className="py-3 px-4">Fecha y Hora</th>
@@ -1384,7 +1652,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </tbody>
                 </table>
               </div>
-            )}
+            </div>
+          )}
           </div>
         </div>
       )}

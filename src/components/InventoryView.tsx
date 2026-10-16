@@ -61,6 +61,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     price: 0,
     img: '',
   });
+  const [isCustomCategoryMode, setIsCustomCategoryMode] = useState<boolean>(false);
 
   useEffect(() => {
     if (initialSearchCode) {
@@ -88,6 +89,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       price: 0,
       img: '',
     });
+    setIsCustomCategoryMode(false);
     setIsModalOpen(true);
   };
 
@@ -96,7 +98,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     setFormData({
       code: product.code,
       name: product.name,
-      category: product.category,
+      category: product.category || 'Otros',
       size: product.size || '',
       stock: product.stock,
       supplier: product.supplier || '',
@@ -104,6 +106,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       price: product.price,
       img: product.img || '',
     });
+    setIsCustomCategoryMode(false);
     setIsModalOpen(true);
   };
 
@@ -206,37 +209,141 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             )}
           </div>
 
-          {/* Category filter */}
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700"
-          >
-            <option value="all">Todas las Categorías</option>
-            {categories.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-3">
+            {/* Category filter */}
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700 w-full"
+            >
+              <option value="all">Categorías (Todas)</option>
+              {categories.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
 
-          {/* Supplier filter */}
-          <select
-            value={selectedSupplier}
-            onChange={(e) => setSelectedSupplier(e.target.value)}
-            className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700"
-          >
-            <option value="all">Todos los Proveedores</option>
-            {suppliers.map((sup) => (
-              <option key={sup.id} value={sup.name}>
-                {sup.name}
-              </option>
-            ))}
-          </select>
+            {/* Supplier filter */}
+            <select
+              value={selectedSupplier}
+              onChange={(e) => setSelectedSupplier(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700 w-full"
+            >
+              <option value="all">Proveedores (Todos)</option>
+              {suppliers.map((sup) => (
+                <option key={sup.id} value={sup.name}>
+                  {sup.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        {/* Products Table */}
-        <div className="overflow-auto flex-1">
+        {/* Mobile Product Cards List (< sm) */}
+        <div className="sm:hidden overflow-y-auto flex-1 p-2 space-y-2.5">
+          {filteredInventory.length === 0 ? (
+            <div className="p-8 text-center text-slate-400">
+              <Box className="w-10 h-10 mx-auto mb-2 opacity-30" />
+              <p className="font-medium text-sm">No se encontraron artículos con los filtros aplicados.</p>
+            </div>
+          ) : (
+            filteredInventory.map((item) => {
+              const stockNumber = Number(item.stock) || 0;
+              const stockColor =
+                stockNumber <= 0
+                  ? 'text-red-700 bg-red-100'
+                  : stockNumber <= 3
+                  ? 'text-orange-700 bg-orange-100'
+                  : 'text-emerald-800 bg-emerald-100';
+
+              return (
+                <div
+                  key={item.id}
+                  className="p-3 bg-white border border-slate-200/90 rounded-xl shadow-2xs space-y-2.5"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                      {item.img ? (
+                        <img
+                          src={item.img}
+                          alt={item.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <Box className="w-6 h-6 text-slate-300" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-slate-900 text-sm leading-snug">
+                        {item.name}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px] text-slate-500">
+                        <span className="font-mono font-bold bg-slate-100 px-1.5 py-0.2 rounded text-slate-700">
+                          {item.code}
+                        </span>
+                        {item.size && (
+                          <span className="bg-slate-100 px-1.5 py-0.2 rounded font-medium text-slate-700">
+                            Talla: {item.size}
+                          </span>
+                        )}
+                        <span className="text-slate-400">· {item.category}</span>
+                      </div>
+                      {item.supplier && (
+                        <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                          Proveedor: {item.supplier}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block -mb-0.5">Precio</span>
+                      <span className="font-bold text-slate-900 text-sm text-emerald-700">
+                        L. {Number(item.price || 0).toFixed(2)}
+                      </span>
+                    </div>
+
+                    <div className="text-center">
+                      <span className="text-[10px] text-slate-400 block -mb-0.5">Stock</span>
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-md font-bold text-xs ${stockColor}`}
+                      >
+                        {stockNumber} unids
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEdit(item)}
+                        className="p-2 text-slate-600 hover:text-blue-600 bg-slate-100 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                        title="Editar Artículo"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setItemToDelete(item)}
+                        className="p-2 text-slate-400 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                        title="Eliminar Artículo"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop / Tablet Table (>= sm) */}
+        <div className="hidden sm:block overflow-auto flex-1">
           <table className="w-full text-left border-collapse whitespace-nowrap">
             <thead className="sticky top-0 bg-slate-50 z-10 shadow-sm">
               <tr className="text-slate-500 text-xs uppercase tracking-wider border-b border-slate-200">
@@ -384,21 +491,65 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       />
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
-                        <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                          Categoría
-                        </label>
-                        <select
-                          value={formData.category}
-                          onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                          className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm bg-white"
-                        >
-                          <option value="Ropa">Ropa</option>
-                          <option value="Calzado">Calzado</option>
-                          <option value="Accesorios">Accesorios</option>
-                          <option value="Otros">Otros</option>
-                        </select>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                            Categoría *
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setIsCustomCategoryMode(!isCustomCategoryMode)}
+                            className="text-xs text-emerald-600 hover:text-emerald-700 font-bold hover:underline cursor-pointer"
+                            title={isCustomCategoryMode ? 'Seleccionar de la lista de categorías' : 'Escribir nombre de categoría manualmente'}
+                          >
+                            {isCustomCategoryMode ? 'Lista' : '+ Manual'}
+                          </button>
+                        </div>
+
+                        {isCustomCategoryMode ? (
+                          <div className="relative">
+                            <input
+                              type="text"
+                              list="categories-datalist"
+                              required
+                              value={formData.category}
+                              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                              placeholder="Escribe la categoría..."
+                              className="w-full p-2.5 border border-emerald-500 ring-2 ring-emerald-500/20 rounded-lg outline-none text-sm bg-white font-medium text-slate-800"
+                              autoFocus
+                            />
+                            <datalist id="categories-datalist">
+                              {categories.map((c) => (
+                                <option key={c} value={c} />
+                              ))}
+                            </datalist>
+                          </div>
+                        ) : (
+                          <select
+                            value={categories.includes(formData.category) ? formData.category : '__custom__'}
+                            onChange={(e) => {
+                              if (e.target.value === '__custom__') {
+                                setIsCustomCategoryMode(true);
+                              } else {
+                                setFormData({ ...formData, category: e.target.value });
+                              }
+                            }}
+                            className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm bg-white font-medium text-slate-800"
+                          >
+                            {categories.map((cat) => (
+                              <option key={cat} value={cat}>
+                                {cat}
+                              </option>
+                            ))}
+                            {!categories.includes(formData.category) && formData.category && (
+                              <option value={formData.category}>
+                                {formData.category}
+                              </option>
+                            )}
+                            <option value="__custom__">+ Escribir nueva categoría manual...</option>
+                          </select>
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">

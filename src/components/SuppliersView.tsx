@@ -138,8 +138,94 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
           </div>
         </div>
 
-        {/* Suppliers Table */}
-        <div className="overflow-auto flex-1 p-0">
+        {/* Mobile Suppliers List (< sm) */}
+        <div className="sm:hidden overflow-y-auto flex-1 p-2 space-y-2.5">
+          {filteredSuppliers.length === 0 ? (
+            <div className="p-8 text-center text-slate-400">
+              <Building className="w-10 h-10 mx-auto mb-2 opacity-30" />
+              <p className="font-medium text-sm">No se encontraron proveedores.</p>
+            </div>
+          ) : (
+            filteredSuppliers.map((sup) => {
+              const linkedItemsCount = inventory.filter(
+                (i) => i.supplier === sup.name
+              ).length;
+
+              return (
+                <div
+                  key={sup.id}
+                  className="p-3.5 bg-white border border-slate-200/90 rounded-xl shadow-2xs space-y-2.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-full bg-indigo-50 text-indigo-700 flex items-center justify-center font-bold text-sm shrink-0">
+                        {sup.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <span className="font-bold text-slate-900 text-sm block">{sup.name}</span>
+                        {sup.contact && (
+                          <span className="text-[11px] text-slate-500">Contacto: {sup.contact}</span>
+                        )}
+                      </div>
+                    </div>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700">
+                      {linkedItemsCount} arts
+                    </span>
+                  </div>
+
+                  {sup.address && (
+                    <p className="text-xs text-slate-400 pl-11">{sup.address}</p>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex items-center gap-2">
+                      {sup.phone && (
+                        <a
+                          href={`tel:${sup.phone}`}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 rounded-lg font-medium flex items-center gap-1"
+                        >
+                          <Phone className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Llamar</span>
+                        </a>
+                      )}
+                      {sup.email && (
+                        <a
+                          href={`mailto:${sup.email}`}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 rounded-lg font-medium flex items-center gap-1"
+                        >
+                          <Mail className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Correo</span>
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEdit(sup)}
+                        className="p-1.5 text-slate-500 hover:text-blue-600 bg-slate-100 rounded-lg"
+                        title="Editar"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSupplierToDelete(sup)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 bg-slate-100 rounded-lg"
+                        title="Eliminar"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop / Tablet Table (>= sm) */}
+        <div className="hidden sm:block overflow-auto flex-1 p-0">
           <table className="w-full text-left border-collapse whitespace-nowrap">
             <thead className="sticky top-0 bg-white z-10 shadow-sm">
               <tr className="text-slate-500 text-xs uppercase tracking-wider border-b border-slate-200">

@@ -766,8 +766,93 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                     </p>
                   </div>
                 ) : (
-                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                    <table className="w-full text-left text-xs">
+                  <div>
+                    {/* Mobile Items List (< sm) */}
+                    <div className="sm:hidden space-y-2.5">
+                      {items.map((it) => {
+                        const existingProd = inventory.find((p) => p.code === it.code);
+                        const currentStock = existingProd ? Number(existingProd.stock) || 0 : 0;
+                        const finalStock = currentStock + it.quantity;
+
+                        return (
+                          <div
+                            key={it.code}
+                            className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-bold text-slate-900 text-sm block">{it.name}</span>
+                                <div className="text-[11px] text-slate-400 font-mono">
+                                  {it.code} {it.size ? `• Talla: ${it.size}` : ''}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveItem(it.code)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+
+                            {/* Stock progression */}
+                            <div className="flex items-center justify-between bg-white px-2.5 py-1 rounded-lg border border-slate-200">
+                              <span className="text-slate-500 font-medium">Stock:</span>
+                              <span className="font-semibold text-slate-700">{currentStock}</span>
+                              <span className="text-slate-400">➔</span>
+                              <span className="font-bold text-emerald-700 flex items-center gap-0.5">
+                                <ArrowUpRight className="w-3 h-3 text-emerald-600" />
+                                {finalStock} final
+                              </span>
+                            </div>
+
+                            {/* Quantity and cost inputs */}
+                            <div className="grid grid-cols-2 gap-2 pt-1">
+                              <div>
+                                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-0.5">
+                                  Cantidad
+                                </label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={it.quantity}
+                                  onChange={(e) =>
+                                    handleUpdateItemQuantity(it.code, parseInt(e.target.value) || 1)
+                                  }
+                                  className="w-full px-2.5 py-1.5 text-center font-bold bg-white border border-slate-300 rounded-lg"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-0.5">
+                                  Costo Compra (L)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={it.cost}
+                                  onChange={(e) =>
+                                    handleUpdateItemCost(it.code, parseFloat(e.target.value) || 0)
+                                  }
+                                  className="w-full px-2.5 py-1.5 text-right font-bold text-slate-900 bg-white border border-slate-300 rounded-lg"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Subtotal */}
+                            <div className="flex items-center justify-between pt-1 border-t border-slate-200/80 font-bold">
+                              <span className="text-slate-600">Subtotal Artículo:</span>
+                              <span className="text-indigo-800 text-sm">L. {it.subtotal.toFixed(2)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Desktop / Tablet Table (>= sm) */}
+                    <div className="hidden sm:block overflow-x-auto border border-slate-200 rounded-xl">
+                      <table className="w-full text-left text-xs">
                       <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[10px] uppercase font-bold tracking-wider">
                         <tr>
                           <th className="py-2.5 px-3">Producto / Código</th>
@@ -867,7 +952,8 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                       </tbody>
                     </table>
                   </div>
-                )}
+                </div>
+              )}
               </div>
             </div>
 
@@ -1162,9 +1248,91 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs sm:text-sm">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] uppercase tracking-wider font-semibold">
+              <div>
+                {/* Mobile Purchase Card List (< sm) */}
+                <div className="sm:hidden divide-y divide-slate-100 p-2 space-y-2.5">
+                  {filteredPurchases.map((purchase) => {
+                    const isCancelled = purchase.status === 'cancelled';
+                    return (
+                      <div
+                        key={purchase.id}
+                        className={`p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-2 bg-white ${
+                          isCancelled ? 'bg-rose-50/30 border-rose-200' : ''
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-bold text-xs text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
+                            {purchase.invoiceNumber}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              isCancelled ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'
+                            }`}
+                          >
+                            {isCancelled ? 'Anulada' : 'Ingresada'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-baseline justify-between">
+                          <div>
+                            <div className="font-bold text-sm text-slate-900">
+                              {purchase.supplierName}
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">
+                              {purchase.date} · {purchase.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-400 block">Total Factura</span>
+                            <span
+                              className={`text-base font-black ${
+                                isCancelled ? 'line-through text-slate-400' : 'text-indigo-700'
+                              }`}
+                            >
+                              L. {purchase.total.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-500">
+                          <span className="flex items-center gap-1 font-medium">
+                            <Package className="w-3.5 h-3.5 text-slate-400" />
+                            {purchase.totalItems} unidades ({purchase.items.length} modelos)
+                          </span>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedInvoiceForModal(purchase);
+                                setShowInvoiceDetailsModal(true);
+                              }}
+                              className="px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg flex items-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Ver</span>
+                            </button>
+                            {!isCancelled && (
+                              <button
+                                type="button"
+                                onClick={() => setInvoiceToCancel(purchase)}
+                                className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer"
+                                title="Anular factura"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop / Tablet Table (>= sm) */}
+                <div className="hidden sm:block overflow-x-auto">
+                  <table className="w-full text-left text-xs sm:text-sm">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] uppercase tracking-wider font-semibold">
                     <tr>
                       <th className="py-3 px-4">N° Factura</th>
                       <th className="py-3 px-4">Proveedor</th>
@@ -1263,7 +1431,8 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   </tbody>
                 </table>
               </div>
-            )}
+            </div>
+          )}
           </div>
         </div>
       )}

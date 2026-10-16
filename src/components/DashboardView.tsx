@@ -140,44 +140,44 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             Resumen general y métricas de tu inventario.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2.5">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-2.5 w-full md:w-auto">
           {onNavigateToSales && (
             <button
               onClick={onNavigateToSales}
-              className="bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm flex items-center gap-2 cursor-pointer shadow-emerald-600/20"
+              className="bg-emerald-600 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer shadow-emerald-600/20"
             >
-              <ShoppingCart className="w-4 h-4" />
-              <span>Nueva Venta (POS)</span>
+              <ShoppingCart className="w-4 h-4 shrink-0" />
+              <span>Nueva Venta</span>
             </button>
           )}
           {onNavigateToPurchases && (
             <button
               onClick={onNavigateToPurchases}
-              className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-sm flex items-center gap-2 cursor-pointer shadow-indigo-600/20"
+              className="bg-indigo-600 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-700 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer shadow-indigo-600/20"
             >
-              <Truck className="w-4 h-4" />
+              <Truck className="w-4 h-4 shrink-0" />
               <span>Ingresar Compra</span>
             </button>
           )}
           <button
             onClick={onOpenNewProduct}
-            className="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+            className="bg-white border border-slate-200 text-slate-700 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-50 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer"
           >
-            <Plus className="w-4 h-4 text-emerald-500" />
+            <Plus className="w-4 h-4 text-emerald-500 shrink-0" />
             <span>Nuevo Producto</span>
           </button>
           <button
             onClick={onStartAudit}
-            className="bg-slate-800 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-700 transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+            className="bg-slate-800 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-700 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer"
           >
-            <QrCode className="w-4 h-4 text-blue-400" />
+            <QrCode className="w-4 h-4 text-blue-400 shrink-0" />
             <span>Auditar Stock</span>
           </button>
         </div>
       </header>
 
       {/* 4 Stat Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 mb-6 sm:mb-8">
         {/* Total Modelos */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center group hover:border-blue-200 transition-colors">
           <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-2xl mr-4 group-hover:scale-110 transition-transform shrink-0">
