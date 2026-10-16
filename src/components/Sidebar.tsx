@@ -16,7 +16,8 @@ import {
   PanelLeftOpen,
   LogOut,
   ShoppingCart,
-  FileText
+  FileText,
+  Download
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -29,6 +30,7 @@ export interface SidebarProps {
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
   onLogout?: () => void;
+  onOpenInstallPrompt?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -41,6 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isMobileOpen = false,
   onCloseMobile = () => {},
   onLogout,
+  onOpenInstallPrompt,
 }) => {
   const storeName = storeSettings?.storeName || 'StockMaster';
   const logoUrl = storeSettings?.logoUrl;
@@ -199,6 +202,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Mobile Drawer Footer */}
           <div className="p-3 border-t border-slate-800 bg-slate-950/40 space-y-2">
+            {onOpenInstallPrompt && (
+              <button
+                type="button"
+                onClick={() => {
+                  onCloseMobile();
+                  onOpenInstallPrompt();
+                }}
+                className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 border border-emerald-900/40 transition-colors cursor-pointer text-sm font-semibold"
+              >
+                <Download className="w-4 h-4 shrink-0 text-emerald-400" />
+                <span>Instalar Aplicación (Móvil)</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {
@@ -322,6 +339,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Desktop Footer Actions */}
         <div className="p-3 border-t border-slate-800/80 bg-slate-950/30 space-y-1">
+          {/* Install App button */}
+          {onOpenInstallPrompt && (
+            <button
+              type="button"
+              onClick={onOpenInstallPrompt}
+              className={`w-full flex items-center rounded-xl text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition-colors cursor-pointer text-sm font-medium ${
+                isCollapsed ? 'justify-center p-3' : 'justify-start px-3.5 py-2.5'
+              }`}
+              title="Instalar aplicación en dispositivo"
+              aria-label="Instalar aplicación en dispositivo"
+            >
+              <Download className="w-4 h-4 shrink-0 text-emerald-400" />
+              {!isCollapsed && (
+                <span className="ml-3 truncate font-semibold">Instalar App</span>
+              )}
+            </button>
+          )}
+
           {/* Reset button */}
           <button
             type="button"

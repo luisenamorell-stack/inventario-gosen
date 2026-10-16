@@ -33,8 +33,9 @@ import {
   seedInitialDataIfEmpty,
   pingFirestore
 } from './firebase/firestoreService';
-import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen, LogOut, Settings, PieChart, List, ShoppingCart, FileText } from 'lucide-react';
+import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen, LogOut, Settings, PieChart, List, ShoppingCart, FileText, Download } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
+import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 
 export const App: React.FC = () => {
   // Application State
@@ -108,6 +109,7 @@ export const App: React.FC = () => {
     }
   });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+  const [isInstallPromptOpen, setIsInstallPromptOpen] = useState<boolean>(false);
 
   const toggleSidebarCollapse = () => {
     setIsSidebarCollapsed((prev) => {
@@ -501,6 +503,7 @@ export const App: React.FC = () => {
         isMobileOpen={isMobileMenuOpen}
         onCloseMobile={() => setIsMobileMenuOpen(false)}
         onLogout={handleLogout}
+        onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -539,7 +542,7 @@ export const App: React.FC = () => {
             <div className="flex items-center gap-2">
               <span className="font-bold text-slate-900 text-sm tracking-tight flex items-center gap-1.5">
                 <Store className="w-4 h-4 text-emerald-600" />
-                <span>{storeSettings.storeName || 'StockMaster'}</span>
+                <span>{storeSettings.storeName || 'Tienda Gosén'}</span>
               </span>
               {storeSettings.tagline && (
                 <span className="hidden lg:inline text-xs text-slate-400 font-normal border-l border-slate-200 pl-2">
@@ -557,8 +560,18 @@ export const App: React.FC = () => {
             )}
           </div>
 
-          {/* Right: Quick Settings & Logout */}
+          {/* Right: Quick Install, Settings & Logout */}
           <div className="flex items-center gap-2 text-slate-600">
+            <button
+              type="button"
+              onClick={() => setIsInstallPromptOpen(true)}
+              title="Instalar aplicación móvil o de escritorio"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors text-xs font-bold border border-emerald-200 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">Instalar App</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setActiveTab('settings')}
@@ -680,6 +693,7 @@ export const App: React.FC = () => {
             salesCount={sales.length}
             purchasesCount={purchases.length}
             onResetData={() => setShowResetConfirm(true)}
+            onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
           />
         )}
 
@@ -765,6 +779,13 @@ export const App: React.FC = () => {
         isDestructive={false}
         onConfirm={handleExecuteReset}
         onCancel={() => setShowResetConfirm(false)}
+      />
+
+      {/* PWA Mobile Installation Prompt & Guide */}
+      <PWAInstallPrompt
+        isOpen={isInstallPromptOpen}
+        onClose={() => setIsInstallPromptOpen(false)}
+        storeSettings={storeSettings}
       />
     </div>
   );

@@ -7,16 +7,40 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>StockMaster - Control de Inventario y Auditoría</title>
-  <meta name="description" content="Sistema integral de control de inventario, auditoría física con escáner de códigos de barras, verificador de precios y gestión de proveedores con análisis financiero de discrepancias por IA." />
-  <meta property="og:title" content="StockMaster - Control de Inventario y Auditoría" />
-  <meta property="og:description" content="Sistema integral de control de inventario, auditoría física con escáner de códigos de barras, verificador de precios y gestión de proveedores con análisis financiero de discrepancias por IA." />
+  <title>Tienda Gosén - Control de Inventario y Ventas</title>
+  <meta name="description" content="Sistema integral de control de inventario, punto de venta, compras y auditoría con escáner para Tienda Gosén." />
+  <meta property="og:title" content="Tienda Gosén - Inventario y Ventas" />
+  <meta property="og:description" content="Sistema integral de control de inventario, punto de venta, compras y auditoría con escáner para Tienda Gosén." />
+  <meta property="og:image" content="/pwa-512x512.png" />
+  <meta name="application-name" content="Tienda Gosén" />
+  <meta name="apple-mobile-web-app-title" content="Tienda Gosén" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="shortcut icon" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/pwa-192x192.png" />
+  <link rel="apple-touch-icon" sizes="512x512" href="/pwa-512x512.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
 </head>
 <body class="h-screen min-h-[100dvh] h-[100dvh] overflow-hidden bg-slate-50 text-slate-800 antialiased selection:bg-emerald-500 selection:text-white">
   <div id="root" class="h-full w-full"></div>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/sw.js').then(
+          function(reg) {
+            console.log('Tienda Gosén ServiceWorker registration successful with scope: ', reg.scope);
+          },
+          function(err) {
+            console.log('Tienda Gosén ServiceWorker registration failed: ', err);
+          }
+        );
+      });
+    }
+  </script>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

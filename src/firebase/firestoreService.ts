@@ -383,9 +383,9 @@ export async function pingFirestore(): Promise<{ ok: boolean; latencyMs: number;
 // ----------------- STORE BRANDING & PROFILE SETTINGS -----------------
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
-  storeName: 'StockMaster',
-  tagline: 'Control de Inventario y Auditoría',
-  logoUrl: '',
+  storeName: 'Tienda Gosén',
+  tagline: 'Control de Inventario y Ventas',
+  logoUrl: '/store-logo.jpg',
   phone: '',
   address: '',
   accessPassword: 'GOSEN2026',
@@ -402,9 +402,9 @@ export function subscribeToStoreSettings(
       if (snapshot.exists()) {
         const data = snapshot.data();
         onData({
-          storeName: data.storeName || 'StockMaster',
-          tagline: data.tagline || '',
-          logoUrl: data.logoUrl || '',
+          storeName: data.storeName || 'Tienda Gosén',
+          tagline: data.tagline || 'Control de Inventario y Ventas',
+          logoUrl: data.logoUrl || '/store-logo.jpg',
           phone: data.phone || '',
           address: data.address || '',
           accessPassword: data.accessPassword || 'GOSEN2026',

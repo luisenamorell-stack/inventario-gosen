@@ -1,6 +1,6 @@
 {
-  "name": "StockMaster - Control de Inventario y Auditoría",
-  "description": "Sistema integral de control de inventario, auditoría física con escáner de códigos de barras, verificador de precios y gestión de proveedores con análisis financiero de discrepancias por IA.",
+  "name": "Tienda Gosén - Control de Inventario y Ventas",
+  "description": "Sistema integral de control de inventario, punto de venta, compras y auditoría con escáner para Tienda Gosén.",
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

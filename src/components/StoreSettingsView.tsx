@@ -25,7 +25,9 @@ import {
   Wifi,
   Clock,
   Activity,
-  HardDrive
+  HardDrive,
+  Smartphone,
+  Download
 } from 'lucide-react';
 
 interface StoreSettingsViewProps {
@@ -43,6 +45,7 @@ interface StoreSettingsViewProps {
   salesCount?: number;
   purchasesCount?: number;
   onResetData?: () => void;
+  onOpenInstallPrompt?: () => void;
 }
 
 export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
@@ -60,6 +63,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   salesCount = 0,
   purchasesCount = 0,
   onResetData,
+  onOpenInstallPrompt,
 }) => {
   // Local form state
   const [storeName, setStoreName] = useState(currentSettings.storeName || 'StockMaster');
@@ -504,6 +508,84 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Card: Aplicación Móvil PWA y Acceso con Icono de la Tienda */}
+            <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white rounded-2xl p-6 shadow-md border border-slate-700/80 space-y-5">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-4 border-b border-slate-700/60 gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold shrink-0">
+                    <Smartphone className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-white flex items-center gap-2">
+                      <span>Aplicación Móvil en Teléfonos y Tablets</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        PWA Instalable
+                      </span>
+                    </h2>
+                    <p className="text-xs text-slate-300">
+                      Cuando descargas la app en tu móvil, se instala en la pantalla de inicio con la imagen oficial de {storeName || 'la tienda'}.
+                    </p>
+                  </div>
+                </div>
+
+                {onOpenInstallPrompt && (
+                  <button
+                    type="button"
+                    onClick={onOpenInstallPrompt}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold text-xs shadow-lg shadow-emerald-500/20 transition-all cursor-pointer shrink-0"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Instalar en este Dispositivo</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Home Screen Icon Mockup & Info */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                {/* Mockup Preview of Home Screen Icon */}
+                <div className="bg-slate-950/60 border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-3">
+                    Icono en Pantalla de Inicio
+                  </span>
+                  <div className="relative group">
+                    <div className="w-20 h-20 rounded-2xl bg-slate-900 border-2 border-emerald-500/50 shadow-xl overflow-hidden p-1.5 flex items-center justify-center">
+                      <img
+                        src={logoUrl || '/pwa-512x512.png'}
+                        alt={storeName}
+                        className="w-full h-full object-contain rounded-xl"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = '/pwa-192x192.png';
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <span className="mt-2.5 font-bold text-xs text-slate-200 truncate max-w-[140px]">
+                    {storeName || 'Tienda Gosén'}
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-medium">
+                    App Móvil Oficial
+                  </span>
+                </div>
+
+                {/* Features & compatibility instructions */}
+                <div className="md:col-span-2 space-y-2.5 text-xs text-slate-300">
+                  <div className="flex items-start gap-2.5 bg-white/5 p-3 rounded-xl border border-white/5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <p>
+                      <strong className="text-white">Icono de Alta Resolución:</strong> Incluye manifiesto web (`manifest.json`) y etiquetas Apple Touch Icon para que Android y iPhone muestren el logo sin bordes borrosos.
+                    </p>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 bg-white/5 p-3 rounded-xl border border-white/5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <p>
+                      <strong className="text-white">Experiencia de Pantalla Completa:</strong> Al abrirse desde el teléfono funciona sin la barra de direcciones del navegador, brindando una experiencia nativa fluida.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Card 3: Datos de Contacto para Reportes (Opcional) */}
