@@ -41,7 +41,8 @@
         "missing": { "type": "integer" },
         "extra": { "type": "integer" },
         "netImpact": { "type": "number" },
-        "totalItems": { "type": "integer" }
+        "totalItems": { "type": "integer" },
+        "scope": { "type": "string", "maxLength": 100 }
       },
       "required": ["date", "match", "missing", "extra"]
     },

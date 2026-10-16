@@ -36,13 +36,14 @@ service cloud.firestore {
 
     function isValidAuditHistory(data) {
       return data.keys().hasAll(['date', 'match', 'missing', 'extra']) &&
-             data.keys().hasOnly(['date', 'timestamp', 'match', 'missing', 'extra', 'netImpact', 'totalItems']) &&
+             data.keys().hasOnly(['date', 'timestamp', 'match', 'missing', 'extra', 'netImpact', 'totalItems', 'scope']) &&
              data.date is string && data.date.size() <= 100 &&
              (data.match is number || data.match is int) &&
              (data.missing is number || data.missing is int) &&
              (data.extra is number || data.extra is int) &&
              (!('netImpact' in data) || (data.netImpact is number)) &&
-             (!('totalItems' in data) || (data.totalItems is number || data.totalItems is int));
+             (!('totalItems' in data) || (data.totalItems is number || data.totalItems is int)) &&
+             (!('scope' in data) || (data.scope is string && data.scope.size() <= 100));
     }
 
     function isValidStoreSettings(data) {

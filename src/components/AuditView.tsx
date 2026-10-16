@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Product, AuditSessionItem, GroupedAuditItem, AuditHistoryRecord, StoreSettings } from '../types';
+import { Product, Supplier, AuditSessionItem, GroupedAuditItem, AuditHistoryRecord, StoreSettings } from '../types';
 import { playSound } from '../utils/audio';
 import { PrintableReport } from './PrintableReport';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -24,20 +24,37 @@ import {
   Calculator,
   Search,
   SlidersHorizontal,
-  CheckCheck
+  CheckCheck,
+  Filter,
+  Layers,
+  Building2,
+  Tag,
+  ShieldCheck,
+  CheckSquare,
+  Square,
+  PackageCheck,
+  AlertTriangle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Html5Qrcode, Html5QrcodeScannerState } from 'html5-qrcode';
 
+export type AuditScopeMode = 'all' | 'supplier' | 'category' | 'custom';
+
 interface AuditViewProps {
   inventory: Product[];
-  onApplyAuditChanges: (updatedInventory: Product[], historyRecord: AuditHistoryRecord) => void;
+  suppliers?: Supplier[];
+  onApplyAuditChanges: (
+    updatedInventory: Product[],
+    historyRecord: AuditHistoryRecord,
+    auditedCodes?: string[]
+  ) => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
   storeSettings?: StoreSettings;
 }
 
 export const AuditView: React.FC<AuditViewProps> = ({
   inventory,
+  suppliers = [],
   onApplyAuditChanges,
   showToast,
   storeSettings,
@@ -45,7 +62,71 @@ export const AuditView: React.FC<AuditViewProps> = ({
   const [isAuditing, setIsAuditing] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showMatchAllConfirm, setShowMatchAllConfirm] = useState(false);
+  const [showCancelAuditConfirm, setShowCancelAuditConfirm] = useState(false);
   const [auditSession, setAuditSession] = useState<Record<string, AuditSessionItem>>({});
+
+  // Scope Selection States (Pre-Audit Configuration)
+  const [scopeMode, setScopeMode] = useState<AuditScopeMode>('all');
+  const [selectedSupplier, setSelectedSupplier] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [selectedCustomCodes, setSelectedCustomCodes] = useState<string[]>([]);
+  const [customSearchQuery, setCustomSearchQuery] = useState('');
+
+  // Active Scope Metadata (During Audit)
+  const [activeScope, setActiveScope] = useState<{
+    mode: AuditScopeMode;
+    description: string;
+    auditedCodes: string[];
+    totalCatalogCount: number;
+  }>({
+    mode: 'all',
+    description: 'Inventario Completo',
+    auditedCodes: [],
+    totalCatalogCount: 0,
+  });
+
+  // Extract unique sorted suppliers
+  const supplierList = React.useMemo(() => {
+    const fromSuppliers = (suppliers || []).map((s) => s.name.trim()).filter(Boolean);
+    const fromInventory = inventory.map((p) => (p.supplier || '').trim()).filter(Boolean);
+    const combined = Array.from(new Set([...fromSuppliers, ...fromInventory]));
+    return combined.sort((a, b) => a.localeCompare(b));
+  }, [suppliers, inventory]);
+
+  // Extract unique sorted categories
+  const categoryList = React.useMemo(() => {
+    const categories = inventory.map((p) => (p.category || '').trim()).filter(Boolean);
+    return Array.from(new Set(categories)).sort((a, b) => a.localeCompare(b));
+  }, [inventory]);
+
+  // Determine targeted products for the selected scope
+  const targetProducts = React.useMemo(() => {
+    if (scopeMode === 'all') {
+      return inventory;
+    }
+    if (scopeMode === 'supplier') {
+      if (!selectedSupplier) return [];
+      return inventory.filter((p) => (p.supplier || '').trim() === selectedSupplier.trim());
+    }
+    if (scopeMode === 'category') {
+      if (!selectedCategory) return [];
+      return inventory.filter((p) => (p.category || '').trim() === selectedCategory.trim());
+    }
+    if (scopeMode === 'custom') {
+      return inventory.filter((p) => selectedCustomCodes.includes(p.code));
+    }
+    return inventory;
+  }, [inventory, scopeMode, selectedSupplier, selectedCategory, selectedCustomCodes]);
+
+  // Set default selection if none chosen
+  useEffect(() => {
+    if (scopeMode === 'supplier' && !selectedSupplier && supplierList.length > 0) {
+      setSelectedSupplier(supplierList[0]);
+    }
+    if (scopeMode === 'category' && !selectedCategory && categoryList.length > 0) {
+      setSelectedCategory(categoryList[0]);
+    }
+  }, [scopeMode, supplierList, categoryList, selectedSupplier, selectedCategory]);
   
   // Scanning & Manual input states
   const [manualCode, setManualCode] = useState('');
@@ -106,20 +187,44 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
   // Start new audit session
   const startAudit = () => {
+    if (targetProducts.length === 0) {
+      showToast('Por favor selecciona al menos un producto o segmento para iniciar.', 'warning');
+      return;
+    }
+
+    let description = 'Inventario Completo';
+    if (scopeMode === 'supplier') {
+      description = `Proveedor: ${selectedSupplier}`;
+    } else if (scopeMode === 'category') {
+      description = `Categoría: ${selectedCategory}`;
+    } else if (scopeMode === 'custom') {
+      description = `Selección Personalizada (${targetProducts.length} productos)`;
+    }
+
+    const auditedCodes = targetProducts.map((p) => p.code);
     const session: Record<string, AuditSessionItem> = {};
-    inventory.forEach((item) => {
+    targetProducts.forEach((item) => {
       session[item.code] = {
         item,
         expected: Number(item.stock) || 0,
         counted: 0,
       };
     });
+
+    setActiveScope({
+      mode: scopeMode,
+      description,
+      auditedCodes,
+      totalCatalogCount: inventory.length,
+    });
+
     setAuditSession(session);
     setIsAuditing(true);
     setLastScannedCode(null);
     setLastScannedGroup(null);
     setLastScannedItemInfo({ name: '-', code: '-' });
     setExpandedGroups({});
+    showToast(`Iniciando auditoría de ${targetProducts.length} productos (${description})`, 'info');
   };
 
   // Direct count setters
@@ -230,14 +335,28 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
       showToast(`+${quantityToAdd} "${item.name}" registrado`, 'success');
     } else {
-      // Unrecognized product
+      // Check if product is in catalog but excluded from this audit segment
+      const inCatalog = inventory.find((p) => p.code === trimmedCode);
       playSound('error');
-      showToast(`Código desconocido: ${trimmedCode}`, 'warning');
-      setLastScannedItemInfo({
-        name: 'CÓDIGO NO REGISTRADO',
-        code: trimmedCode,
-        isError: true,
-      });
+      if (inCatalog) {
+        showToast(
+          `"${inCatalog.name}" pertenece a "${inCatalog.supplier || 'otro segmento'}" y no está incluido en esta auditoría (${activeScope.description}). Su stock permanece protegido.`,
+          'warning'
+        );
+        setLastScannedItemInfo({
+          name: `${inCatalog.name} (FUERA DEL SEGMENTO)`,
+          code: trimmedCode,
+          isError: true,
+        });
+      } else {
+        // Unrecognized product
+        showToast(`Código desconocido: ${trimmedCode}`, 'warning');
+        setLastScannedItemInfo({
+          name: 'CÓDIGO NO REGISTRADO',
+          code: trimmedCode,
+          isError: true,
+        });
+      }
     }
   };
 
@@ -535,13 +654,17 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
   // Apply Changes to inventory
   const handleApplyChanges = () => {
+    const auditedCodeSet = new Set(Object.keys(auditSession));
+
+    // ONLY update the products that were part of this audit session!
     const updatedInventory = inventory.map((product) => {
-      if (auditSession[product.code]) {
+      if (auditSession[product.code] !== undefined) {
         return {
           ...product,
           stock: auditSession[product.code].counted,
         };
       }
+      // Crucial: Products outside this audit segment keep their exact current stock untouched!
       return product;
     });
 
@@ -558,10 +681,11 @@ export const AuditView: React.FC<AuditViewProps> = ({
       missing: summaryData.missing,
       extra: summaryData.extra,
       netImpact: summaryData.netImpact,
-      totalItems: inventory.length,
+      totalItems: Object.keys(auditSession).length,
+      scope: activeScope.description,
     };
 
-    onApplyAuditChanges(updatedInventory, newRecord);
+    onApplyAuditChanges(updatedInventory, newRecord, Array.from(auditedCodeSet));
 
     confetti({
       particleCount: 80,
@@ -571,15 +695,16 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
     setIsResultModalOpen(false);
     setIsAuditing(false);
-    showToast('¡Inventario y stock actualizados exitosamente!', 'success');
+    showToast(`¡Ajustes de ${Object.keys(auditSession).length} productos aplicados exitosamente!`, 'success');
   };
 
   const handlePrint = () => {
     window.print();
   };
 
-  // Filtered products for Batch Modal
+  // Filtered products for Batch Modal (ONLY items that belong to the current audit session)
   const batchFilteredProducts = inventory.filter((item) => {
+    if (!auditSession[item.code]) return false;
     const q = batchSearch.toLowerCase().trim();
     return (
       !q ||
@@ -589,32 +714,406 @@ export const AuditView: React.FC<AuditViewProps> = ({
     );
   });
 
+  // Filter products for Custom Scope Selection
+  const customFilteredProducts = inventory.filter((item) => {
+    const q = customSearchQuery.toLowerCase().trim();
+    return (
+      !q ||
+      item.name.toLowerCase().includes(q) ||
+      item.code.toLowerCase().includes(q) ||
+      (item.size && item.size.toLowerCase().includes(q)) ||
+      (item.supplier && item.supplier.toLowerCase().includes(q)) ||
+      (item.category && item.category.toLowerCase().includes(q))
+    );
+  });
+
+  const handleToggleCustomCode = (code: string) => {
+    setSelectedCustomCodes((prev) =>
+      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
+    );
+  };
+
+  const handleSelectAllVisibleCustom = () => {
+    const visibleCodes = customFilteredProducts.map((p) => p.code);
+    setSelectedCustomCodes((prev) => Array.from(new Set([...prev, ...visibleCodes])));
+  };
+
+  const handleDeselectAllCustom = () => {
+    setSelectedCustomCodes([]);
+  };
+
   // ================= RENDER START SCREEN =================
   if (!isAuditing) {
     return (
-      <div className="flex-1 flex flex-col p-4 lg:p-6 h-full w-full bg-slate-100">
-        <header className="mb-6">
-          <h1 className="text-2xl font-bold text-slate-800">Auditoría de Inventario</h1>
-          <p className="text-sm text-slate-500">
-            Escanea códigos o ingresa totales por lote para cuadrar el stock físico vs sistema.
+      <div className="flex-1 flex flex-col p-4 lg:p-6 h-full w-full bg-slate-100 overflow-y-auto">
+        <header className="mb-6 max-w-4xl w-full mx-auto">
+          <div className="flex items-center gap-2 mb-1">
+            <ClipboardList className="w-7 h-7 text-emerald-600" />
+            <h1 className="text-2xl font-bold text-slate-800">Auditoría Física de Inventario</h1>
+          </div>
+          <p className="text-sm text-slate-600">
+            Elige si deseas auditar todo el catálogo o solo un segmento (por proveedor, por categoría o por selección manual).
+            Los productos fuera del segmento seleccionado conservarán su stock actual intacto.
           </p>
         </header>
 
-        <div className="flex-1 flex items-center justify-center">
-          <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-md w-full text-center">
-            <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto mb-6">
-              <ClipboardList className="w-10 h-10" />
+        <div className="max-w-4xl w-full mx-auto space-y-6 pb-12">
+          {/* Step 1: Scope Mode Selection Cards */}
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+            <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center gap-2">
+              <Filter className="w-4 h-4 text-emerald-600" />
+              <span>1. Selecciona el Tipo de Auditoría</span>
+            </h2>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Option 1: Full Inventory */}
+              <button
+                type="button"
+                onClick={() => setScopeMode('all')}
+                className={`p-4 rounded-xl text-left border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                  scopeMode === 'all'
+                    ? 'border-emerald-500 bg-emerald-50/60 shadow-sm ring-1 ring-emerald-500/30'
+                    : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+                }`}
+              >
+                <div>
+                  <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center mb-3">
+                    <PackageCheck className="w-5 h-5" />
+                  </div>
+                  <h3 className="font-bold text-slate-900 text-sm mb-1">Inventario Completo</h3>
+                  <p className="text-xs text-slate-500 leading-snug">
+                    Auditar todos los artículos registrados en el catálogo.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs font-semibold text-emerald-700">
+                  <span>{inventory.length} productos</span>
+                  <span className={`w-2 h-2 rounded-full ${scopeMode === 'all' ? 'bg-emerald-500 ring-4 ring-emerald-100' : 'bg-slate-300'}`} />
+                </div>
+              </button>
+
+              {/* Option 2: By Supplier */}
+              <button
+                type="button"
+                onClick={() => setScopeMode('supplier')}
+                className={`p-4 rounded-xl text-left border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                  scopeMode === 'supplier'
+                    ? 'border-indigo-500 bg-indigo-50/60 shadow-sm ring-1 ring-indigo-500/30'
+                    : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+                }`}
+              >
+                <div>
+                  <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center mb-3">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  <h3 className="font-bold text-slate-900 text-sm mb-1">Por Proveedor</h3>
+                  <p className="text-xs text-slate-500 leading-snug">
+                    Segmentar y auditar los productos de un proveedor específico.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs font-semibold text-indigo-700">
+                  <span>{supplierList.length} proveedores</span>
+                  <span className={`w-2 h-2 rounded-full ${scopeMode === 'supplier' ? 'bg-indigo-500 ring-4 ring-indigo-100' : 'bg-slate-300'}`} />
+                </div>
+              </button>
+
+              {/* Option 3: By Category */}
+              <button
+                type="button"
+                onClick={() => setScopeMode('category')}
+                className={`p-4 rounded-xl text-left border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                  scopeMode === 'category'
+                    ? 'border-purple-500 bg-purple-50/60 shadow-sm ring-1 ring-purple-500/30'
+                    : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+                }`}
+              >
+                <div>
+                  <div className="w-9 h-9 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center mb-3">
+                    <Tag className="w-5 h-5" />
+                  </div>
+                  <h3 className="font-bold text-slate-900 text-sm mb-1">Por Categoría</h3>
+                  <p className="text-xs text-slate-500 leading-snug">
+                    Auditar un departamento o tipo específico de mercancía.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs font-semibold text-purple-700">
+                  <span>{categoryList.length} categorías</span>
+                  <span className={`w-2 h-2 rounded-full ${scopeMode === 'category' ? 'bg-purple-500 ring-4 ring-purple-100' : 'bg-slate-300'}`} />
+                </div>
+              </button>
+
+              {/* Option 4: Manual Custom Selection */}
+              <button
+                type="button"
+                onClick={() => setScopeMode('custom')}
+                className={`p-4 rounded-xl text-left border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                  scopeMode === 'custom'
+                    ? 'border-amber-500 bg-amber-50/60 shadow-sm ring-1 ring-amber-500/30'
+                    : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+                }`}
+              >
+                <div>
+                  <div className="w-9 h-9 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center mb-3">
+                    <CheckSquare className="w-5 h-5" />
+                  </div>
+                  <h3 className="font-bold text-slate-900 text-sm mb-1">Selección Manual</h3>
+                  <p className="text-xs text-slate-500 leading-snug">
+                    Marcar artículos específicos mediante lista y buscador.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs font-semibold text-amber-700">
+                  <span>{selectedCustomCodes.length} elegidos</span>
+                  <span className={`w-2 h-2 rounded-full ${scopeMode === 'custom' ? 'bg-amber-500 ring-4 ring-amber-100' : 'bg-slate-300'}`} />
+                </div>
+              </button>
             </div>
-            <h2 className="text-xl font-bold text-slate-800 mb-2">Iniciar Nuevo Conteo</h2>
-            <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-              El sistema te permite contar escaneando uno a uno o ingresando cantidades totales de forma manual y directa por artículo.
-            </p>
+          </div>
+
+          {/* Step 2: Dynamic Segment Configuration Panel */}
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+            <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <SlidersHorizontal className="w-4 h-4 text-emerald-600" />
+                <span>2. Configuración del Segmento</span>
+              </span>
+              <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                {targetProducts.length} productos listos para auditar
+              </span>
+            </h2>
+
+            {/* If Full Inventory */}
+            {scopeMode === 'all' && (
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                  <PackageCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">Auditoría Global del Catálogo</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Se auditarán los <strong>{inventory.length}</strong> artículos registrados en la tienda.
+                    Recomendado para cierres de período, auditorías fiscales o revisiones completas periódicas.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* If By Supplier */}
+            {scopeMode === 'supplier' && (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-500">
+                  Elige el proveedor cuyos productos deseas auditar. Los artículos de otros proveedores no serán tocados ni alterados.
+                </p>
+
+                {supplierList.length === 0 ? (
+                  <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+                    No se encontraron proveedores registrados en el inventario. Puedes asignar proveedores a tus productos en la sección de Inventario.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                    {supplierList.map((supName) => {
+                      const count = inventory.filter((p) => (p.supplier || '').trim() === supName).length;
+                      const isSelected = selectedSupplier === supName;
+                      return (
+                        <button
+                          key={supName}
+                          type="button"
+                          onClick={() => setSelectedSupplier(supName)}
+                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between ${
+                            isSelected
+                              ? 'border-indigo-600 bg-indigo-50/80 shadow-xs ring-1 ring-indigo-500 font-bold'
+                              : 'border-slate-200 hover:border-indigo-300 bg-white hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="truncate mr-2">
+                            <span className="text-xs text-slate-800 block truncate">{supName}</span>
+                            <span className="text-[11px] text-slate-400 font-normal">{count} artículos</span>
+                          </div>
+                          <span
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                              isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
+                            }`}
+                          >
+                            {isSelected && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* If By Category */}
+            {scopeMode === 'category' && (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-500">
+                  Elige la categoría a auditar. Ideal para revisar estanterías o departamentos específicos por fases.
+                </p>
+
+                {categoryList.length === 0 ? (
+                  <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+                    No hay categorías registradas en el catálogo.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                    {categoryList.map((catName) => {
+                      const count = inventory.filter((p) => (p.category || '').trim() === catName).length;
+                      const isSelected = selectedCategory === catName;
+                      return (
+                        <button
+                          key={catName}
+                          type="button"
+                          onClick={() => setSelectedCategory(catName)}
+                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between ${
+                            isSelected
+                              ? 'border-purple-600 bg-purple-50/80 shadow-xs ring-1 ring-purple-500 font-bold'
+                              : 'border-slate-200 hover:border-purple-300 bg-white hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="truncate mr-2">
+                            <span className="text-xs text-slate-800 block truncate">{catName}</span>
+                            <span className="text-[11px] text-slate-400 font-normal">{count} productos</span>
+                          </div>
+                          <span
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                              isSelected ? 'border-purple-600 bg-purple-600 text-white' : 'border-slate-300'
+                            }`}
+                          >
+                            {isSelected && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* If Manual Custom Selection */}
+            {scopeMode === 'custom' && (
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="relative w-full sm:w-80">
+                    <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                    <input
+                      type="text"
+                      value={customSearchQuery}
+                      onChange={(e) => setCustomSearchQuery(e.target.value)}
+                      placeholder="Buscar por nombre, código o proveedor..."
+                      className="w-full pl-9 pr-3 py-2 text-xs border border-slate-300 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    <button
+                      type="button"
+                      onClick={handleSelectAllVisibleCustom}
+                      className="text-xs px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold border border-amber-200 transition-colors cursor-pointer"
+                    >
+                      Seleccionar Visibles ({customFilteredProducts.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDeselectAllCustom}
+                      className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold border border-slate-200 transition-colors cursor-pointer"
+                    >
+                      Desmarcar Todos
+                    </button>
+                  </div>
+                </div>
+
+                {/* Scrollable Products List with Checkboxes */}
+                <div className="max-h-72 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white">
+                  {customFilteredProducts.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-400">
+                      No se encontraron artículos con la búsqueda "{customSearchQuery}"
+                    </div>
+                  ) : (
+                    customFilteredProducts.map((p) => {
+                      const isChecked = selectedCustomCodes.includes(p.code);
+                      return (
+                        <div
+                          key={p.id}
+                          onClick={() => handleToggleCustomCode(p.code)}
+                          className={`p-3 text-xs flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                            isChecked ? 'bg-amber-50/60 font-semibold' : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {}} // handled by row click
+                              className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-slate-300 pointer-events-none"
+                            />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-slate-800 font-bold truncate">{p.name}</span>
+                                {p.size && (
+                                  <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-mono">
+                                    Talla: {p.size}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="font-mono text-[11px] text-slate-400 block truncate">
+                                SKU: {p.code} • Proveedor: {p.supplier || 'N/A'} • Cat: {p.category || 'General'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="text-slate-600 block text-xs">
+                              Stock: <strong>{p.stock}</strong>
+                            </span>
+                            <span className="text-[11px] text-slate-400">
+                              L {Number(p.price || 0).toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Step 3: Stock Protection Assurance Banner */}
+          <div className="p-4 rounded-2xl bg-emerald-50/80 border border-emerald-200/80 flex items-start sm:items-center gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+              <ShieldCheck className="w-6 h-6 text-emerald-600" />
+            </div>
+            <div className="text-xs text-emerald-950 flex-1 leading-relaxed">
+              <h4 className="font-bold text-sm text-emerald-900 mb-0.5 flex items-center gap-1.5">
+                <span>Protección de Stock Garantizada</span>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-200/70 text-emerald-900 text-[10px] font-black uppercase">
+                  Seguro
+                </span>
+              </h4>
+              <p>
+                Al aplicar los resultados de la auditoría, <strong>únicamente se modificará el stock de los {targetProducts.length} productos seleccionados</strong> en este segmento.
+                {inventory.length > targetProducts.length && (
+                  <span>
+                    {' '}Los <strong>{inventory.length - targetProducts.length} productos restantes</strong> del catálogo no sufrirán ninguna modificación y mantendrán su existencia actual intacta.
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* Step 4: Big Start Button */}
+          <div className="text-center pt-2">
             <button
+              type="button"
               onClick={startAudit}
-              className="w-full bg-emerald-600 text-white py-3.5 rounded-xl font-bold hover:bg-emerald-700 transition-colors shadow-md shadow-emerald-500/20 cursor-pointer text-base"
+              disabled={targetProducts.length === 0}
+              className="w-full sm:w-auto px-10 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-base shadow-lg shadow-emerald-600/20 hover:shadow-xl transition-all flex items-center justify-center gap-2.5 mx-auto cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Comenzar Auditoría
+              <ClipboardList className="w-5 h-5" />
+              <span>Comenzar Auditoría ({targetProducts.length} artículos)</span>
             </button>
+            {targetProducts.length === 0 && (
+              <p className="text-xs text-amber-600 font-semibold mt-2">
+                Selecciona al menos un artículo o segmento para habilitar la auditoría.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -624,6 +1123,37 @@ export const AuditView: React.FC<AuditViewProps> = ({
   // ================= RENDER ACTIVE AUDIT INTERFACE =================
   return (
     <div className="flex-1 flex flex-col p-4 lg:p-6 h-full w-full bg-slate-100 overflow-hidden">
+      {/* Active Segment Info Banner */}
+      <div className="mb-3 px-4 py-2.5 bg-white border border-slate-200 rounded-xl shadow-2xs flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+        <div className="flex items-center gap-2.5">
+          <span className="p-1.5 rounded-lg bg-indigo-50 text-indigo-700">
+            <Filter className="w-4 h-4" />
+          </span>
+          <div>
+            <span className="font-bold text-slate-800">
+              {activeScope.mode === 'all' ? '📦 Inventario Completo' : `🏢 Segmento: ${activeScope.description}`}
+            </span>
+            <span className="text-slate-500 ml-2">
+              ({activeScope.auditedCodes.length} de {inventory.length} artículos en catálogo)
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {activeScope.mode !== 'all' && (
+            <span className="hidden md:inline-flex items-center gap-1.5 text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full font-semibold border border-emerald-200">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+              <span>{inventory.length - activeScope.auditedCodes.length} productos fuera de este segmento protegidos</span>
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowCancelAuditConfirm(true)}
+            className="text-slate-500 hover:text-rose-600 font-semibold hover:underline cursor-pointer"
+          >
+            Cambiar Segmento
+          </button>
+        </div>
+      </div>
       {/* Header with action controls */}
       <header className="mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-3 shrink-0">
         <div>
@@ -1383,6 +1913,15 @@ export const AuditView: React.FC<AuditViewProps> = ({
               <p className="text-slate-500 text-sm">
                 El reporte ha sido generado. ¿Deseas aplicar los ajustes al sistema?
               </p>
+              <div className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-bold">
+                <Filter className="w-3.5 h-3.5" />
+                <span>Alcance: {activeScope.description} ({activeScope.auditedCodes.length} artículos)</span>
+              </div>
+              {inventory.length > activeScope.auditedCodes.length && (
+                <p className="text-[11px] text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 mt-2 max-w-lg font-medium">
+                  🛡️ Solo se actualizarán estos {activeScope.auditedCodes.length} artículos auditados. Los {inventory.length - activeScope.auditedCodes.length} productos restantes mantendrán su stock actual intacto.
+                </p>
+              )}
             </div>
 
             <div className="p-6 overflow-y-auto bg-slate-100 space-y-6">
@@ -1519,7 +2058,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
                   onClick={handleApplyChanges}
                   className="px-5 py-2 bg-emerald-600 text-white font-medium hover:bg-emerald-700 rounded-xl transition-colors shadow-sm text-sm cursor-pointer"
                 >
-                  Aplicar Cambios
+                  Aplicar Cambios ({activeScope.auditedCodes.length} artículos)
                 </button>
               </div>
             </div>
@@ -1537,6 +2076,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
         groupedItems={groupedItems}
         aiAnalysisText={summaryData.aiSummary}
         storeSettings={storeSettings}
+        scope={activeScope.description}
       />
 
       {/* Confirmation Dialog for Audit Count Reset */}
@@ -1549,7 +2089,20 @@ export const AuditView: React.FC<AuditViewProps> = ({
         isDestructive={true}
         onConfirm={() => {
           setShowResetConfirm(false);
-          startAudit();
+          setAuditSession((prev) => {
+            const reset: Record<string, AuditSessionItem> = {};
+            Object.keys(prev).forEach((code) => {
+              reset[code] = {
+                ...prev[code],
+                counted: 0,
+              };
+            });
+            return reset;
+          });
+          setLastScannedCode(null);
+          setLastScannedGroup(null);
+          setLastScannedItemInfo({ name: '-', code: '-' });
+          showToast('Conteos de la sesión reiniciados a 0', 'info');
         }}
         onCancel={() => setShowResetConfirm(false)}
       />
@@ -1557,13 +2110,30 @@ export const AuditView: React.FC<AuditViewProps> = ({
       {/* Confirmation Dialog for Match All */}
       <ConfirmDialog
         isOpen={showMatchAllConfirm}
-        title="¿Cuadrar todos los artículos con el sistema?"
-        message="Se asignará el stock esperado del sistema como conteo físico actual para todos los artículos. Podrás modificar individualmente cualquier discrepancia."
+        title="¿Cuadrar todos los artículos del segmento con el sistema?"
+        message={`Se asignará el stock esperado del sistema como conteo físico para los ${activeScope.auditedCodes.length} artículos de este segmento. Podrás modificar individualmente cualquier discrepancia.`}
         confirmLabel="Sí, Cuadrar Todo"
         cancelLabel="Cancelar"
         isDestructive={false}
         onConfirm={handleMatchAll}
         onCancel={() => setShowMatchAllConfirm(false)}
+      />
+
+      {/* Confirmation Dialog for Exit / Change Segment */}
+      <ConfirmDialog
+        isOpen={showCancelAuditConfirm}
+        title="¿Salir de la auditoría actual?"
+        message="Se perderán los conteos físicos no guardados de esta sesión. El stock actual de todos los artículos en la base de datos se mantendrá intacto."
+        confirmLabel="Sí, Salir del Conteo"
+        cancelLabel="Continuar Contando"
+        isDestructive={true}
+        onConfirm={async () => {
+          await stopScanner();
+          setShowCancelAuditConfirm(false);
+          setIsAuditing(false);
+          showToast('Auditoría cancelada. El inventario se mantuvo sin cambios.', 'info');
+        }}
+        onCancel={() => setShowCancelAuditConfirm(false)}
       />
     </div>
   );

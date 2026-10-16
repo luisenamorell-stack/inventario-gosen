@@ -53,6 +53,7 @@ export interface AuditHistoryRecord {
   extra: number;
   netImpact: number;
   totalItems: number;
+  scope?: string;
 }
 
 export type ActiveTab = 'dashboard' | 'inventory' | 'audit' | 'price-checker' | 'suppliers' | 'settings';

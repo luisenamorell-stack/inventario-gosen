@@ -276,14 +276,20 @@ export function subscribeToAuditHistory(
 
 export async function applyAuditChangesToFirestore(
   updatedInventory: Product[],
-  historyRecord: AuditHistoryRecord
+  historyRecord: AuditHistoryRecord,
+  auditedCodes?: string[]
 ): Promise<void> {
   const batch = writeBatch(db);
   const auditId = Date.now().toString();
 
   try {
-    // 1. Update stock of inventory items
-    updatedInventory.forEach((product) => {
+    // 1. Update stock of inventory items - ONLY update products that were part of the audit!
+    const productsToUpdate =
+      auditedCodes && auditedCodes.length > 0
+        ? updatedInventory.filter((p) => auditedCodes.includes(p.code))
+        : updatedInventory;
+
+    productsToUpdate.forEach((product) => {
       const docId = product.code.trim().replace(/\//g, '_');
       const itemRef = doc(db, 'inventory', docId);
       batch.update(itemRef, { stock: Math.max(0, Math.round(Number(product.stock) || 0)) });
@@ -291,7 +297,7 @@ export async function applyAuditChangesToFirestore(
 
     // 2. Record audit log
     const auditRef = doc(db, 'audit_history', auditId);
-    batch.set(auditRef, {
+    const auditData: any = {
       date: historyRecord.date,
       timestamp: historyRecord.timestamp,
       match: historyRecord.match,
@@ -299,7 +305,12 @@ export async function applyAuditChangesToFirestore(
       extra: historyRecord.extra,
       netImpact: Number(historyRecord.netImpact) || 0,
       totalItems: historyRecord.totalItems,
-    });
+    };
+    if (historyRecord.scope) {
+      auditData.scope = historyRecord.scope;
+    }
+
+    batch.set(auditRef, auditData);
 
     await batch.commit();
   } catch (error) {

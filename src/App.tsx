@@ -25,7 +25,7 @@ import {
   seedInitialDataIfEmpty,
   pingFirestore
 } from './firebase/firestoreService';
-import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen, LogOut } from 'lucide-react';
+import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen, LogOut, Settings } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
 
 export const App: React.FC = () => {
@@ -343,14 +343,15 @@ export const App: React.FC = () => {
   // Audit Changes
   const handleApplyAuditChanges = async (
     updatedInventory: Product[],
-    historyRecord: AuditHistoryRecord
+    historyRecord: AuditHistoryRecord,
+    auditedCodes?: string[]
   ) => {
     setIsSyncing(true);
     try {
       setInventory(updatedInventory);
       setAuditHistory((prev) => [...prev, historyRecord]);
 
-      await applyAuditChangesToFirestore(updatedInventory, historyRecord);
+      await applyAuditChangesToFirestore(updatedInventory, historyRecord, auditedCodes);
       setLastSyncTime(new Date());
       showToast('¡Ajustes de inventario sincronizados en Firestore en tiempo real!', 'success');
     } catch (err: any) {
@@ -422,121 +423,81 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-slate-50 min-w-0 transition-all duration-350 ease-in-out">
-        {/* Top Real-time Connection Status Bar */}
-        <div className="bg-slate-900 text-slate-300 text-xs px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between border-b border-slate-800 shrink-0 gap-2">
-          {/* Left: Menu toggles + Status indicator */}
-          <div className="flex items-center gap-2 sm:gap-3">
+        {/* Top Header - Clean and Streamlined */}
+        <header className="bg-white text-slate-800 px-4 py-2.5 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0">
+          {/* Left: Mobile/Desktop Sidebar Toggles + Clean Store Branding */}
+          <div className="flex items-center gap-2.5 sm:gap-3">
             {/* Mobile Drawer Hamburger Button */}
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(true)}
-              className="md:hidden p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white transition-colors cursor-pointer border border-slate-700/80 shrink-0"
+              className="md:hidden p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer border border-slate-200 shrink-0"
               aria-label="Abrir menú de navegación"
               title="Abrir menú"
             >
-              <Menu className="w-4 h-4 text-emerald-400" />
+              <Menu className="w-4 h-4 text-slate-700" />
             </button>
 
             {/* Desktop Collapse / Expand Toggle Button */}
             <button
               type="button"
               onClick={toggleSidebarCollapse}
-              className="hidden md:inline-flex p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer border border-slate-700/80 shrink-0"
+              className="hidden md:inline-flex p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer border border-slate-200/80 shrink-0"
               title={isSidebarCollapsed ? "Expandir barra lateral" : "Contraer barra lateral"}
               aria-label="Alternar barra lateral"
             >
               {isSidebarCollapsed ? (
-                <PanelLeftOpen className="w-4 h-4 text-emerald-400" />
+                <PanelLeftOpen className="w-4 h-4 text-emerald-600" />
               ) : (
-                <PanelLeftClose className="w-4 h-4 text-slate-300" />
+                <PanelLeftClose className="w-4 h-4 text-slate-600" />
               )}
             </button>
 
+            {/* Store brand / Title */}
             <div className="flex items-center gap-2">
-              {isConnecting ? (
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
-              ) : isFirebaseConnected ? (
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              <span className="font-bold text-slate-900 text-sm tracking-tight flex items-center gap-1.5">
+                <Store className="w-4 h-4 text-emerald-600" />
+                <span>{storeSettings.storeName || 'StockMaster'}</span>
+              </span>
+              {storeSettings.tagline && (
+                <span className="hidden lg:inline text-xs text-slate-400 font-normal border-l border-slate-200 pl-2">
+                  {storeSettings.tagline}
                 </span>
-              ) : (
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
               )}
-
-              <span className="font-semibold text-slate-200 flex items-center gap-1.5">
-                <Database className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Firestore en Tiempo Real:</span>
-              </span>
-
-              <span className="font-mono bg-slate-800 text-emerald-400 px-2 py-0.5 rounded text-[11px] font-bold border border-slate-700">
-                tiendagosenhn
-              </span>
             </div>
 
-            {/* Store custom name badge */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('settings')}
-              title="Haz clic para personalizar el nombre y logo de la tienda"
-              className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 transition-colors cursor-pointer text-[11px] font-semibold"
-            >
-              <Store className="w-3 h-3 text-emerald-400" />
-              <span className="truncate max-w-[140px]">{storeSettings.storeName || 'StockMaster'}</span>
-            </button>
-
-            {/* Syncing spinner */}
+            {/* Subtle background syncing spinner */}
             {isSyncing && (
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-300 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-700/50 animate-pulse">
-                <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" />
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 animate-pulse">
+                <RefreshCw className="w-3 h-3 animate-spin text-emerald-600" />
                 <span>Sincronizando...</span>
               </span>
             )}
           </div>
 
-          {/* Right: Real-time Metrics & Ping Trigger */}
-          <div className="flex items-center gap-3 text-slate-400">
-            <div className="hidden lg:flex items-center gap-3 text-[11px]">
-              <span className="bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50 text-slate-300">
-                <strong className="text-white">{inventory.length}</strong> artículos
-              </span>
-              <span className="bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50 text-slate-300">
-                <strong className="text-white">{suppliers.length}</strong> proveedores
-              </span>
-              <span className="bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50 text-slate-300">
-                <strong className="text-white">{auditHistory.length}</strong> auditorías
-              </span>
-            </div>
-
-            {lastSyncTime && (
-              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-slate-400">
-                <Clock className="w-3 h-3 text-slate-500" />
-                <span>Sync: {formatLastSync(lastSyncTime)}</span>
-                {pingLatency !== null && <span className="text-emerald-400 font-mono">({pingLatency}ms)</span>}
-              </span>
-            )}
-
+          {/* Right: Quick Settings & Logout */}
+          <div className="flex items-center gap-2 text-slate-600">
             <button
-              onClick={handleTestConnection}
-              disabled={isPinging}
-              title="Probar y verificar conexión en tiempo real con Firestore"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white transition-colors text-[11px] font-medium border border-slate-700 cursor-pointer disabled:opacity-50"
+              type="button"
+              onClick={() => setActiveTab('settings')}
+              title="Configuración de la tienda y estado del sistema"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors text-xs font-semibold border border-slate-200/80 cursor-pointer"
             >
-              <RefreshCw className={`w-3 h-3 text-indigo-400 ${isPinging ? 'animate-spin' : ''}`} />
-              <span>{isPinging ? 'Probando...' : 'Probar Conexión'}</span>
+              <Settings className="w-3.5 h-3.5 text-slate-500" />
+              <span className="hidden sm:inline">Configuración</span>
             </button>
 
-            {/* Logout button */}
             <button
+              type="button"
               onClick={handleLogout}
               title="Cerrar sesión del sistema"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-rose-200 transition-colors text-[11px] font-medium border border-rose-800/60 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors text-xs font-semibold border border-rose-200 cursor-pointer"
             >
-              <LogOut className="w-3 h-3 text-rose-400" />
-              <span className="hidden sm:inline">Cerrar Sesión</span>
+              <LogOut className="w-3.5 h-3.5 text-rose-600" />
+              <span className="hidden sm:inline">Salir</span>
             </button>
           </div>
-        </div>
+        </header>
 
         {activeTab === 'dashboard' && (
           <DashboardView
@@ -572,6 +533,7 @@ export const App: React.FC = () => {
         {activeTab === 'audit' && (
           <AuditView
             inventory={inventory}
+            suppliers={suppliers}
             onApplyAuditChanges={handleApplyAuditChanges}
             showToast={showToast}
             storeSettings={storeSettings}
@@ -599,6 +561,14 @@ export const App: React.FC = () => {
             onSaveSettings={handleSaveStoreSettings}
             showToast={showToast}
             isFirebaseConnected={isFirebaseConnected}
+            lastSyncTime={lastSyncTime}
+            pingLatency={pingLatency}
+            onTestConnection={handleTestConnection}
+            isPinging={isPinging}
+            inventoryCount={inventory.length}
+            suppliersCount={suppliers.length}
+            auditHistoryCount={auditHistory.length}
+            onResetData={() => setShowResetConfirm(true)}
           />
         )}
       </main>

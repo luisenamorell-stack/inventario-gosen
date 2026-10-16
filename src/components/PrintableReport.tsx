@@ -11,6 +11,7 @@ interface PrintableReportProps {
   groupedItems: GroupedAuditItem[];
   aiAnalysisText?: string;
   storeSettings?: StoreSettings;
+  scope?: string;
 }
 
 export const PrintableReport: React.FC<PrintableReportProps> = ({
@@ -22,6 +23,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
   groupedItems,
   aiAnalysisText,
   storeSettings,
+  scope,
 }) => {
   const storeName = storeSettings?.storeName || 'StockMaster';
   const logoUrl = storeSettings?.logoUrl;
@@ -65,6 +67,11 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
         <p className="text-gray-700 text-sm">
           Fecha de emisión: <strong>{dateStr}</strong>
         </p>
+        {scope && (
+          <p className="text-gray-800 text-xs mt-1 font-semibold">
+            Alcance / Segmento: <span className="bg-gray-100 px-2 py-0.5 rounded border border-gray-300">{scope}</span>
+          </p>
+        )}
         <p className="text-gray-500 mt-1 text-xs">
           Documento oficial generado por {storeName}
         </p>
