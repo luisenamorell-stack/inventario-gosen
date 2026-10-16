@@ -32,6 +32,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
+import { WhatsAppIcon } from './SalesView';
 
 interface PurchasesViewProps {
   inventory: Product[];
@@ -524,6 +525,51 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
       `);
       printWindow.document.close();
     }
+  };
+
+  // Send purchase invoice summary to supplier or manager via WhatsApp
+  const handleSendInvoiceWhatsApp = () => {
+    if (!selectedInvoiceForModal) return;
+    const inv = selectedInvoiceForModal;
+    const sName = (storeSettings.storeName || 'TIENDA GOSÉN').toUpperCase();
+
+    let text = `📦 *${sName}*\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `📋 *COMPROBANTE DE FACTURA DE COMPRA*\n`;
+    text += `*N° Factura:* ${inv.invoiceNumber}\n`;
+    text += `*Proveedor:* ${inv.supplierName}\n`;
+    text += `*Fecha:* ${inv.date}\n`;
+    text += `*Condición de Pago:* ${inv.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}\n`;
+    if (inv.dueDate) {
+      text += `*Vencimiento:* ${inv.dueDate}\n`;
+    }
+    if (inv.status === 'cancelled') {
+      text += `\n⚠️ *FACTURA ANULADA - STOCK RESTAURADO*\n`;
+    }
+    text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `📦 *PRODUCTOS RECIBIDOS (${inv.totalItems} unidades):*\n`;
+
+    inv.items.forEach((it) => {
+      text += `• *${it.quantity}x* ${it.name}\n`;
+      text += `  ↳ Subtotal: L. ${it.subtotal.toFixed(2)} _(Costo: L. ${it.cost.toFixed(2)} c/u)_\n`;
+    });
+
+    text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `*Subtotal:* L. ${inv.subtotal.toFixed(2)}\n`;
+    if (inv.discount > 0) {
+      text += `*Descuento:* - L. ${inv.discount.toFixed(2)}\n`;
+    }
+    if (inv.tax > 0) {
+      text += `*15% ISV:* L. ${inv.tax.toFixed(2)}\n`;
+    }
+    text += `*TOTAL FACTURA:* L. ${inv.total.toFixed(2)}\n`;
+    if (inv.notes) {
+      text += `*Observaciones:* ${inv.notes}\n`;
+    }
+
+    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    showToast('Abriendo WhatsApp con el resumen de la factura...', 'success');
   };
 
   return (
@@ -1569,22 +1615,35 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
             </div>
 
             {/* Modal Actions */}
-            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center gap-2">
+            <div className="p-3.5 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <button
                 type="button"
-                onClick={handlePrintReceipt}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                onClick={handleSendInvoiceWhatsApp}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-all"
+                title="Compartir comprobante de compra por WhatsApp"
               >
-                <Printer className="w-4 h-4" />
-                <span>Imprimir Comprobante</span>
+                <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
+                <span>Enviar por WhatsApp</span>
               </button>
-              <button
-                type="button"
-                onClick={() => setShowInvoiceDetailsModal(false)}
-                className="py-2.5 px-4 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs cursor-pointer"
-              >
-                Cerrar
-              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrintReceipt}
+                  className="flex-1 sm:flex-initial py-2.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                  title="Imprimir comprobante físico"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span className="hidden sm:inline">Imprimir</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowInvoiceDetailsModal(false)}
+                  className="py-2.5 px-3.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
             </div>
           </div>
         </div>
