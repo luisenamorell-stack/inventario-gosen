@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Product, Supplier, AuditHistoryRecord, ActiveTab, ToastMessage, StoreSettings } from './types';
+import { Product, Supplier, AuditHistoryRecord, ActiveTab, ToastMessage, StoreSettings, SaleRecord, PurchaseInvoice } from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
@@ -7,6 +7,8 @@ import { InventoryView } from './components/InventoryView';
 import { AuditView } from './components/AuditView';
 import { PriceCheckerTab } from './components/PriceCheckerTab';
 import { SuppliersView } from './components/SuppliersView';
+import { SalesView } from './components/SalesView';
+import { PurchasesView } from './components/PurchasesView';
 import { StoreSettingsView } from './components/StoreSettingsView';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
@@ -15,6 +17,8 @@ import {
   subscribeToSuppliers,
   subscribeToAuditHistory,
   subscribeToStoreSettings,
+  subscribeToSales,
+  subscribeToPurchases,
   saveStoreSettingsToFirestore,
   DEFAULT_STORE_SETTINGS,
   saveProductToFirestore,
@@ -22,6 +26,10 @@ import {
   saveSupplierToFirestore,
   deleteSupplierFromFirestore,
   applyAuditChangesToFirestore,
+  recordSaleInFirestore,
+  cancelSaleInFirestore,
+  recordPurchaseInFirestore,
+  cancelPurchaseInFirestore,
   seedInitialDataIfEmpty,
   pingFirestore
 } from './firebase/firestoreService';
@@ -33,6 +41,8 @@ export const App: React.FC = () => {
   const [inventory, setInventory] = useState<Product[]>(INITIAL_INVENTORY);
   const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
   const [auditHistory, setAuditHistory] = useState<AuditHistoryRecord[]>(INITIAL_AUDIT_HISTORY);
+  const [sales, setSales] = useState<SaleRecord[]>([]);
+  const [purchases, setPurchases] = useState<PurchaseInvoice[]>([]);
 
   // Store Branding & Profile State (with instant local cache fallback)
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(() => {
@@ -201,7 +211,31 @@ export const App: React.FC = () => {
       }
     );
 
-    // 5. Background seed check if database is entirely empty
+    // 5. Subscribe to real-time sales transactions & history
+    const unsubscribeSales = subscribeToSales(
+      (salesRecords) => {
+        setSales(salesRecords);
+        setIsFirebaseConnected(true);
+        setLastSyncTime(new Date());
+      },
+      (err) => {
+        console.error('Sales subscription real-time error:', err);
+      }
+    );
+
+    // 6. Subscribe to real-time purchases from suppliers
+    const unsubscribePurchases = subscribeToPurchases(
+      (purchaseRecords) => {
+        setPurchases(purchaseRecords);
+        setIsFirebaseConnected(true);
+        setLastSyncTime(new Date());
+      },
+      (err) => {
+        console.error('Purchases subscription real-time error:', err);
+      }
+    );
+
+    // 7. Background seed check if database is entirely empty
     seedInitialDataIfEmpty().catch((err) => {
       console.warn('Initial seed check error:', err);
     });
@@ -211,6 +245,8 @@ export const App: React.FC = () => {
       unsubscribeSup();
       unsubscribeAudit();
       unsubscribeSettings();
+      unsubscribeSales();
+      unsubscribePurchases();
     };
   }, []);
 
@@ -368,6 +404,50 @@ export const App: React.FC = () => {
     setActiveTab('inventory');
   };
 
+  // Sales Handlers
+  const handleRecordSale = async (saleData: Omit<SaleRecord, 'id'>) => {
+    setIsSyncing(true);
+    try {
+      const recorded = await recordSaleInFirestore(saleData, inventory);
+      setLastSyncTime(new Date());
+      return recorded;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleCancelSale = async (sale: SaleRecord) => {
+    setIsSyncing(true);
+    try {
+      await cancelSaleInFirestore(sale, inventory);
+      setLastSyncTime(new Date());
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Supplier Purchases Handlers
+  const handleRecordPurchase = async (purchaseData: Omit<PurchaseInvoice, 'id'>) => {
+    setIsSyncing(true);
+    try {
+      const recorded = await recordPurchaseInFirestore(purchaseData, inventory);
+      setLastSyncTime(new Date());
+      return recorded;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleCancelPurchase = async (purchase: PurchaseInvoice) => {
+    setIsSyncing(true);
+    try {
+      await cancelPurchaseInFirestore(purchase, inventory);
+      setLastSyncTime(new Date());
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   // Reset / Reseed data
   const handleExecuteReset = async () => {
     setShowResetConfirm(false);
@@ -503,11 +583,14 @@ export const App: React.FC = () => {
           <DashboardView
             inventory={inventory}
             auditHistory={auditHistory}
+            sales={sales}
             onOpenNewProduct={() => {
               setActiveTab('inventory');
               setOpenProductModalTrigger(true);
             }}
             onStartAudit={() => setActiveTab('audit')}
+            onNavigateToSales={() => setActiveTab('sales')}
+            onNavigateToPurchases={() => setActiveTab('purchases')}
             onFilterInventoryByCode={handleFilterInventoryByCode}
             onNavigateToAudit={() => setActiveTab('audit')}
           />
@@ -526,6 +609,30 @@ export const App: React.FC = () => {
             }}
             showModalInitially={openProductModalTrigger}
             onCloseInitialModal={() => setOpenProductModalTrigger(false)}
+            showToast={showToast}
+          />
+        )}
+
+        {activeTab === 'sales' && (
+          <SalesView
+            inventory={inventory}
+            sales={sales}
+            storeSettings={storeSettings}
+            onRecordSale={handleRecordSale}
+            onCancelSale={handleCancelSale}
+            showToast={showToast}
+          />
+        )}
+
+        {activeTab === 'purchases' && (
+          <PurchasesView
+            inventory={inventory}
+            suppliers={suppliers}
+            purchases={purchases}
+            storeSettings={storeSettings}
+            onRecordPurchase={handleRecordPurchase}
+            onCancelPurchase={handleCancelPurchase}
+            onSaveSupplier={handleSaveSupplier}
             showToast={showToast}
           />
         )}
@@ -568,6 +675,8 @@ export const App: React.FC = () => {
             inventoryCount={inventory.length}
             suppliersCount={suppliers.length}
             auditHistoryCount={auditHistory.length}
+            salesCount={sales.length}
+            purchasesCount={purchases.length}
             onResetData={() => setShowResetConfirm(true)}
           />
         )}

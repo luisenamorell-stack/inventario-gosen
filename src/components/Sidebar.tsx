@@ -14,7 +14,9 @@ import {
   X,
   PanelLeftClose,
   PanelLeftOpen,
-  LogOut
+  LogOut,
+  ShoppingCart,
+  FileText
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -56,6 +58,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Inventario',
       icon: List,
       activeColor: 'bg-emerald-600 text-white',
+    },
+    {
+      id: 'sales' as ActiveTab,
+      label: 'Ventas (POS)',
+      icon: ShoppingCart,
+      activeColor: 'bg-emerald-600 text-white',
+    },
+    {
+      id: 'purchases' as ActiveTab,
+      label: 'Compras / Facturas',
+      icon: FileText,
+      activeColor: 'bg-indigo-600 text-white',
     },
     {
       id: 'audit' as ActiveTab,

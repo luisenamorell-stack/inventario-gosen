@@ -56,6 +56,50 @@ service cloud.firestore {
              (!('updatedAt' in data) || (data.updatedAt is number || data.updatedAt is string));
     }
 
+    function isValidSale(data) {
+      return data.keys().hasAll(['saleNumber', 'timestamp', 'date', 'items', 'total', 'status']) &&
+             data.keys().hasOnly(['saleNumber', 'timestamp', 'date', 'items', 'totalItems', 'subtotal', 'discount', 'tax', 'total', 'paymentMethod', 'amountPaid', 'change', 'customerName', 'customerPhone', 'customerRtn', 'notes', 'status', 'cashier']) &&
+             data.saleNumber is string && data.saleNumber.size() <= 50 &&
+             data.timestamp is number &&
+             data.date is string && data.date.size() <= 100 &&
+             data.items is list &&
+             (!('totalItems' in data) || (data.totalItems is number || data.totalItems is int)) &&
+             (!('subtotal' in data) || data.subtotal is number) &&
+             (!('discount' in data) || data.discount is number) &&
+             (!('tax' in data) || data.tax is number) &&
+             data.total is number &&
+             (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod.size() <= 50)) &&
+             (!('amountPaid' in data) || data.amountPaid is number) &&
+             (!('change' in data) || data.change is number) &&
+             (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 200)) &&
+             (!('customerPhone' in data) || (data.customerPhone is string && data.customerPhone.size() <= 50)) &&
+             (!('customerRtn' in data) || (data.customerRtn is string && data.customerRtn.size() <= 50)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
+             data.status in ['completed', 'cancelled'] &&
+             (!('cashier' in data) || (data.cashier is string && data.cashier.size() <= 100));
+    }
+
+    function isValidPurchase(data) {
+      return data.keys().hasAll(['invoiceNumber', 'supplierId', 'supplierName', 'date', 'timestamp', 'items', 'total', 'status']) &&
+             data.keys().hasOnly(['invoiceNumber', 'supplierId', 'supplierName', 'date', 'timestamp', 'paymentCondition', 'dueDate', 'items', 'totalItems', 'subtotal', 'tax', 'discount', 'total', 'notes', 'status', 'receivedBy']) &&
+             data.invoiceNumber is string && data.invoiceNumber.size() <= 100 &&
+             data.supplierId is string && data.supplierId.size() <= 128 &&
+             data.supplierName is string && data.supplierName.size() <= 200 &&
+             data.date is string && data.date.size() <= 100 &&
+             data.timestamp is number &&
+             (!('paymentCondition' in data) || (data.paymentCondition is string && data.paymentCondition.size() <= 50)) &&
+             (!('dueDate' in data) || (data.dueDate is string && data.dueDate.size() <= 50)) &&
+             data.items is list &&
+             (!('totalItems' in data) || (data.totalItems is number || data.totalItems is int)) &&
+             (!('subtotal' in data) || data.subtotal is number) &&
+             (!('tax' in data) || data.tax is number) &&
+             (!('discount' in data) || data.discount is number) &&
+             data.total is number &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
+             data.status in ['completed', 'cancelled'] &&
+             (!('receivedBy' in data) || (data.receivedBy is string && data.receivedBy.size() <= 100));
+    }
+
     // Global Safety Net Default Deny
     match /{document=**} {
       allow read, write: if false;
@@ -86,6 +130,20 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isValidId(settingId) && isValidStoreSettings(incoming());
       allow delete: if isValidId(settingId);
+    }
+
+    match /sales/{saleId} {
+      allow read: if true;
+      allow create: if isValidId(saleId) && isValidSale(incoming());
+      allow update: if isValidId(saleId) && isValidSale(incoming());
+      allow delete: if isValidId(saleId);
+    }
+
+    match /purchases/{purchaseId} {
+      allow read: if true;
+      allow create: if isValidId(purchaseId) && isValidPurchase(incoming());
+      allow update: if isValidId(purchaseId) && isValidPurchase(incoming());
+      allow delete: if isValidId(purchaseId);
     }
 
     match /test/connection {

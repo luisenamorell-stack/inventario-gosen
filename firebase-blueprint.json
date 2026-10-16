@@ -60,6 +60,56 @@
         "updatedAt": { "type": "number" }
       },
       "required": ["storeName"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "A completed retail sales transaction record with items and totals",
+      "type": "object",
+      "properties": {
+        "saleNumber": { "type": "string", "maxLength": 50 },
+        "timestamp": { "type": "number" },
+        "date": { "type": "string", "maxLength": 100 },
+        "items": { "type": "array" },
+        "totalItems": { "type": "integer" },
+        "subtotal": { "type": "number" },
+        "discount": { "type": "number" },
+        "tax": { "type": "number" },
+        "total": { "type": "number" },
+        "paymentMethod": { "type": "string", "maxLength": 50 },
+        "amountPaid": { "type": "number" },
+        "change": { "type": "number" },
+        "customerName": { "type": "string", "maxLength": 200 },
+        "customerPhone": { "type": "string", "maxLength": 50 },
+        "customerRtn": { "type": "string", "maxLength": 50 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "maxLength": 50 },
+        "cashier": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["saleNumber", "timestamp", "date", "items", "total", "status"]
+    },
+    "Purchase": {
+      "title": "Purchase",
+      "description": "A supplier purchase invoice reception record with merchandise items and updated stock",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string", "maxLength": 100 },
+        "supplierId": { "type": "string", "maxLength": 128 },
+        "supplierName": { "type": "string", "maxLength": 200 },
+        "date": { "type": "string", "maxLength": 100 },
+        "timestamp": { "type": "number" },
+        "paymentCondition": { "type": "string", "maxLength": 50 },
+        "dueDate": { "type": "string", "maxLength": 50 },
+        "items": { "type": "array" },
+        "totalItems": { "type": "integer" },
+        "subtotal": { "type": "number" },
+        "tax": { "type": "number" },
+        "discount": { "type": "number" },
+        "total": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "maxLength": 50 },
+        "receivedBy": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["invoiceNumber", "supplierId", "supplierName", "date", "timestamp", "items", "total", "status"]
     }
   },
   "firestore": {
@@ -78,6 +128,14 @@
     "/settings/{settingId}": {
       "schema": "StoreSettings",
       "description": "Store profile configuration including custom store name and brand logo"
+    },
+    "/sales/{saleId}": {
+      "schema": "Sale",
+      "description": "Collection of completed and logged customer sales transactions"
+    },
+    "/purchases/{purchaseId}": {
+      "schema": "Purchase",
+      "description": "Collection of registered supplier purchase invoices and stock receipts"
     }
   }
 }

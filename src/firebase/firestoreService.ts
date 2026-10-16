@@ -9,7 +9,7 @@ import {
   getDocFromServer
 } from 'firebase/firestore';
 import { db, auth } from './config';
-import { Product, Supplier, AuditHistoryRecord, StoreSettings } from '../types';
+import { Product, Supplier, AuditHistoryRecord, StoreSettings, SaleRecord, SaleItem, PurchaseInvoice, PurchaseItem } from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
 
 export enum OperationType {
@@ -438,6 +438,365 @@ export async function saveStoreSettingsToFirestore(settings: StoreSettings): Pro
     await setDoc(docRef, payload, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'settings/store_profile');
+  }
+}
+
+// ----------------- SALES & POS OPERATIONS -----------------
+
+export function subscribeToSales(
+  onData: (sales: SaleRecord[]) => void,
+  onError?: (err: any) => void
+) {
+  const collRef = collection(db, 'sales');
+  return onSnapshot(
+    collRef,
+    (snapshot) => {
+      const records: SaleRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        records.push({
+          id: docSnap.id,
+          saleNumber: data.saleNumber || `VTA-${docSnap.id.slice(-6)}`,
+          timestamp: Number(data.timestamp) || Date.now(),
+          date: data.date || '',
+          items: Array.isArray(data.items)
+            ? data.items.map((it: any) => ({
+                productId: it.productId || '',
+                code: it.code || '',
+                name: it.name || '',
+                category: it.category || '',
+                size: it.size || '',
+                price: Number(it.price) || 0,
+                cost: Number(it.cost) || 0,
+                quantity: Number(it.quantity) || 1,
+                subtotal: Number(it.subtotal) || 0,
+              }))
+            : [],
+          totalItems: Number(data.totalItems) || 0,
+          subtotal: Number(data.subtotal) || 0,
+          discount: Number(data.discount) || 0,
+          tax: Number(data.tax) || 0,
+          total: Number(data.total) || 0,
+          paymentMethod: data.paymentMethod || 'cash',
+          amountPaid: Number(data.amountPaid) || 0,
+          change: Number(data.change) || 0,
+          customerName: data.customerName || 'Consumidor Final',
+          customerPhone: data.customerPhone || '',
+          customerRtn: data.customerRtn || '',
+          notes: data.notes || '',
+          status: data.status === 'cancelled' ? 'cancelled' : 'completed',
+          cashier: data.cashier || 'Cajero',
+        });
+      });
+      // Sort newest first
+      records.sort((a, b) => b.timestamp - a.timestamp);
+      onData(records);
+    },
+    (error) => {
+      if (onError) onError(error);
+      handleFirestoreError(error, OperationType.GET, 'sales');
+    }
+  );
+}
+
+export async function recordSaleInFirestore(
+  saleData: Omit<SaleRecord, 'id'>,
+  currentInventory: Product[]
+): Promise<SaleRecord> {
+  const batch = writeBatch(db);
+  const saleId = `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const saleRef = doc(db, 'sales', saleId);
+
+  try {
+    // 1. Deduct quantity sold from current stock of each inventory item
+    for (const item of saleData.items) {
+      const sanitizedCode = item.code.trim().replace(/\//g, '_');
+      const productRef = doc(db, 'inventory', sanitizedCode);
+      
+      const currentProd = currentInventory.find(
+        (p) => p.code.trim() === item.code.trim() || p.id === item.productId
+      );
+      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
+      const newStock = Math.max(0, currentStock - (Number(item.quantity) || 1));
+
+      batch.update(productRef, { stock: newStock });
+    }
+
+    // 2. Record sale document
+    const payload: any = {
+      saleNumber: saleData.saleNumber || `VTA-${Date.now().toString().slice(-6)}`,
+      timestamp: saleData.timestamp || Date.now(),
+      date: saleData.date || new Date().toLocaleString(),
+      items: saleData.items.map((it) => ({
+        productId: it.productId || '',
+        code: it.code.trim(),
+        name: it.name.trim(),
+        category: (it.category || '').trim(),
+        size: (it.size || '').trim(),
+        price: Number(it.price) || 0,
+        cost: Number(it.cost) || 0,
+        quantity: Number(it.quantity) || 1,
+        subtotal: Number(it.subtotal) || 0,
+      })),
+      totalItems: Number(saleData.totalItems) || 0,
+      subtotal: Number(saleData.subtotal) || 0,
+      discount: Number(saleData.discount) || 0,
+      tax: Number(saleData.tax) || 0,
+      total: Number(saleData.total) || 0,
+      paymentMethod: saleData.paymentMethod || 'cash',
+      amountPaid: Number(saleData.amountPaid) || 0,
+      change: Number(saleData.change) || 0,
+      customerName: (saleData.customerName || 'Consumidor Final').trim(),
+      customerPhone: (saleData.customerPhone || '').trim(),
+      customerRtn: (saleData.customerRtn || '').trim(),
+      notes: (saleData.notes || '').trim(),
+      status: 'completed',
+      cashier: (saleData.cashier || 'Cajero').trim(),
+    };
+
+    batch.set(saleRef, payload);
+
+    await batch.commit();
+
+    return {
+      id: saleId,
+      ...payload,
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `sales/${saleId}`);
+  }
+}
+
+export async function cancelSaleInFirestore(
+  sale: SaleRecord,
+  currentInventory: Product[]
+): Promise<void> {
+  const batch = writeBatch(db);
+  const saleRef = doc(db, 'sales', sale.id);
+
+  try {
+    // 1. Restore stock for each product in the cancelled sale
+    for (const item of sale.items) {
+      const sanitizedCode = item.code.trim().replace(/\//g, '_');
+      const productRef = doc(db, 'inventory', sanitizedCode);
+      
+      const currentProd = currentInventory.find(
+        (p) => p.code.trim() === item.code.trim() || p.id === item.productId
+      );
+      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
+      const restoredStock = currentStock + (Number(item.quantity) || 1);
+
+      batch.update(productRef, { stock: restoredStock });
+    }
+
+    // 2. Mark sale as cancelled
+    batch.update(saleRef, { status: 'cancelled' });
+
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+  }
+}
+
+export async function deleteSaleFromFirestore(saleId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'sales', saleId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `sales/${saleId}`);
+  }
+}
+
+// ----------------- PURCHASES / FACTURAS DE COMPRA -----------------
+
+export function subscribeToPurchases(
+  onData: (purchases: PurchaseInvoice[]) => void,
+  onError?: (err: any) => void
+) {
+  const collRef = collection(db, 'purchases');
+  return onSnapshot(
+    collRef,
+    (snapshot) => {
+      const records: PurchaseInvoice[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        records.push({
+          id: docSnap.id,
+          invoiceNumber: data.invoiceNumber || `FAC-${docSnap.id.slice(-6)}`,
+          supplierId: data.supplierId || '',
+          supplierName: data.supplierName || 'Proveedor',
+          date: data.date || '',
+          timestamp: Number(data.timestamp) || Date.now(),
+          paymentCondition: data.paymentCondition === 'credit' ? 'credit' : 'cash',
+          dueDate: data.dueDate || '',
+          items: Array.isArray(data.items)
+            ? data.items.map((it: any) => ({
+                productId: it.productId || '',
+                code: it.code || '',
+                name: it.name || '',
+                category: it.category || '',
+                size: it.size || '',
+                cost: Number(it.cost) || 0,
+                salePrice: it.salePrice ? Number(it.salePrice) : undefined,
+                quantity: Number(it.quantity) || 1,
+                subtotal: Number(it.subtotal) || 0,
+              }))
+            : [],
+          totalItems: Number(data.totalItems) || 0,
+          subtotal: Number(data.subtotal) || 0,
+          tax: Number(data.tax) || 0,
+          discount: Number(data.discount) || 0,
+          total: Number(data.total) || 0,
+          notes: data.notes || '',
+          status: data.status === 'cancelled' ? 'cancelled' : 'completed',
+          receivedBy: data.receivedBy || 'Administrador',
+        });
+      });
+      // Sort newest first
+      records.sort((a, b) => b.timestamp - a.timestamp);
+      onData(records);
+    },
+    (error) => {
+      if (onError) onError(error);
+      handleFirestoreError(error, OperationType.GET, 'purchases');
+    }
+  );
+}
+
+export async function recordPurchaseInFirestore(
+  purchaseData: Omit<PurchaseInvoice, 'id'>,
+  currentInventory: Product[]
+): Promise<PurchaseInvoice> {
+  const batch = writeBatch(db);
+  const purchaseId = `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const purchaseRef = doc(db, 'purchases', purchaseId);
+
+  try {
+    // 1. Increase current stock and update cost/price for each purchased item
+    for (const item of purchaseData.items) {
+      const sanitizedCode = item.code.trim().replace(/\//g, '_');
+      const productRef = doc(db, 'inventory', sanitizedCode);
+
+      const existing = currentInventory.find(
+        (p) => p.code.trim().toLowerCase() === item.code.trim().toLowerCase() || p.id === item.productId
+      );
+
+      if (existing) {
+        const currentStock = Number(existing.stock) || 0;
+        const newStock = currentStock + (Number(item.quantity) || 0);
+
+        const updatePayload: Record<string, any> = {
+          stock: newStock,
+          cost: Number(item.cost) || existing.cost,
+        };
+
+        if (item.salePrice && item.salePrice > 0) {
+          updatePayload.price = Number(item.salePrice);
+        }
+
+        // Keep supplier name synced if present
+        if (purchaseData.supplierName && !existing.supplier) {
+          updatePayload.supplier = purchaseData.supplierName;
+        }
+
+        batch.update(productRef, updatePayload);
+      } else {
+        // If product does not exist yet in inventory, auto-create it
+        const newProductPayload: Record<string, any> = {
+          code: item.code.trim(),
+          name: item.name.trim(),
+          category: item.category?.trim() || 'General',
+          size: item.size?.trim() || '',
+          supplier: purchaseData.supplierName.trim(),
+          cost: Number(item.cost) || 0,
+          price: item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : (Number(item.cost) || 0) * 1.35,
+          stock: Number(item.quantity) || 0,
+          img: '',
+        };
+
+        batch.set(productRef, newProductPayload);
+      }
+    }
+
+    // 2. Save purchase invoice document
+    const invoicePayload: any = {
+      invoiceNumber: purchaseData.invoiceNumber.trim(),
+      supplierId: purchaseData.supplierId.trim(),
+      supplierName: purchaseData.supplierName.trim(),
+      date: purchaseData.date.trim(),
+      timestamp: purchaseData.timestamp || Date.now(),
+      paymentCondition: purchaseData.paymentCondition || 'cash',
+      dueDate: (purchaseData.dueDate || '').trim(),
+      items: purchaseData.items.map((it) => ({
+        productId: it.productId || '',
+        code: it.code.trim(),
+        name: it.name.trim(),
+        category: (it.category || '').trim(),
+        size: (it.size || '').trim(),
+        cost: Number(it.cost) || 0,
+        salePrice: it.salePrice ? Number(it.salePrice) : null,
+        quantity: Number(it.quantity) || 1,
+        subtotal: Number(it.subtotal) || 0,
+      })),
+      totalItems: Number(purchaseData.totalItems) || 0,
+      subtotal: Number(purchaseData.subtotal) || 0,
+      tax: Number(purchaseData.tax) || 0,
+      discount: Number(purchaseData.discount) || 0,
+      total: Number(purchaseData.total) || 0,
+      notes: (purchaseData.notes || '').trim(),
+      status: 'completed',
+      receivedBy: (purchaseData.receivedBy || 'Administrador').trim(),
+    };
+
+    batch.set(purchaseRef, invoicePayload);
+
+    await batch.commit();
+
+    return {
+      id: purchaseId,
+      ...invoicePayload,
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `purchases/${purchaseId}`);
+  }
+}
+
+export async function cancelPurchaseInFirestore(
+  purchase: PurchaseInvoice,
+  currentInventory: Product[]
+): Promise<void> {
+  const batch = writeBatch(db);
+  const purchaseRef = doc(db, 'purchases', purchase.id);
+
+  try {
+    // 1. Subtract the entered stock back from inventory
+    for (const item of purchase.items) {
+      const sanitizedCode = item.code.trim().replace(/\//g, '_');
+      const productRef = doc(db, 'inventory', sanitizedCode);
+
+      const existing = currentInventory.find(
+        (p) => p.code.trim().toLowerCase() === item.code.trim().toLowerCase() || p.id === item.productId
+      );
+
+      const currentStock = existing ? Number(existing.stock) || 0 : 0;
+      const newStock = Math.max(0, currentStock - (Number(item.quantity) || 0));
+
+      batch.update(productRef, { stock: newStock });
+    }
+
+    // 2. Mark invoice as cancelled
+    batch.update(purchaseRef, { status: 'cancelled' });
+
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `purchases/${purchase.id}`);
+  }
+}
+
+export async function deletePurchaseFromFirestore(purchaseId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'purchases', purchaseId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `purchases/${purchaseId}`);
   }
 }
 

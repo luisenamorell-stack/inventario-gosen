@@ -40,6 +40,8 @@ interface StoreSettingsViewProps {
   inventoryCount?: number;
   suppliersCount?: number;
   auditHistoryCount?: number;
+  salesCount?: number;
+  purchasesCount?: number;
   onResetData?: () => void;
 }
 
@@ -55,6 +57,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   inventoryCount = 0,
   suppliersCount = 0,
   auditHistoryCount = 0,
+  salesCount = 0,
+  purchasesCount = 0,
   onResetData,
 }) => {
   // Local form state
@@ -709,7 +713,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                 <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-900 block mb-2">
                   Registros Almacenados en la Nube
                 </span>
-                <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-center">
                   <div className="bg-white/80 p-2.5 rounded-lg border border-indigo-100/80">
                     <span className="text-lg font-black text-indigo-950 block">{inventoryCount}</span>
                     <span className="text-[11px] text-slate-500 font-medium">Artículos</span>
@@ -717,6 +721,14 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   <div className="bg-white/80 p-2.5 rounded-lg border border-indigo-100/80">
                     <span className="text-lg font-black text-indigo-950 block">{suppliersCount}</span>
                     <span className="text-[11px] text-slate-500 font-medium">Proveedores</span>
+                  </div>
+                  <div className="bg-white/80 p-2.5 rounded-lg border border-indigo-100/80">
+                    <span className="text-lg font-black text-indigo-600 block">{purchasesCount}</span>
+                    <span className="text-[11px] text-slate-500 font-medium">Compras</span>
+                  </div>
+                  <div className="bg-white/80 p-2.5 rounded-lg border border-indigo-100/80">
+                    <span className="text-lg font-black text-emerald-700 block">{salesCount}</span>
+                    <span className="text-[11px] text-slate-500 font-medium">Ventas</span>
                   </div>
                   <div className="bg-white/80 p-2.5 rounded-lg border border-indigo-100/80">
                     <span className="text-lg font-black text-indigo-950 block">{auditHistoryCount}</span>

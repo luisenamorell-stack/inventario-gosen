@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Product, AuditHistoryRecord } from '../types';
+import { Product, AuditHistoryRecord, SaleRecord } from '../types';
 import {
   Box,
   Layers,
@@ -13,15 +13,20 @@ import {
   FileSignature,
   Check,
   ArrowDown,
-  ArrowUp
+  ArrowUp,
+  ShoppingCart,
+  Truck
 } from 'lucide-react';
 import Chart from 'chart.js/auto';
 
 interface DashboardViewProps {
   inventory: Product[];
   auditHistory: AuditHistoryRecord[];
+  sales?: SaleRecord[];
   onOpenNewProduct: () => void;
   onStartAudit: () => void;
+  onNavigateToSales?: () => void;
+  onNavigateToPurchases?: () => void;
   onFilterInventoryByCode: (code: string) => void;
   onNavigateToAudit: () => void;
 }
@@ -29,8 +34,11 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({
   inventory,
   auditHistory,
+  sales = [],
   onOpenNewProduct,
   onStartAudit,
+  onNavigateToSales,
+  onNavigateToPurchases,
   onFilterInventoryByCode,
   onNavigateToAudit,
 }) => {
@@ -132,7 +140,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             Resumen general y métricas de tu inventario.
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2.5">
+          {onNavigateToSales && (
+            <button
+              onClick={onNavigateToSales}
+              className="bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm flex items-center gap-2 cursor-pointer shadow-emerald-600/20"
+            >
+              <ShoppingCart className="w-4 h-4" />
+              <span>Nueva Venta (POS)</span>
+            </button>
+          )}
+          {onNavigateToPurchases && (
+            <button
+              onClick={onNavigateToPurchases}
+              className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-sm flex items-center gap-2 cursor-pointer shadow-indigo-600/20"
+            >
+              <Truck className="w-4 h-4" />
+              <span>Ingresar Compra</span>
+            </button>
+          )}
           <button
             onClick={onOpenNewProduct}
             className="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2 cursor-pointer"
