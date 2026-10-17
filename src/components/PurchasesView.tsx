@@ -575,31 +575,31 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-50 overflow-hidden">
       {/* Top Header & Sub-Tab Switcher */}
-      <div className="bg-white border-b border-slate-200 px-4 sm:px-6 py-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shrink-0 shadow-xs">
+      <div className="bg-white border-b border-slate-200 px-3 sm:px-6 py-2 sm:py-3.5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-3 shrink-0 shadow-xs">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-            <Truck className="w-6 h-6 text-indigo-600" />
+          <h1 className="text-base sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <Truck className="w-5 h-5 sm:w-6 sm:h-6 text-indigo-600 shrink-0" />
             <span>Facturas de Compra a Proveedores</span>
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="hidden sm:block text-xs text-slate-500 mt-0.5">
             Ingreso y recepción de mercadería con incremento automático al stock actual de inventario.
           </p>
         </div>
 
         {/* View Switcher Tabs */}
-        <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+        <div className="grid grid-cols-2 sm:flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
           <button
             onClick={() => setActiveSubTab('create')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'create'
                 ? 'bg-indigo-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
             }`}
           >
-            <Plus className="w-4 h-4" />
-            <span>Ingresar Factura</span>
+            <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <span className="truncate">Ingresar Factura</span>
             {items.length > 0 && (
-              <span className="bg-white text-indigo-700 text-[11px] font-bold px-1.5 py-0.2 rounded-full">
+              <span className="bg-white text-indigo-700 text-[10px] sm:text-[11px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
                 {totalItemsCount}
               </span>
             )}
@@ -607,15 +607,15 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
 
           <button
             onClick={() => setActiveSubTab('history')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'history'
                 ? 'bg-indigo-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
             }`}
           >
-            <FileText className="w-4 h-4" />
-            <span>Historial de Facturas</span>
-            <span className="bg-slate-200 text-slate-700 text-[11px] font-bold px-1.5 py-0.2 rounded-full">
+            <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <span className="truncate">Historial Facturas</span>
+            <span className="bg-slate-200 text-slate-700 text-[10px] sm:text-[11px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
               {purchases.length}
             </span>
           </button>
@@ -625,7 +625,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
       {/* Main Content */}
       {activeSubTab === 'create' ? (
         /* ==================== CREATE PURCHASE INVOICE VIEW ==================== */
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-5">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left 2 Cols: Invoice Header & Product Details Table */}
             <div className="lg:col-span-2 space-y-5">
@@ -1485,104 +1485,109 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
 
       {/* ==================== INVOICE DETAILS & RECEIPT MODAL ==================== */}
       {showInvoiceDetailsModal && selectedInvoiceForModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[88dvh] sm:max-h-[90vh]">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold shrink-0">
                   <FileText className="w-4 h-4" />
                 </div>
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Comprobante de Recepción de Compra</h3>
-                  <span className="text-[11px] text-slate-400 font-mono">
+                <div className="min-w-0">
+                  <h3 className="font-bold text-slate-900 text-xs sm:text-sm truncate">Comprobante de Recepción de Compra</h3>
+                  <span className="text-[11px] text-slate-500 font-mono block truncate">
                     Factura #{selectedInvoiceForModal.invoiceNumber}
                   </span>
                 </div>
               </div>
               <button
                 onClick={() => setShowInvoiceDetailsModal(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Printable Body */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 space-y-3">
               <div
                 ref={receiptPrintRef}
-                className="p-4 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 space-y-4 shadow-2xs"
+                className="p-3 sm:p-4 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 space-y-3 shadow-2xs"
               >
                 {/* Header */}
                 <div className="text-center pb-3 border-b border-slate-200 space-y-1">
-                  <h2 className="font-extrabold text-base text-slate-900 uppercase">
-                    {storeSettings.storeName || 'StockMaster'}
+                  {(storeSettings.logoUrl || '/store-logo.jpg') && (
+                    <div className="flex justify-center mb-1.5">
+                      <img
+                        src={storeSettings.logoUrl || '/store-logo.jpg'}
+                        alt={storeSettings.storeName || 'Tienda Gosén'}
+                        className="w-12 h-12 rounded-xl object-contain border border-slate-200 bg-white p-0.5 shadow-2xs"
+                      />
+                    </div>
+                  )}
+                  <h2 className="font-extrabold text-sm sm:text-base text-slate-900 uppercase break-words">
+                    {storeSettings.storeName || 'Tienda Gosén'}
                   </h2>
-                  <p className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                  <p className="text-[10px] sm:text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
                     COMPROBANTE DE INGRESO DE MERCADERÍA / COMPRA
                   </p>
                   {storeSettings.address && (
-                    <p className="text-[10px] text-slate-400">{storeSettings.address}</p>
+                    <p className="text-[10px] text-slate-400 break-words">{storeSettings.address}</p>
                   )}
                 </div>
 
                 {/* Metadata Grid */}
-                <div className="grid grid-cols-2 gap-2 text-[11px] pb-3 border-b border-slate-200">
-                  <div>
-                    <span className="text-slate-400 block">Proveedor:</span>
-                    <span className="font-bold text-slate-900">{selectedInvoiceForModal.supplierName}</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] pb-3 border-b border-slate-200">
+                  <div className="flex sm:block justify-between gap-2">
+                    <span className="text-slate-400">Proveedor:</span>
+                    <span className="font-bold text-slate-900 text-right sm:text-left break-words">{selectedInvoiceForModal.supplierName}</span>
                   </div>
-                  <div>
-                    <span className="text-slate-400 block">N° Factura Proveedor:</span>
-                    <span className="font-mono font-bold text-slate-900">{selectedInvoiceForModal.invoiceNumber}</span>
+                  <div className="flex sm:block justify-between gap-2">
+                    <span className="text-slate-400">N° Factura:</span>
+                    <span className="font-mono font-bold text-slate-900 text-right sm:text-left break-all">{selectedInvoiceForModal.invoiceNumber}</span>
                   </div>
-                  <div>
-                    <span className="text-slate-400 block">Fecha de Compra:</span>
-                    <span>{selectedInvoiceForModal.date}</span>
+                  <div className="flex sm:block justify-between gap-2">
+                    <span className="text-slate-400">Fecha de Compra:</span>
+                    <span className="text-right sm:text-left">{selectedInvoiceForModal.date}</span>
                   </div>
-                  <div>
-                    <span className="text-slate-400 block">Condición de Pago:</span>
-                    <span className="capitalize">{selectedInvoiceForModal.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}</span>
-                    {selectedInvoiceForModal.dueDate && (
-                      <span className="text-[10px] text-slate-500 block">Vence: {selectedInvoiceForModal.dueDate}</span>
-                    )}
+                  <div className="flex sm:block justify-between gap-2">
+                    <span className="text-slate-400">Condición de Pago:</span>
+                    <span className="capitalize text-right sm:text-left">
+                      {selectedInvoiceForModal.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}
+                      {selectedInvoiceForModal.dueDate ? ` (Vence: ${selectedInvoiceForModal.dueDate})` : ''}
+                    </span>
                   </div>
                   {selectedInvoiceForModal.status === 'cancelled' && (
-                    <div className="col-span-2 text-center py-1 text-rose-600 font-bold border border-rose-300 rounded bg-rose-50 my-1">
+                    <div className="sm:col-span-2 text-center py-1 text-rose-600 font-bold border border-rose-300 rounded bg-rose-50 my-1">
                       *** FACTURA ANULADA - STOCK RESTAURADO ***
                     </div>
                   )}
                 </div>
 
-                {/* Items Table */}
-                <div>
-                  <table className="w-full text-left text-[11px]">
-                    <thead className="bg-slate-100 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px]">
-                      <tr>
-                        <th className="py-1.5 px-2">Producto</th>
-                        <th className="py-1.5 px-2 text-center">Cant</th>
-                        <th className="py-1.5 px-2 text-right">Costo Unit</th>
-                        <th className="py-1.5 px-2 text-right">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {selectedInvoiceForModal.items.map((it, idx) => (
-                        <tr key={idx}>
-                          <td className="py-1.5 px-2 font-medium">
-                            <div>{it.name}</div>
-                            <div className="text-[9px] text-slate-400 font-mono">{it.code}</div>
-                          </td>
-                          <td className="py-1.5 px-2 text-center font-bold">{it.quantity}</td>
-                          <td className="py-1.5 px-2 text-right">L. {it.cost.toFixed(2)}</td>
-                          <td className="py-1.5 px-2 text-right font-bold">L. {it.subtotal.toFixed(2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                {/* Items List (Responsive for both mobile and print) */}
+                <div className="space-y-2 pb-2 border-b border-slate-200">
+                  <div className="flex justify-between text-[10px] font-bold uppercase text-slate-500 border-b pb-1 border-slate-200">
+                    <span>Cant / Producto Recibido</span>
+                    <span>Total Costo</span>
+                  </div>
+                  {selectedInvoiceForModal.items.map((it, idx) => (
+                    <div key={idx} className="flex items-start justify-between gap-2 text-[11px] py-1 border-b border-slate-100 last:border-b-0">
+                      <div className="flex-1 min-w-0 break-words leading-snug">
+                        <span className="font-bold text-indigo-700">{it.quantity}x</span>{' '}
+                        <span className="font-semibold text-slate-900">{it.name}</span>
+                        {it.size ? ` (Talla: ${it.size})` : ''}
+                        <div className="text-[10px] text-slate-500 font-mono">
+                          Código: {it.code} • Costo Unit: L. {it.cost.toFixed(2)}
+                        </div>
+                      </div>
+                      <span className="font-bold text-slate-900 shrink-0">
+                        L. {it.subtotal.toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
 
                 {/* Financial Summary */}
-                <div className="space-y-1 text-[11px] pt-2 border-t border-slate-200">
+                <div className="space-y-1 text-[11px] pt-1">
                   <div className="flex justify-between">
                     <span>Subtotal de Mercadería:</span>
                     <span>L. {selectedInvoiceForModal.subtotal.toFixed(2)}</span>
@@ -1599,7 +1604,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                       <span>L. {selectedInvoiceForModal.tax.toFixed(2)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between font-bold text-sm text-slate-900 border-t border-slate-300 pt-1">
+                  <div className="flex justify-between font-bold text-sm text-slate-900 border-t border-slate-300 pt-1.5">
                     <span>TOTAL FACTURA:</span>
                     <span className="text-indigo-700">L. {selectedInvoiceForModal.total.toFixed(2)}</span>
                   </div>
@@ -1607,7 +1612,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
 
                 {/* Footer notes */}
                 {selectedInvoiceForModal.notes && (
-                  <div className="p-2 bg-slate-50 rounded text-[10px] text-slate-500 border border-slate-200">
+                  <div className="p-2 bg-slate-50 rounded text-[10px] text-slate-500 border border-slate-200 break-words">
                     <span className="font-bold">Observaciones:</span> {selectedInvoiceForModal.notes}
                   </div>
                 )}
@@ -1615,35 +1620,33 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
             </div>
 
             {/* Modal Actions */}
-            <div className="p-3.5 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <div className="p-3 bg-slate-50 border-t border-slate-100 flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={handleSendInvoiceWhatsApp}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-all"
+                className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm transition-all"
                 title="Compartir comprobante de compra por WhatsApp"
               >
                 <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
-                <span>Enviar por WhatsApp</span>
+                <span className="truncate">Enviar WhatsApp</span>
               </button>
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handlePrintReceipt}
-                  className="flex-1 sm:flex-initial py-2.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-                  title="Imprimir comprobante físico"
-                >
-                  <Printer className="w-4 h-4" />
-                  <span className="hidden sm:inline">Imprimir</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowInvoiceDetailsModal(false)}
-                  className="py-2.5 px-3.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs cursor-pointer"
-                >
-                  Cerrar
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handlePrintReceipt}
+                className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
+                title="Imprimir comprobante físico"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Imprimir</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowInvoiceDetailsModal(false)}
+                className="py-2.5 px-3 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs cursor-pointer shrink-0"
+              >
+                Cerrar
+              </button>
             </div>
           </div>
         </div>
