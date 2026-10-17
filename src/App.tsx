@@ -507,11 +507,11 @@ export const App: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-slate-50 min-w-0 transition-all duration-350 ease-in-out pb-16 md:pb-0">
+      <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-slate-50 min-w-0 transition-all duration-350 ease-in-out pb-[calc(4rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         {/* Top Header - Clean and Streamlined */}
-        <header className="bg-white text-slate-800 px-3 sm:px-4 py-2.5 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0">
+        <header className="bg-white text-slate-800 px-3 sm:px-4 py-2 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0">
           {/* Left: Mobile/Desktop Sidebar Toggles + Clean Store Branding */}
-          <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {/* Mobile Drawer Hamburger Button */}
             <button
               type="button"
@@ -539,13 +539,21 @@ export const App: React.FC = () => {
             </button>
 
             {/* Store brand / Title */}
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-900 text-sm tracking-tight flex items-center gap-1.5">
-                <Store className="w-4 h-4 text-emerald-600" />
-                <span>{storeSettings.storeName || 'Tienda Gosén'}</span>
+            <div className="flex items-center gap-2 min-w-0">
+              {(storeSettings.logoUrl || '/store-logo.jpg') ? (
+                <img
+                  src={storeSettings.logoUrl || '/store-logo.jpg'}
+                  alt={storeSettings.storeName || 'Tienda Gosén'}
+                  className="w-7 h-7 rounded-lg object-contain border border-slate-200 bg-white p-0.5 shrink-0 shadow-2xs"
+                />
+              ) : (
+                <Store className="w-4 h-4 text-emerald-600 shrink-0" />
+              )}
+              <span className="font-bold text-slate-900 text-sm tracking-tight truncate">
+                {storeSettings.storeName || 'Tienda Gosén'}
               </span>
               {storeSettings.tagline && (
-                <span className="hidden lg:inline text-xs text-slate-400 font-normal border-l border-slate-200 pl-2">
+                <span className="hidden lg:inline text-xs text-slate-400 font-normal border-l border-slate-200 pl-2 truncate">
                   {storeSettings.tagline}
                 </span>
               )}
@@ -553,9 +561,9 @@ export const App: React.FC = () => {
 
             {/* Subtle background syncing spinner */}
             {isSyncing && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 animate-pulse">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 animate-pulse shrink-0">
                 <RefreshCw className="w-3 h-3 animate-spin text-emerald-600" />
-                <span>Sincronizando...</span>
+                <span className="hidden sm:inline">Sincronizando...</span>
               </span>
             )}
           </div>
@@ -700,7 +708,7 @@ export const App: React.FC = () => {
         {/* Mobile Bottom Navigation Bar (< md) for fast thumb-friendly switching */}
         <nav
           aria-label="Navegación rápida móvil"
-          className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 py-1.5 flex items-center justify-around shadow-lg"
+          className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom,0px))] flex items-center justify-around shadow-lg"
         >
           <button
             type="button"

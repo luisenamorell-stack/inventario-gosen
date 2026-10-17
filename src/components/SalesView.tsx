@@ -42,6 +42,7 @@ import {
   Share2
 } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
+import { playSound } from '../utils/audio';
 
 export const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
@@ -359,6 +360,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   // Process checkout & execute sale
   const handleCheckout = async () => {
     if (cart.length === 0) {
+      playSound('error');
       showToast('El carrito está vacío. Agrega productos para vender.', 'warning');
       return;
     }
@@ -368,6 +370,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
       const liveProduct = inventory.find((p) => p.code === item.code);
       const currentStock = liveProduct ? Number(liveProduct.stock) || 0 : 0;
       if (item.quantity > currentStock) {
+        playSound('error');
         showToast(
           `Stock insuficiente para "${item.name}". Solo hay ${currentStock} unidades disponibles.`,
           'error'
@@ -377,12 +380,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
 
     if (paymentMethod === 'cash' && numericCashGiven < cartTotal) {
+      playSound('error');
       showToast(
         `El efectivo recibido (L. ${numericCashGiven.toFixed(2)}) es menor que el total a pagar (L. ${cartTotal.toFixed(2)})`,
         'error'
       );
       return;
     }
+
+    // Play classic cash register sound ("Ka-Ching!") immediately on button press
+    playSound('cash-register');
 
     setIsSubmittingSale(true);
     try {
@@ -465,6 +472,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
               .py-1 { padding-top: 4px; padding-bottom: 4px; }
               .my-2 { margin-top: 8px; margin-bottom: 8px; }
               .flex { display: flex; justify-content: space-between; }
+              .justify-center { justify-content: center; }
+              img { width: 52px; height: 52px; object-fit: contain; margin: 0 auto 4px; display: block; border-radius: 8px; }
               .table { width: 100%; border-collapse: collapse; }
               .table th { text-align: left; border-bottom: 1px solid #000; padding: 4px 0; }
               .table td { padding: 4px 0; }
@@ -1867,8 +1876,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
               >
                 {/* Store Branding Header */}
                 <div className="text-center space-y-1 pb-2 border-b border-dashed border-slate-300">
+                  {(storeSettings.logoUrl || '/store-logo.jpg') && (
+                    <div className="flex justify-center mb-1.5">
+                      <img
+                        src={storeSettings.logoUrl || '/store-logo.jpg'}
+                        alt={storeSettings.storeName || 'Tienda Gosén'}
+                        className="w-12 h-12 rounded-xl object-contain border border-slate-200 bg-white p-0.5 shadow-2xs"
+                      />
+                    </div>
+                  )}
                   <h2 className="font-bold text-base uppercase text-slate-900">
-                    {storeSettings.storeName || 'StockMaster'}
+                    {storeSettings.storeName || 'Tienda Gosén'}
                   </h2>
                   {storeSettings.tagline && (
                     <p className="text-[11px] text-slate-500">{storeSettings.tagline}</p>
@@ -1997,7 +2015,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
                 <div className="space-y-1">
                   <label className="block text-[11px] font-semibold text-emerald-900">
-                    Número de teléfono / WhatsApp del cliente:
+                    Número de teléfono / WhatsApp del cliente (opcional):
                   </label>
                   <div className="flex gap-1.5">
                     <div className="relative flex-1">
@@ -2006,6 +2024,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                         placeholder="Ej. 9876-5432 o +504 9876-5432"
                         value={receiptWhatsAppPhone}
                         onChange={(e) => setReceiptWhatsAppPhone(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSendTicketWhatsApp();
+                          }
+                        }}
                         className="w-full pl-8 pr-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       />
                       <Phone className="w-3.5 h-3.5 text-emerald-600 absolute left-2.5 top-2" />
