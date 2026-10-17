@@ -56,7 +56,7 @@ export interface AuditHistoryRecord {
   scope?: string;
 }
 
-export type ActiveTab = 'dashboard' | 'inventory' | 'sales' | 'purchases' | 'audit' | 'price-checker' | 'suppliers' | 'settings';
+export type ActiveTab = 'dashboard' | 'inventory' | 'sales' | 'purchases' | 'audit' | 'price-checker' | 'suppliers' | 'settings' | 'catalog';
 
 export interface SaleItem {
   productId: string;
@@ -131,6 +131,8 @@ export interface StoreSettings {
   phone?: string;
   address?: string;
   accessPassword?: string;
+  whatsappOrderPhone?: string;
+  catalogWelcomeMsg?: string;
   updatedAt?: number;
 }
 

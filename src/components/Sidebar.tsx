@@ -17,7 +17,8 @@ import {
   LogOut,
   ShoppingCart,
   FileText,
-  Download
+  Download,
+  Globe
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -66,6 +67,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'sales' as ActiveTab,
       label: 'Ventas (POS)',
       icon: ShoppingCart,
+      activeColor: 'bg-emerald-600 text-white',
+    },
+    {
+      id: 'catalog' as ActiveTab,
+      label: 'Catálogo Digital (Link)',
+      icon: Globe,
       activeColor: 'bg-emerald-600 text-white',
     },
     {

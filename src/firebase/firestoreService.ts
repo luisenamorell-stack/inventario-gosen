@@ -408,6 +408,8 @@ export function subscribeToStoreSettings(
           phone: data.phone || '',
           address: data.address || '',
           accessPassword: data.accessPassword || 'GOSEN2026',
+          whatsappOrderPhone: data.whatsappOrderPhone || '',
+          catalogWelcomeMsg: data.catalogWelcomeMsg || '',
           updatedAt: Number(data.updatedAt) || Date.now(),
         });
       } else {

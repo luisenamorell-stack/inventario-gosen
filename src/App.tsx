@@ -10,6 +10,8 @@ import { SuppliersView } from './components/SuppliersView';
 import { SalesView } from './components/SalesView';
 import { PurchasesView } from './components/PurchasesView';
 import { StoreSettingsView } from './components/StoreSettingsView';
+import { DigitalCatalogView } from './components/DigitalCatalogView';
+import { PublicCatalogView } from './components/PublicCatalogView';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
 import {
@@ -33,11 +35,25 @@ import {
   seedInitialDataIfEmpty,
   pingFirestore
 } from './firebase/firestoreService';
-import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen, LogOut, Settings, PieChart, List, ShoppingCart, FileText, Download } from 'lucide-react';
+import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen, LogOut, Settings, PieChart, List, ShoppingCart, FileText, Download, Globe } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 
 export const App: React.FC = () => {
+  // Public Customer Catalog Mode Detection (?catalogo=1)
+  const [isPublicCatalogMode, setIsPublicCatalogMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const search = window.location.search.toLowerCase();
+    const hash = window.location.hash.toLowerCase();
+    return (
+      search.includes('catalogo') ||
+      search.includes('catalog') ||
+      hash.includes('catalogo') ||
+      hash.includes('catalog')
+    );
+  });
+  const [isAdminPreviewMode, setIsAdminPreviewMode] = useState<boolean>(false);
+
   // Application State
   const [inventory, setInventory] = useState<Product[]>(INITIAL_INVENTORY);
   const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
@@ -471,6 +487,20 @@ export const App: React.FC = () => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
+  // Public Customer Catalog Mode (?catalogo=1 or admin preview)
+  if (isPublicCatalogMode || isAdminPreviewMode) {
+    return (
+      <div className="w-full h-screen h-[100dvh] overflow-y-auto bg-slate-900 scroll-smooth">
+        <PublicCatalogView
+          inventory={inventory}
+          storeSettings={storeSettings}
+          isAdminPreview={isAdminPreviewMode}
+          onBackToAdmin={() => setIsAdminPreviewMode(false)}
+        />
+      </div>
+    );
+  }
+
   // If not authenticated, show protected login view with password GOSEN2026
   if (!isAuthenticated) {
     return (
@@ -702,6 +732,16 @@ export const App: React.FC = () => {
             purchasesCount={purchases.length}
             onResetData={() => setShowResetConfirm(true)}
             onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
+          />
+        )}
+
+        {activeTab === 'catalog' && (
+          <DigitalCatalogView
+            storeSettings={storeSettings}
+            inventory={inventory}
+            onSaveSettings={handleSaveStoreSettings}
+            onOpenPreview={() => setIsAdminPreviewMode(true)}
+            showToast={showToast}
           />
         )}
 

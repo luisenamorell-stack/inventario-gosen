@@ -10,12 +10,14 @@
   },
   "dependencies": {
     "@google/genai": "^2.29.1",
+    "@types/qrcode": "^1.5.6",
     "canvas-confetti": "^1.9.4",
     "chart.js": "^4.4.8",
     "express": "^4.21.2",
     "firebase": "^13.0.0",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^1.57.0",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
