@@ -490,7 +490,7 @@ export const App: React.FC = () => {
   // Public Customer Catalog Mode (?catalogo=1 or admin preview)
   if (isPublicCatalogMode || isAdminPreviewMode) {
     return (
-      <div className="w-full h-screen h-[100dvh] overflow-y-auto bg-slate-900 scroll-smooth">
+      <div className="w-full min-h-screen bg-slate-50 overflow-y-auto overflow-x-hidden min-h-[100dvh] scroll-smooth">
         <PublicCatalogView
           inventory={inventory}
           storeSettings={storeSettings}
@@ -569,21 +569,23 @@ export const App: React.FC = () => {
             </button>
 
             {/* Store brand / Title */}
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
               {(storeSettings.logoUrl || '/store-logo.jpg') ? (
-                <img
-                  src={storeSettings.logoUrl || '/store-logo.jpg'}
-                  alt={storeSettings.storeName || 'Tienda Gosén'}
-                  className="w-7 h-7 rounded-lg object-contain border border-slate-200 bg-white p-0.5 shrink-0 shadow-2xs"
-                />
+                <div className="h-12 sm:h-14 max-w-[240px] sm:max-w-[360px] rounded-2xl p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
+                  <img
+                    src={storeSettings.logoUrl || '/store-logo.jpg'}
+                    alt={storeSettings.storeName || 'Tienda Gosén'}
+                    className="h-full w-full object-contain rounded-xl mix-blend-multiply filter drop-shadow-2xs"
+                  />
+                </div>
               ) : (
-                <Store className="w-4 h-4 text-emerald-600 shrink-0" />
+                <Store className="w-5 h-5 text-emerald-600 shrink-0" />
               )}
-              <span className="font-bold text-slate-900 text-sm tracking-tight truncate">
+              <span className="font-extrabold text-slate-900 text-sm sm:text-base tracking-tight truncate">
                 {storeSettings.storeName || 'Tienda Gosén'}
               </span>
               {storeSettings.tagline && (
-                <span className="hidden lg:inline text-xs text-slate-400 font-normal border-l border-slate-200 pl-2 truncate">
+                <span className="hidden xl:inline text-xs text-slate-400 font-normal border-l border-slate-200 pl-2 truncate">
                   {storeSettings.tagline}
                 </span>
               )}

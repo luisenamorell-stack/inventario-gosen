@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   body {
@@ -7,6 +8,58 @@
     color: #1e293b;
     margin: 0;
     padding: 0;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  html.dark body {
+    background-color: #0b1120;
+    color: #f8fafc;
+  }
+
+  /* Global Dark Theme Integration across all views */
+  html.dark .bg-white {
+    background-color: #0f172a !important;
+    color: #f8fafc;
+  }
+  html.dark .bg-slate-50,
+  html.dark .bg-slate-50\/50,
+  html.dark .bg-slate-50\/60,
+  html.dark .bg-slate-100,
+  html.dark .bg-slate-100\/70,
+  html.dark .bg-slate-100\/80 {
+    background-color: #1e293b !important;
+    color: #f8fafc;
+  }
+  html.dark .border-slate-100,
+  html.dark .border-slate-200,
+  html.dark .border-slate-200\/80,
+  html.dark .border-slate-200\/90,
+  html.dark .border-slate-300 {
+    border-color: #334155 !important;
+  }
+  html.dark .text-slate-900,
+  html.dark .text-slate-800,
+  html.dark .text-slate-700 {
+    color: #f1f5f9 !important;
+  }
+  html.dark .text-slate-600,
+  html.dark .text-slate-500 {
+    color: #94a3b8 !important;
+  }
+  html.dark input[type="text"],
+  html.dark input[type="number"],
+  html.dark input[type="tel"],
+  html.dark input[type="password"],
+  html.dark input[type="date"],
+  html.dark select,
+  html.dark textarea {
+    background-color: #1e293b !important;
+    color: #ffffff !important;
+    border-color: #475569 !important;
+  }
+  html.dark input::placeholder,
+  html.dark textarea::placeholder {
+    color: #64748b !important;
   }
 }
 

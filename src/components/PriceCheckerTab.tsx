@@ -28,12 +28,7 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    // Focus input on tab load
-    if (inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, []);
+
 
   const handleSearch = (codeToSearch: string, isVariantSwitch = false) => {
     const code = codeToSearch.trim().toLowerCase();

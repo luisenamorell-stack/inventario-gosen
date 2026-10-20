@@ -395,7 +395,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                 ) : logoUrl ? (
                   <div className="flex flex-col sm:flex-row items-center gap-6 py-2">
                     <div className="relative group">
-                      <div className="w-24 h-24 rounded-2xl bg-white border-2 border-emerald-500/30 p-2 shadow-md flex items-center justify-center overflow-hidden">
+                      <div className="w-52 h-20 rounded-2xl border-2 border-emerald-500/30 p-1.5 shadow-md flex items-center justify-center overflow-hidden bg-slate-50/80">
                         <img
                           src={logoUrl}
                           alt="Logo de la Tienda"
