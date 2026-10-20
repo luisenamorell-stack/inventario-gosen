@@ -8,9 +8,9 @@ import {
   getDocs,
   getDocFromServer
 } from 'firebase/firestore';
-import { db, auth } from './config';
-import { Product, Supplier, AuditHistoryRecord, StoreSettings, SaleRecord, SaleItem, PurchaseInvoice, PurchaseItem } from '../types';
+import { Product, Supplier, AuditHistoryRecord, StoreSettings, SaleRecord, SaleItem, PurchaseInvoice, PurchaseItem, UserAccount, ActivityLogRecord } from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
+import { db, auth } from './config';
 
 export enum OperationType {
   CREATE = 'create',
@@ -52,7 +52,7 @@ export function handleFirestoreError(
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
       providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
+        auth.currentUser?.providerData?.map((provider: any) => ({
           providerId: provider.providerId,
           email: provider.email,
         })) || [],
@@ -799,6 +799,133 @@ export async function deletePurchaseFromFirestore(purchaseId: string): Promise<v
     await deleteDoc(doc(db, 'purchases', purchaseId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `purchases/${purchaseId}`);
+  }
+}
+
+// ----------------- COLLABORATORS & USERS MANAGEMENT -----------------
+
+export function subscribeToUsers(
+  onData: (users: UserAccount[]) => void,
+  onError?: (err: any) => void
+) {
+  const collRef = collection(db, 'users');
+  return onSnapshot(
+    collRef,
+    (snapshot) => {
+      const records: UserAccount[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        records.push({
+          id: docSnap.id,
+          name: data.name || '',
+          username: data.username || '',
+          password: data.password || '',
+          role: data.role === 'admin' ? 'admin' : 'collaborator',
+          isActive: data.isActive !== false,
+          allowedTabs: Array.isArray(data.allowedTabs) ? data.allowedTabs : ['sales', 'inventory', 'price-checker'],
+          createdAt: Number(data.createdAt) || Date.now(),
+          lastLoginAt: data.lastLoginAt ? Number(data.lastLoginAt) : undefined,
+        });
+      });
+      records.sort((a, b) => a.name.localeCompare(b.name));
+      onData(records);
+    },
+    (error) => {
+      console.warn('Users real-time subscription warning:', error);
+      if (onError) onError(error);
+    }
+  );
+}
+
+export async function saveUserToFirestore(user: UserAccount): Promise<void> {
+  const userId = user.id || `usr_${Date.now()}`;
+  const docRef = doc(db, 'users', userId);
+  const payload = {
+    name: user.name.trim(),
+    username: user.username.trim().toLowerCase(),
+    password: user.password.trim(),
+    role: user.role,
+    isActive: user.isActive,
+    allowedTabs: user.allowedTabs,
+    createdAt: user.createdAt || Date.now(),
+    ...(user.lastLoginAt ? { lastLoginAt: user.lastLoginAt } : {}),
+  };
+  try {
+    await setDoc(docRef, payload, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${userId}`);
+  }
+}
+
+export async function deleteUserFromFirestore(userId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'users', userId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
+  }
+}
+
+// ----------------- ACTIVITY LOGS & MOVEMENT AUDIT TRAIL -----------------
+
+export function subscribeToActivityLogs(
+  onData: (logs: ActivityLogRecord[]) => void,
+  onError?: (err: any) => void
+) {
+  const collRef = collection(db, 'activity_logs');
+  return onSnapshot(
+    collRef,
+    (snapshot) => {
+      const records: ActivityLogRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        records.push({
+          id: docSnap.id,
+          timestamp: Number(data.timestamp) || Date.now(),
+          date: data.date || new Date().toLocaleString('es-HN'),
+          userName: data.userName || 'Usuario',
+          userRole: data.userRole === 'admin' ? 'admin' : 'collaborator',
+          action: data.action || '',
+          module: data.module || 'sales',
+          details: data.details || '',
+        });
+      });
+      // Sort newest first
+      records.sort((a, b) => b.timestamp - a.timestamp);
+      onData(records);
+    },
+    (error) => {
+      console.warn('Activity logs real-time subscription warning:', error);
+      if (onError) onError(error);
+    }
+  );
+}
+
+export async function logActivityInFirestore(
+  log: Omit<ActivityLogRecord, 'id' | 'timestamp' | 'date'>
+): Promise<void> {
+  const logId = `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const docRef = doc(db, 'activity_logs', logId);
+  const now = new Date();
+  const payload = {
+    timestamp: now.getTime(),
+    date: now.toLocaleString('es-HN', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }),
+    userName: log.userName || 'Sistema',
+    userRole: log.userRole || 'admin',
+    action: log.action || '',
+    module: log.module || 'sales',
+    details: log.details || '',
+  };
+  try {
+    await setDoc(docRef, payload);
+  } catch (error) {
+    console.warn('Could not record activity log in Firestore:', error);
   }
 }
 

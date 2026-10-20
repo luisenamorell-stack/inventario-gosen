@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActiveTab, StoreSettings } from '../types';
+import { ActiveTab, StoreSettings, UserSession } from '../types';
 import {
   Boxes,
   PieChart,
@@ -18,7 +18,11 @@ import {
   ShoppingCart,
   FileText,
   Download,
-  Globe
+  Globe,
+  Users,
+  Activity,
+  User,
+  ShieldCheck
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -26,6 +30,7 @@ export interface SidebarProps {
   onTabChange: (tab: ActiveTab) => void;
   onResetData: () => void;
   storeSettings?: StoreSettings;
+  userSession?: UserSession | null;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
   isMobileOpen?: boolean;
@@ -39,6 +44,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onTabChange,
   onResetData,
   storeSettings,
+  userSession,
   isCollapsed = false,
   onToggleCollapse,
   isMobileOpen = false,
@@ -47,14 +53,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenInstallPrompt,
 }) => {
   const storeName = storeSettings?.storeName || 'StockMaster';
-  const logoUrl = storeSettings?.logoUrl;
-  const tagline = storeSettings?.tagline;
+  const isAdmin = userSession?.role === 'admin';
 
-  const navItems = [
+  const allNavItems = [
     {
       id: 'dashboard' as ActiveTab,
       label: 'Dashboard',
       icon: PieChart,
+      activeColor: 'bg-emerald-600 text-white',
+    },
+    {
+      id: 'sales' as ActiveTab,
+      label: 'Ventas (POS)',
+      icon: ShoppingCart,
       activeColor: 'bg-emerald-600 text-white',
     },
     {
@@ -64,9 +75,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       activeColor: 'bg-emerald-600 text-white',
     },
     {
-      id: 'sales' as ActiveTab,
-      label: 'Ventas (POS)',
-      icon: ShoppingCart,
+      id: 'price-checker' as ActiveTab,
+      label: 'Consultar Precio',
+      icon: Tag,
       activeColor: 'bg-emerald-600 text-white',
     },
     {
@@ -88,24 +99,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
       activeColor: 'bg-emerald-600 text-white',
     },
     {
-      id: 'price-checker' as ActiveTab,
-      label: 'Consultar Precio',
-      icon: Tag,
-      activeColor: 'bg-emerald-600 text-white',
-    },
-    {
       id: 'suppliers' as ActiveTab,
       label: 'Proveedores',
       icon: Truck,
       activeColor: 'bg-indigo-600 text-white',
     },
     {
+      id: 'users' as ActiveTab,
+      label: 'Gestión Colaboradores',
+      icon: Users,
+      activeColor: 'bg-amber-600 text-white',
+      adminOnly: true,
+    },
+    {
+      id: 'activity' as ActiveTab,
+      label: 'Registro Movimientos',
+      icon: Activity,
+      activeColor: 'bg-indigo-600 text-white',
+      adminOnly: true,
+    },
+    {
       id: 'settings' as ActiveTab,
       label: 'Ajustes Tienda',
       icon: Store,
       activeColor: 'bg-emerald-600 text-white',
+      adminOnly: true,
     },
   ];
+
+  // Filter items based on user permissions
+  const navItems = allNavItems.filter((item) => {
+    if (!userSession) return true;
+    if (userSession.role === 'admin') return true;
+    // Collaborator: check allowed tabs
+    return userSession.allowedTabs.includes(item.id);
+  });
 
   const handleTabClick = (tabId: ActiveTab) => {
     onTabChange(tabId);
@@ -140,10 +168,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       >
         <div className="flex flex-col h-full overflow-hidden">
           {/* Mobile Drawer Header */}
-          <div className="p-4 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between gap-3">
+          <div className="p-4 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between gap-3 shrink-0">
             <button
               type="button"
-              onClick={() => handleTabClick('settings')}
+              onClick={() => handleTabClick(isAdmin ? 'settings' : 'sales')}
               className="flex-1 flex items-center gap-3 text-left group overflow-hidden cursor-pointer min-w-0"
               title="Ajustes de tienda"
             >
@@ -166,10 +194,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
 
+          {/* User Profile Badge */}
+          {userSession && (
+            <div className="px-3 pt-3 pb-1 border-b border-slate-800/80 bg-slate-950/40 shrink-0">
+              <div className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-800/60 border border-slate-700/60">
+                <div
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
+                    isAdmin
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                  }`}
+                >
+                  {isAdmin ? <ShieldCheck className="w-4 h-4" /> : <User className="w-4 h-4" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-xs text-white truncate">{userSession.userName}</div>
+                  <div className="text-[10px] text-slate-400 font-medium truncate uppercase">
+                    {isAdmin ? '👑 Administrador' : '👤 Colaborador'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Mobile Navigation List */}
-          <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1.5">
-            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-3 mb-2">
-              Navegación
+          <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5">
+            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-3 mb-1">
+              Navegación {isAdmin ? '(Admin)' : '(Colaborador)'}
             </div>
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -179,7 +230,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   key={item.id}
                   type="button"
                   onClick={() => handleTabClick(item.id)}
-                  className={`w-full flex items-center gap-3.5 px-3.5 py-3 rounded-xl transition-all cursor-pointer font-medium text-sm text-left ${
+                  className={`w-full flex items-center gap-3.5 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer font-medium text-sm text-left ${
                     isActive
                       ? `${item.activeColor} shadow-md shadow-emerald-950/20 font-semibold`
                       : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
@@ -191,6 +242,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
               );
             })}
           </nav>
+
+          {/* Logout Button Footer */}
+          {onLogout && (
+            <div className="p-3 border-t border-slate-800 shrink-0">
+              <button
+                type="button"
+                onClick={onLogout}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-bold text-xs border border-rose-500/30 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Cerrar Sesión</span>
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -204,12 +269,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           isCollapsed ? 'w-20' : 'w-64'
         }`}
       >
-        <div className="w-full flex flex-col min-w-0">
+        <div className="w-full flex flex-col min-w-0 flex-1 overflow-hidden">
           {/* Desktop Header with Store Logo */}
-          <div className="h-20 border-b border-slate-800 flex items-center justify-center p-3 relative">
+          <div className="h-20 border-b border-slate-800 flex items-center justify-center p-3 relative shrink-0">
             <button
               type="button"
-              onClick={() => onTabChange('settings')}
+              onClick={() => onTabChange(isAdmin ? 'settings' : 'sales')}
               title={isCollapsed ? `Tienda: ${storeName}` : "Ajustes de tienda"}
               className="w-full h-full flex items-center justify-center text-left cursor-pointer rounded-xl hover:bg-slate-800/60 transition-colors group p-1"
             >
@@ -226,8 +291,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
 
+          {/* User Profile Badge (Desktop) */}
+          {userSession && !isCollapsed && (
+            <div className="px-3 pt-3 pb-1 border-b border-slate-800/80 bg-slate-950/40 shrink-0">
+              <div className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-800/60 border border-slate-700/60">
+                <div
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
+                    isAdmin
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                  }`}
+                >
+                  {isAdmin ? <ShieldCheck className="w-4 h-4" /> : <User className="w-4 h-4" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-xs text-white truncate">{userSession.userName}</div>
+                  <div className="text-[10px] text-slate-400 font-medium truncate uppercase">
+                    {isAdmin ? '👑 Administrador' : '👤 Colaborador'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Desktop Navigation Items */}
-          <nav className="p-3 space-y-1.5">
+          <nav className="p-3 space-y-1.5 flex-1 overflow-y-auto">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -239,7 +327,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   className={`w-full flex items-center rounded-xl transition-all cursor-pointer font-medium text-sm ${
                     isCollapsed
                       ? 'justify-center p-3'
-                      : 'justify-start px-3.5 py-3'
+                      : 'justify-start px-3.5 py-2.5'
                   } ${
                     isActive
                       ? `${item.activeColor} shadow-md shadow-emerald-950/20 font-semibold`
@@ -256,6 +344,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             })}
           </nav>
         </div>
+
+        {/* Desktop Logout Footer */}
+        {onLogout && (
+          <div className="p-3 border-t border-slate-800 shrink-0">
+            <button
+              type="button"
+              onClick={onLogout}
+              className={`w-full flex items-center rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-bold text-xs border border-rose-500/30 transition-colors cursor-pointer ${
+                isCollapsed ? 'justify-center p-3' : 'justify-center py-2.5 px-3 gap-2'
+              }`}
+              title="Cerrar Sesión"
+            >
+              <LogOut className="w-4 h-4" />
+              {!isCollapsed && <span>Cerrar Sesión</span>}
+            </button>
+          </div>
+        )}
       </aside>
     </>
   );

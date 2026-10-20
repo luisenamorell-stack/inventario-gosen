@@ -1,5 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Product, Supplier, AuditHistoryRecord, ActiveTab, ToastMessage, StoreSettings, SaleRecord, PurchaseInvoice } from './types';
+import {
+  Product,
+  Supplier,
+  AuditHistoryRecord,
+  ActiveTab,
+  ToastMessage,
+  StoreSettings,
+  SaleRecord,
+  PurchaseInvoice,
+  UserAccount,
+  ActivityLogRecord,
+  UserSession
+} from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
@@ -12,6 +24,8 @@ import { PurchasesView } from './components/PurchasesView';
 import { StoreSettingsView } from './components/StoreSettingsView';
 import { DigitalCatalogView } from './components/DigitalCatalogView';
 import { PublicCatalogView } from './components/PublicCatalogView';
+import { UserManagementView } from './components/UserManagementView';
+import { ActivityLogView } from './components/ActivityLogView';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
 import {
@@ -21,6 +35,8 @@ import {
   subscribeToStoreSettings,
   subscribeToSales,
   subscribeToPurchases,
+  subscribeToUsers,
+  subscribeToActivityLogs,
   saveStoreSettingsToFirestore,
   DEFAULT_STORE_SETTINGS,
   saveProductToFirestore,
@@ -32,10 +48,37 @@ import {
   cancelSaleInFirestore,
   recordPurchaseInFirestore,
   cancelPurchaseInFirestore,
+  saveUserToFirestore,
+  deleteUserFromFirestore,
+  logActivityInFirestore,
   seedInitialDataIfEmpty,
   pingFirestore
 } from './firebase/firestoreService';
-import { Database, Wifi, WifiOff, RefreshCw, CheckCircle2, Clock, Store, Menu, PanelLeftClose, PanelLeftOpen, LogOut, Settings, PieChart, List, ShoppingCart, FileText, Download, Globe } from 'lucide-react';
+import {
+  Database,
+  Wifi,
+  WifiOff,
+  RefreshCw,
+  CheckCircle2,
+  Clock,
+  Store,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  LogOut,
+  Settings,
+  PieChart,
+  List,
+  ShoppingCart,
+  FileText,
+  Download,
+  Globe,
+  Users,
+  Activity,
+  User,
+  ShieldCheck,
+  Tag
+} from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 
@@ -54,14 +97,16 @@ export const App: React.FC = () => {
   });
   const [isAdminPreviewMode, setIsAdminPreviewMode] = useState<boolean>(false);
 
-  // Application State
+  // Application Data State
   const [inventory, setInventory] = useState<Product[]>(INITIAL_INVENTORY);
   const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
   const [auditHistory, setAuditHistory] = useState<AuditHistoryRecord[]>(INITIAL_AUDIT_HISTORY);
   const [sales, setSales] = useState<SaleRecord[]>([]);
   const [purchases, setPurchases] = useState<PurchaseInvoice[]>([]);
+  const [users, setUsers] = useState<UserAccount[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLogRecord[]>([]);
 
-  // Store Branding & Profile State (with instant local cache fallback)
+  // Store Branding & Profile State
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(() => {
     try {
       const cached = localStorage.getItem('stockmaster_store_settings');
@@ -69,7 +114,22 @@ export const App: React.FC = () => {
     } catch {}
     return DEFAULT_STORE_SETTINGS;
   });
-  
+
+  // User Session & Authentication State
+  const [userSession, setUserSession] = useState<UserSession | null>(() => {
+    try {
+      const localSess = localStorage.getItem('stockmaster_user_session');
+      const sessionSess = sessionStorage.getItem('stockmaster_user_session');
+      if (localSess) return JSON.parse(localSess);
+      if (sessionSess) return JSON.parse(sessionSess);
+    } catch {}
+    return null;
+  });
+
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return userSession !== null;
+  });
+
   // Real-time Connection State
   const [isFirebaseConnected, setIsFirebaseConnected] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(true);
@@ -82,36 +142,91 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // Authentication State (Simple Password: GOSEN2026)
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    try {
-      const localAuth = localStorage.getItem('stockmaster_authenticated');
-      const sessionAuth = sessionStorage.getItem('stockmaster_authenticated');
-      return localAuth === 'true' || sessionAuth === 'true';
-    } catch {
-      return false;
-    }
-  });
+  // Triggers for modals from shortcuts
+  const [openProductModalTrigger, setOpenProductModalTrigger] = useState<boolean>(false);
+  const [openSupplierModalTrigger, setOpenSupplierModalTrigger] = useState<boolean>(false);
+  const [inventorySearchQuery, setInventorySearchQuery] = useState<string>('');
 
-  const handleLoginSuccess = (remember: boolean) => {
+  const showToast = (
+    message: string,
+    type: 'success' | 'error' | 'warning' | 'info' = 'info'
+  ) => {
+    const newToast: ToastMessage = {
+      id: `toast_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      message,
+      type,
+    };
+    setToasts((prev) => [...prev, newToast]);
+  };
+
+  const handleDismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  // Auth Handlers
+  const handleLoginSuccess = (session: UserSession, remember: boolean) => {
+    setUserSession(session);
     setIsAuthenticated(true);
+
     try {
       if (remember) {
-        localStorage.setItem('stockmaster_authenticated', 'true');
+        localStorage.setItem('stockmaster_user_session', JSON.stringify(session));
       } else {
-        sessionStorage.setItem('stockmaster_authenticated', 'true');
+        sessionStorage.setItem('stockmaster_user_session', JSON.stringify(session));
       }
     } catch {}
-    showToast('¡Bienvenido al sistema!', 'success');
+
+    // Default activeTab to first allowed tab for collaborator
+    if (session.role !== 'admin') {
+      const firstAllowed = session.allowedTabs && session.allowedTabs.length > 0 ? session.allowedTabs[0] : 'sales';
+      setActiveTab(firstAllowed);
+    } else {
+      setActiveTab('dashboard');
+    }
+
+    logActivityInFirestore({
+      userName: session.userName,
+      userRole: session.role,
+      action: `Inició sesión en la plataforma (${session.role === 'admin' ? 'Administrador' : 'Colaborador'})`,
+      module: 'users',
+    });
+
+    showToast(`¡Bienvenido ${session.userName}!`, 'success');
   };
 
   const handleLogout = () => {
+    if (userSession) {
+      logActivityInFirestore({
+        userName: userSession.userName,
+        userRole: userSession.role,
+        action: 'Cerró sesión del sistema',
+        module: 'users',
+      });
+    }
+
+    setUserSession(null);
     setIsAuthenticated(false);
     try {
-      localStorage.removeItem('stockmaster_authenticated');
-      sessionStorage.removeItem('stockmaster_authenticated');
+      localStorage.removeItem('stockmaster_user_session');
+      sessionStorage.removeItem('stockmaster_user_session');
     } catch {}
     showToast('Sesión cerrada correctamente', 'info');
+  };
+
+  // Safe Navigation Handler enforcing RBAC permissions
+  const handleTabChange = (targetTab: ActiveTab) => {
+    if (!userSession) return;
+
+    if (userSession.role !== 'admin') {
+      const allowed = userSession.allowedTabs || ['sales', 'inventory', 'price-checker'];
+      if (!allowed.includes(targetTab)) {
+        showToast('No tienes permiso para ingresar a este módulo. Contacta a tu Administrador.', 'warning');
+        return;
+      }
+    }
+
+    setActiveTab(targetTab);
+    if (targetTab === 'inventory') setInventorySearchQuery('');
   };
 
   // Sidebar Collapsible and Mobile Drawer State
@@ -148,35 +263,8 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isMobileMenuOpen]);
 
-  // Synchronize document title with configured store name
+  // Real-time Firestore Subscriptions
   useEffect(() => {
-    document.title = `${storeSettings.storeName || 'StockMaster'} - Control de Inventario y Auditoría`;
-  }, [storeSettings.storeName]);
-
-  // Navigation helpers
-  const [inventorySearchQuery, setInventorySearchQuery] = useState('');
-  const [openProductModalTrigger, setOpenProductModalTrigger] = useState(false);
-  const [openSupplierModalTrigger, setOpenSupplierModalTrigger] = useState(false);
-
-  // Toast Notification System
-  const showToast = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
-    const id = Date.now().toString() + Math.random().toString();
-    const newToast: ToastMessage = { id, message, type };
-    setToasts((prev) => [...prev, newToast]);
-
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3500);
-  };
-
-  const handleDismissToast = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
-
-  // Immediate Real-Time Subscriptions to Firestore on mount
-  useEffect(() => {
-    setIsConnecting(true);
-
     // 1. Subscribe to real-time inventory
     const unsubscribeInv = subscribeToInventory(
       (items) => {
@@ -218,7 +306,7 @@ export const App: React.FC = () => {
       }
     );
 
-    // 4. Subscribe to real-time store settings (branding, name, logo)
+    // 4. Subscribe to real-time store settings
     const unsubscribeSettings = subscribeToStoreSettings(
       (settings) => {
         setStoreSettings(settings);
@@ -255,7 +343,27 @@ export const App: React.FC = () => {
       }
     );
 
-    // 7. Background seed check if database is entirely empty
+    // 7. Subscribe to real-time collaborator users
+    const unsubscribeUsers = subscribeToUsers(
+      (userList) => {
+        setUsers(userList);
+      },
+      (err) => {
+        console.warn('Users subscription error:', err);
+      }
+    );
+
+    // 8. Subscribe to real-time activity logs
+    const unsubscribeActivity = subscribeToActivityLogs(
+      (logs) => {
+        setActivityLogs(logs);
+      },
+      (err) => {
+        console.warn('Activity logs subscription error:', err);
+      }
+    );
+
+    // Seed check
     seedInitialDataIfEmpty().catch((err) => {
       console.warn('Initial seed check error:', err);
     });
@@ -267,10 +375,12 @@ export const App: React.FC = () => {
       unsubscribeSettings();
       unsubscribeSales();
       unsubscribePurchases();
+      unsubscribeUsers();
+      unsubscribeActivity();
     };
   }, []);
 
-  // Save Store Settings to Firestore & Local Storage
+  // Save Store Settings
   const handleSaveStoreSettings = async (newSettings: StoreSettings) => {
     setIsSyncing(true);
     setStoreSettings(newSettings);
@@ -281,12 +391,19 @@ export const App: React.FC = () => {
     try {
       await saveStoreSettingsToFirestore(newSettings);
       setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Administrador',
+        userRole: userSession?.role || 'admin',
+        action: 'Actualizó la configuración general de la tienda',
+        module: 'settings',
+      });
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // Ping Firestore to test live latency & round-trip connection
+  // Test Firestore Connection
   const handleTestConnection = async () => {
     setIsPinging(true);
     try {
@@ -312,7 +429,6 @@ export const App: React.FC = () => {
   const handleSaveProduct = async (product: Product, oldCode?: string) => {
     setIsSyncing(true);
     try {
-      // Optimistic update
       setInventory((prev) => {
         const index = prev.findIndex((p) => p.code.toLowerCase() === (oldCode || product.code).toLowerCase());
         if (index >= 0) {
@@ -325,9 +441,18 @@ export const App: React.FC = () => {
 
       await saveProductToFirestore(product, oldCode);
       setLastSyncTime(new Date());
-      showToast(`"${product.name}" guardado y sincronizado en Firestore`, 'success');
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'collaborator',
+        action: `Guardó producto "${product.name}" (${product.code})`,
+        module: 'inventory',
+        details: `Stock: ${product.stock}, Precio: L. ${product.price.toFixed(2)}`,
+      });
+
+      showToast(`"${product.name}" guardado y sincronizado`, 'success');
     } catch (err: any) {
-      console.error('Error saving product to Firestore:', err);
+      console.error('Error saving product:', err);
       showToast('Error al guardar en Firestore: ' + (err.message || 'desconocido'), 'error');
     } finally {
       setTimeout(() => setIsSyncing(false), 400);
@@ -340,16 +465,22 @@ export const App: React.FC = () => {
       const itemToDelete = inventory.find((p) => p.id === id);
       const code = itemToDelete?.code;
 
-      // Optimistic local state update
       setInventory((prev) => prev.filter((p) => p.id !== id && (code ? p.code !== code : true)));
 
-      // Delete from Firestore
       await deleteProductFromFirestore(id, code);
       setLastSyncTime(new Date());
-      showToast('Artículo eliminado de Firestore en tiempo real', 'info');
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'admin',
+        action: `Eliminó el producto "${itemToDelete?.name || id}" (${code || ''})`,
+        module: 'inventory',
+      });
+
+      showToast('Artículo eliminado en tiempo real', 'info');
     } catch (err: any) {
-      console.error('Error deleting product from Firestore:', err);
-      showToast('Error al eliminar en Firestore: ' + (err.message || 'desconocido'), 'error');
+      console.error('Error deleting product:', err);
+      showToast('Error al eliminar: ' + (err.message || 'desconocido'), 'error');
     } finally {
       setTimeout(() => setIsSyncing(false), 400);
     }
@@ -371,9 +502,17 @@ export const App: React.FC = () => {
 
       await saveSupplierToFirestore(supplier, oldName, inventory);
       setLastSyncTime(new Date());
-      showToast('Proveedor guardado y sincronizado en tiempo real', 'success');
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'collaborator',
+        action: `Guardó proveedor "${supplier.name}"`,
+        module: 'suppliers',
+      });
+
+      showToast('Proveedor guardado y sincronizado', 'success');
     } catch (err: any) {
-      console.error('Error saving supplier to Firestore:', err);
+      console.error('Error saving supplier:', err);
       showToast('Error al guardar proveedor: ' + (err.message || 'desconocido'), 'error');
     } finally {
       setTimeout(() => setIsSyncing(false), 400);
@@ -387,9 +526,17 @@ export const App: React.FC = () => {
       setSuppliers((prev) => prev.filter((s) => s.id !== id));
       await deleteSupplierFromFirestore(id, supToDelete?.name);
       setLastSyncTime(new Date());
-      showToast('Proveedor eliminado de Firestore', 'info');
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'admin',
+        action: `Eliminó el proveedor "${supToDelete?.name || id}"`,
+        module: 'suppliers',
+      });
+
+      showToast('Proveedor eliminado', 'info');
     } catch (err: any) {
-      console.error('Error deleting supplier from Firestore:', err);
+      console.error('Error deleting supplier:', err);
       showToast('Error al eliminar proveedor: ' + (err.message || 'desconocido'), 'error');
     } finally {
       setTimeout(() => setIsSyncing(false), 400);
@@ -409,27 +556,50 @@ export const App: React.FC = () => {
 
       await applyAuditChangesToFirestore(updatedInventory, historyRecord, auditedCodes);
       setLastSyncTime(new Date());
-      showToast('¡Ajustes de inventario sincronizados en Firestore en tiempo real!', 'success');
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'collaborator',
+        action: `Aplicó auditoría de stock (${historyRecord.scope || 'General'})`,
+        module: 'audit',
+        details: `Coincidencias: ${historyRecord.match}, Faltantes: ${historyRecord.missing}, Sobrantes: ${historyRecord.extra}`,
+      });
+
+      showToast('¡Ajustes de inventario de auditoría aplicados correctamente!', 'success');
     } catch (err: any) {
-      console.error('Error applying audit changes to Firestore:', err);
-      showToast('Error al sincronizar auditoría en Firestore: ' + (err.message || 'desconocido'), 'error');
+      console.error('Error applying audit changes:', err);
+      showToast('Error al sincronizar auditoría: ' + (err.message || 'desconocido'), 'error');
     } finally {
       setTimeout(() => setIsSyncing(false), 400);
     }
   };
 
-  // Jump from Dashboard to Inventory filtered
   const handleFilterInventoryByCode = (code: string) => {
     setInventorySearchQuery(code);
-    setActiveTab('inventory');
+    handleTabChange('inventory');
   };
 
   // Sales Handlers
   const handleRecordSale = async (saleData: Omit<SaleRecord, 'id'>) => {
     setIsSyncing(true);
     try {
-      const recorded = await recordSaleInFirestore(saleData, inventory);
+      const activeCashier = userSession?.userName || saleData.cashier || 'Cajero';
+      const payload = {
+        ...saleData,
+        cashier: activeCashier,
+      };
+
+      const recorded = await recordSaleInFirestore(payload, inventory);
       setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: activeCashier,
+        userRole: userSession?.role || 'collaborator',
+        action: `Registró Venta N° ${saleData.saleNumber} (${saleData.totalItems} ítems)`,
+        module: 'sales',
+        details: `Total: L. ${saleData.total.toFixed(2)} (${saleData.paymentMethod.toUpperCase()}) - Cliente: ${saleData.customerName || 'Consumidor Final'}`,
+      });
+
       return recorded;
     } finally {
       setIsSyncing(false);
@@ -441,6 +611,14 @@ export const App: React.FC = () => {
     try {
       await cancelSaleInFirestore(sale, inventory);
       setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'admin',
+        action: `Anuló la Venta N° ${sale.saleNumber}`,
+        module: 'sales',
+        details: `Total devuelto al stock: L. ${sale.total.toFixed(2)}`,
+      });
     } finally {
       setIsSyncing(false);
     }
@@ -450,8 +628,23 @@ export const App: React.FC = () => {
   const handleRecordPurchase = async (purchaseData: Omit<PurchaseInvoice, 'id'>) => {
     setIsSyncing(true);
     try {
-      const recorded = await recordPurchaseInFirestore(purchaseData, inventory);
+      const activeUser = userSession?.userName || purchaseData.receivedBy || 'Usuario';
+      const payload = {
+        ...purchaseData,
+        receivedBy: activeUser,
+      };
+
+      const recorded = await recordPurchaseInFirestore(payload, inventory);
       setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: activeUser,
+        userRole: userSession?.role || 'collaborator',
+        action: `Registró compra/factura N° ${purchaseData.invoiceNumber} de ${purchaseData.supplierName}`,
+        module: 'purchases',
+        details: `Total: L. ${purchaseData.total.toFixed(2)} (${purchaseData.totalItems} ítems agregados a stock)`,
+      });
+
       return recorded;
     } finally {
       setIsSyncing(false);
@@ -463,34 +656,58 @@ export const App: React.FC = () => {
     try {
       await cancelPurchaseInFirestore(purchase, inventory);
       setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'admin',
+        action: `Anuló la factura de compra N° ${purchase.invoiceNumber}`,
+        module: 'purchases',
+      });
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // Reset / Reseed data
-  const handleExecuteReset = async () => {
-    setShowResetConfirm(false);
+  // Users & Collaborators Handlers
+  const handleSaveUser = async (userPayload: UserAccount) => {
     setIsSyncing(true);
     try {
-      await seedInitialDataIfEmpty();
-      showToast('Datos iniciales restablecidos en la base de datos', 'info');
-    } catch (err: any) {
-      showToast('Error al restablecer: ' + err.message, 'error');
+      await saveUserToFirestore(userPayload);
+      setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Administrador',
+        userRole: 'admin',
+        action: `Guardó colaborador "${userPayload.name}" (@${userPayload.username})`,
+        module: 'users',
+        details: `Permisos: ${userPayload.allowedTabs.join(', ')}`,
+      });
     } finally {
-      setTimeout(() => setIsSyncing(false), 500);
+      setIsSyncing(false);
     }
   };
 
-  const formatLastSync = (date: Date | null) => {
-    if (!date) return 'Conectando...';
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const handleDeleteUser = async (userId: string) => {
+    setIsSyncing(true);
+    try {
+      await deleteUserFromFirestore(userId);
+      setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Administrador',
+        userRole: 'admin',
+        action: `Eliminó al colaborador con ID ${userId}`,
+        module: 'users',
+      });
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
-  // Public Customer Catalog Mode (?catalogo=1 or admin preview)
+  // Public Catalog View (?catalogo=1) or Admin Preview
   if (isPublicCatalogMode || isAdminPreviewMode) {
     return (
-      <div className="w-full min-h-screen bg-slate-50 overflow-y-auto overflow-x-hidden min-h-[100dvh] scroll-smooth">
+      <div className="w-full h-screen h-[100dvh] overflow-y-auto bg-slate-50 scroll-smooth">
         <PublicCatalogView
           inventory={inventory}
           storeSettings={storeSettings}
@@ -501,18 +718,24 @@ export const App: React.FC = () => {
     );
   }
 
-  // If not authenticated, show protected login view with password GOSEN2026
-  if (!isAuthenticated) {
+  // Login Screen if not authenticated
+  if (!isAuthenticated || !userSession) {
     return (
       <div className="min-h-screen w-screen overflow-auto bg-slate-950">
         <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
         <LoginView
           storeSettings={storeSettings}
+          users={users}
           onLoginSuccess={handleLoginSuccess}
         />
       </div>
     );
   }
+
+  // Filter bottom nav items based on collaborator allowedTabs
+  const allowedTabsList = userSession.role === 'admin'
+    ? ['dashboard', 'sales', 'inventory', 'price-checker', 'catalog', 'purchases', 'audit', 'suppliers', 'users', 'activity', 'settings']
+    : (userSession.allowedTabs || ['sales', 'inventory', 'price-checker']);
 
   return (
     <div className="h-screen h-[100dvh] min-h-[100dvh] flex flex-col md:flex-row overflow-hidden text-slate-800 bg-slate-50">
@@ -522,12 +745,10 @@ export const App: React.FC = () => {
       {/* Main Sidebar */}
       <Sidebar
         activeTab={activeTab}
-        onTabChange={(tab) => {
-          setActiveTab(tab);
-          if (tab === 'inventory') setInventorySearchQuery('');
-        }}
+        onTabChange={handleTabChange}
         onResetData={() => setShowResetConfirm(true)}
         storeSettings={storeSettings}
+        userSession={userSession}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={toggleSidebarCollapse}
         isMobileOpen={isMobileMenuOpen}
@@ -584,11 +805,6 @@ export const App: React.FC = () => {
               <span className="font-extrabold text-slate-900 text-sm sm:text-base tracking-tight truncate">
                 {storeSettings.storeName || 'Tienda Gosén'}
               </span>
-              {storeSettings.tagline && (
-                <span className="hidden xl:inline text-xs text-slate-400 font-normal border-l border-slate-200 pl-2 truncate">
-                  {storeSettings.tagline}
-                </span>
-              )}
             </div>
 
             {/* Subtle background syncing spinner */}
@@ -600,26 +816,30 @@ export const App: React.FC = () => {
             )}
           </div>
 
-          {/* Right: Quick Install, Settings & Logout */}
+          {/* Right Controls: User Profile Badge, Install App & Logout */}
           <div className="flex items-center gap-2 text-slate-600">
+            {userSession && (
+              <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-xl bg-slate-100 border border-slate-200/80 text-xs font-bold">
+                {userSession.role === 'admin' ? (
+                  <ShieldCheck className="w-4 h-4 text-amber-600" />
+                ) : (
+                  <User className="w-4 h-4 text-emerald-600" />
+                )}
+                <span className="text-slate-900 truncate max-w-[120px]">{userSession.userName}</span>
+                <span className="text-[10px] text-slate-500 uppercase font-mono">
+                  ({userSession.role === 'admin' ? 'Admin' : 'Colaborador'})
+                </span>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => setIsInstallPromptOpen(true)}
               title="Instalar aplicación móvil o de escritorio"
-              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors text-xs font-bold border border-emerald-200 cursor-pointer"
+              className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors text-xs font-bold border border-emerald-200 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="hidden sm:inline">Instalar App</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('settings')}
-              title="Configuración de la tienda y estado del sistema"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors text-xs font-semibold border border-slate-200/80 cursor-pointer"
-            >
-              <Settings className="w-3.5 h-3.5 text-slate-500" />
-              <span className="hidden sm:inline">Configuración</span>
+              <span>Instalar App</span>
             </button>
 
             <button
@@ -634,41 +854,25 @@ export const App: React.FC = () => {
           </div>
         </header>
 
-        {activeTab === 'dashboard' && (
+        {/* Tab Views */}
+        {activeTab === 'dashboard' && allowedTabsList.includes('dashboard') && (
           <DashboardView
             inventory={inventory}
             auditHistory={auditHistory}
             sales={sales}
             onOpenNewProduct={() => {
-              setActiveTab('inventory');
+              handleTabChange('inventory');
               setOpenProductModalTrigger(true);
             }}
-            onStartAudit={() => setActiveTab('audit')}
-            onNavigateToSales={() => setActiveTab('sales')}
-            onNavigateToPurchases={() => setActiveTab('purchases')}
+            onStartAudit={() => handleTabChange('audit')}
+            onNavigateToSales={() => handleTabChange('sales')}
+            onNavigateToPurchases={() => handleTabChange('purchases')}
             onFilterInventoryByCode={handleFilterInventoryByCode}
-            onNavigateToAudit={() => setActiveTab('audit')}
+            onNavigateToAudit={() => handleTabChange('audit')}
           />
         )}
 
-        {activeTab === 'inventory' && (
-          <InventoryView
-            inventory={inventory}
-            suppliers={suppliers}
-            initialSearchCode={inventorySearchQuery}
-            onSaveProduct={handleSaveProduct}
-            onDeleteProduct={handleDeleteProduct}
-            onOpenSupplierModal={() => {
-              setActiveTab('suppliers');
-              setOpenSupplierModalTrigger(true);
-            }}
-            showModalInitially={openProductModalTrigger}
-            onCloseInitialModal={() => setOpenProductModalTrigger(false)}
-            showToast={showToast}
-          />
-        )}
-
-        {activeTab === 'sales' && (
+        {activeTab === 'sales' && allowedTabsList.includes('sales') && (
           <SalesView
             inventory={inventory}
             sales={sales}
@@ -679,10 +883,44 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'purchases' && (
-          <PurchasesView
+        {activeTab === 'inventory' && allowedTabsList.includes('inventory') && (
+          <InventoryView
             inventory={inventory}
             suppliers={suppliers}
+            initialSearchCode={inventorySearchQuery}
+            onSaveProduct={handleSaveProduct}
+            onDeleteProduct={handleDeleteProduct}
+            onOpenSupplierModal={() => {
+              handleTabChange('suppliers');
+              setOpenSupplierModalTrigger(true);
+            }}
+            showModalInitially={openProductModalTrigger}
+            onCloseInitialModal={() => setOpenProductModalTrigger(false)}
+            showToast={showToast}
+          />
+        )}
+
+        {activeTab === 'price-checker' && allowedTabsList.includes('price-checker') && (
+          <PriceCheckerTab
+            inventory={inventory}
+            showToast={showToast}
+          />
+        )}
+
+        {activeTab === 'catalog' && allowedTabsList.includes('catalog') && (
+          <DigitalCatalogView
+            storeSettings={storeSettings}
+            inventory={inventory}
+            onSaveSettings={handleSaveStoreSettings}
+            onOpenPreview={() => setIsAdminPreviewMode(true)}
+            showToast={showToast}
+          />
+        )}
+
+        {activeTab === 'purchases' && allowedTabsList.includes('purchases') && (
+          <PurchasesView
+            suppliers={suppliers}
+            inventory={inventory}
             purchases={purchases}
             storeSettings={storeSettings}
             onRecordPurchase={handleRecordPurchase}
@@ -692,7 +930,7 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'audit' && (
+        {activeTab === 'audit' && allowedTabsList.includes('audit') && (
           <AuditView
             inventory={inventory}
             suppliers={suppliers}
@@ -702,11 +940,7 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'price-checker' && (
-          <PriceCheckerTab inventory={inventory} showToast={showToast} />
-        )}
-
-        {activeTab === 'suppliers' && (
+        {activeTab === 'suppliers' && allowedTabsList.includes('suppliers') && (
           <SuppliersView
             suppliers={suppliers}
             inventory={inventory}
@@ -717,7 +951,24 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'settings' && (
+        {activeTab === 'users' && allowedTabsList.includes('users') && (
+          <UserManagementView
+            users={users}
+            storeSettings={storeSettings}
+            onSaveUser={handleSaveUser}
+            onDeleteUser={handleDeleteUser}
+            showToast={showToast}
+          />
+        )}
+
+        {activeTab === 'activity' && allowedTabsList.includes('activity') && (
+          <ActivityLogView
+            logs={activityLogs}
+            showToast={showToast}
+          />
+        )}
+
+        {activeTab === 'settings' && allowedTabsList.includes('settings') && (
           <StoreSettingsView
             currentSettings={storeSettings}
             onSaveSettings={handleSaveStoreSettings}
@@ -737,101 +988,89 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'catalog' && (
-          <DigitalCatalogView
-            storeSettings={storeSettings}
-            inventory={inventory}
-            onSaveSettings={handleSaveStoreSettings}
-            onOpenPreview={() => setIsAdminPreviewMode(true)}
-            showToast={showToast}
-          />
-        )}
-
-        {/* Mobile Bottom Navigation Bar (< md) for fast thumb-friendly switching */}
+        {/* Mobile Bottom Navigation Bar (< md) filtered by permissions */}
         <nav
           aria-label="Navegación rápida móvil"
           className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom,0px))] flex items-center justify-around shadow-lg"
         >
-          <button
-            type="button"
-            onClick={() => setActiveTab('dashboard')}
-            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'dashboard'
-                ? 'text-emerald-700 font-bold bg-emerald-50'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <PieChart className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-0.5 tracking-tight">Inicio</span>
-          </button>
+          {allowedTabsList.includes('sales') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('sales')}
+              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+                activeTab === 'sales'
+                  ? 'text-emerald-700 font-bold bg-emerald-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <ShoppingCart className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight">Ventas</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('inventory');
-              setInventorySearchQuery('');
-            }}
-            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'inventory'
-                ? 'text-emerald-700 font-bold bg-emerald-50'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <List className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-0.5 tracking-tight">Inventario</span>
-          </button>
+          {allowedTabsList.includes('inventory') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('inventory')}
+              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+                activeTab === 'inventory'
+                  ? 'text-emerald-700 font-bold bg-emerald-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <List className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight">Stock</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('sales')}
-            className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition-all cursor-pointer relative ${
-              activeTab === 'sales'
-                ? 'text-emerald-700 font-bold bg-emerald-50'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <ShoppingCart className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-0.5 tracking-tight">Ventas</span>
-          </button>
+          {allowedTabsList.includes('price-checker') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('price-checker')}
+              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+                activeTab === 'price-checker'
+                  ? 'text-emerald-700 font-bold bg-emerald-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Tag className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight">Precios</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('purchases')}
-            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'purchases'
-                ? 'text-indigo-700 font-bold bg-indigo-50'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <FileText className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-0.5 tracking-tight">Compras</span>
-          </button>
+          {allowedTabsList.includes('catalog') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('catalog')}
+              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+                activeTab === 'catalog'
+                  ? 'text-emerald-700 font-bold bg-emerald-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Globe className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight">Catálogo</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setIsMobileMenuOpen(true)}
-            className="flex flex-col items-center justify-center py-1 px-2.5 rounded-xl text-slate-500 hover:text-slate-800 transition-all cursor-pointer"
-            title="Abrir menú completo"
-          >
-            <Menu className="w-5 h-5 shrink-0 text-slate-600" />
-            <span className="text-[10px] mt-0.5 tracking-tight">Más</span>
-          </button>
+          {userSession?.role === 'admin' && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('users')}
+              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+                activeTab === 'users'
+                  ? 'text-amber-700 font-bold bg-amber-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Users className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight">Usuarios</span>
+            </button>
+          )}
         </nav>
       </main>
 
-      {/* Confirmation Dialog for Data Reset */}
-      <ConfirmDialog
-        isOpen={showResetConfirm}
-        title="¿Restablecer datos de prueba?"
-        message="Se recargarán los artículos y proveedores de demostración en la base de datos de Firebase Firestore en tiempo real."
-        confirmLabel="Sí, Restablecer"
-        cancelLabel="Cancelar"
-        isDestructive={false}
-        onConfirm={handleExecuteReset}
-        onCancel={() => setShowResetConfirm(false)}
-      />
-
-      {/* PWA Mobile Installation Prompt & Guide */}
+      {/* PWA Install Drawer Prompt */}
       <PWAInstallPrompt
         isOpen={isInstallPromptOpen}
         onClose={() => setIsInstallPromptOpen(false)}

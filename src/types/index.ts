@@ -56,7 +56,51 @@ export interface AuditHistoryRecord {
   scope?: string;
 }
 
-export type ActiveTab = 'dashboard' | 'inventory' | 'sales' | 'purchases' | 'audit' | 'price-checker' | 'suppliers' | 'settings' | 'catalog';
+export type ActiveTab =
+  | 'dashboard'
+  | 'inventory'
+  | 'sales'
+  | 'purchases'
+  | 'audit'
+  | 'price-checker'
+  | 'suppliers'
+  | 'settings'
+  | 'catalog'
+  | 'users'
+  | 'activity';
+
+export type UserRole = 'admin' | 'collaborator';
+
+export interface UserAccount {
+  id: string;
+  name: string;
+  username: string;
+  password: string;
+  role: UserRole;
+  isActive: boolean;
+  allowedTabs: ActiveTab[];
+  createdAt: number;
+  lastLoginAt?: number;
+}
+
+export interface UserSession {
+  userId: string;
+  userName: string;
+  username: string;
+  role: UserRole;
+  allowedTabs: ActiveTab[];
+}
+
+export interface ActivityLogRecord {
+  id: string;
+  timestamp: number;
+  date: string;
+  userName: string;
+  userRole: UserRole;
+  action: string;
+  module: 'sales' | 'inventory' | 'purchases' | 'audit' | 'suppliers' | 'settings' | 'users' | 'catalog';
+  details?: string;
+}
 
 export interface SaleItem {
   productId: string;
