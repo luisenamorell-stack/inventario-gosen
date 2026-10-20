@@ -129,7 +129,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [inventory]);
 
   return (
-    <div className="flex-1 flex-col p-4 lg:p-8 h-full w-full overflow-y-auto bg-slate-50/50 dark:bg-slate-950 transition-colors duration-200">
+    <div className="flex-1 min-h-0 p-3 sm:p-6 lg:p-8 h-full w-full overflow-y-auto scroll-container bg-slate-50/50 dark:bg-slate-950 transition-colors duration-200 pb-36 md:pb-24">
       {/* Header */}
       <header className="mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
         <div>

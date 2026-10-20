@@ -745,7 +745,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
   // ================= RENDER START SCREEN =================
   if (!isAuditing) {
     return (
-      <div className="flex-1 flex flex-col p-4 lg:p-6 h-full w-full bg-slate-100 overflow-y-auto">
+      <div className="flex-1 min-h-0 h-full w-full p-3 sm:p-6 bg-slate-100 overflow-y-auto scroll-container pb-36 md:pb-24">
         <header className="mb-6 max-w-4xl w-full mx-auto">
           <div className="flex items-center gap-2 mb-1">
             <ClipboardList className="w-7 h-7 text-emerald-600" />
@@ -1122,7 +1122,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
   // ================= RENDER ACTIVE AUDIT INTERFACE =================
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-6 h-full w-full bg-slate-100 overflow-hidden">
+    <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-6 h-full w-full bg-slate-100 overflow-y-auto lg:overflow-hidden scroll-container pb-36 lg:pb-6">
       {/* Active Segment Info Banner */}
       <div className="mb-3 px-4 py-2.5 bg-white border border-slate-200 rounded-xl shadow-2xs flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
         <div className="flex items-center gap-2.5">
@@ -1214,9 +1214,9 @@ export const AuditView: React.FC<AuditViewProps> = ({
       </header>
 
       {/* Main Dual Columns */}
-      <div className="flex-1 flex flex-col lg:flex-row gap-6 h-full overflow-hidden">
+      <div className="flex-1 flex flex-col lg:flex-row gap-4 sm:gap-6 lg:h-full lg:overflow-hidden">
         {/* Left Column: Scanner, Multiplier, and Manual Entry (1/3) */}
-        <div className="w-full lg:w-1/3 flex flex-col gap-4 overflow-y-auto no-scrollbar shrink-0">
+        <div className="w-full lg:w-1/3 flex flex-col gap-4 lg:overflow-y-auto shrink-0">
           {/* Scanner Card with Multiplier */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
             <div className="flex justify-between items-center mb-3">
@@ -1393,7 +1393,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
         </div>
 
         {/* Right Column: Grouped Audit Table with Inline Quantity Inputs (2/3) */}
-        <div className="w-full lg:w-2/3 bg-white border border-slate-200 rounded-2xl flex flex-col shadow-sm overflow-hidden h-full">
+        <div className="w-full lg:w-2/3 bg-white border border-slate-200 rounded-2xl flex flex-col shadow-sm lg:overflow-hidden lg:h-full min-h-[420px]">
           <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-wrap justify-between items-center gap-2 shrink-0">
             <div>
               <h3 className="font-bold text-slate-800 text-sm">

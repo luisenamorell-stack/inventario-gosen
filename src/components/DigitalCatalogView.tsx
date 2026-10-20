@@ -135,7 +135,7 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-50 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 pb-32">
+    <div className="flex-1 min-h-0 h-full w-full bg-slate-50 overflow-y-auto scroll-container p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 pb-36 md:pb-24">
       {/* Top Banner Header */}
       <div className="bg-gradient-to-r from-emerald-900 via-slate-900 to-slate-900 text-white p-6 rounded-3xl shadow-xl border border-emerald-500/30 space-y-3 relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-8 -translate-y-8 w-48 h-48 rounded-full bg-emerald-500/10 blur-2xl pointer-events-none" />

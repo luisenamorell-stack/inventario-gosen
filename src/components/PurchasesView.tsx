@@ -625,7 +625,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
       {/* Main Content */}
       {activeSubTab === 'create' ? (
         /* ==================== CREATE PURCHASE INVOICE VIEW ==================== */
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-5">
+        <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-4 sm:space-y-5 pb-36 md:pb-24">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left 2 Cols: Invoice Header & Product Details Table */}
             <div className="lg:col-span-2 space-y-5">
@@ -1120,7 +1120,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
         </div>
       ) : (
         /* ==================== INVOICE HISTORY VIEW ==================== */
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
+        <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-4 sm:space-y-5 pb-36 md:pb-24">
           {/* KPI Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
@@ -1284,7 +1284,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
           </div>
 
           {/* Table */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xs">
             {filteredPurchases.length === 0 ? (
               <div className="p-12 text-center text-slate-400">
                 <FileText className="w-12 h-12 mx-auto mb-2 text-slate-300 stroke-1" />

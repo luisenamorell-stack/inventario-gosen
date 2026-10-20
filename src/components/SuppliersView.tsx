@@ -102,26 +102,26 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
   });
 
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-6 h-full w-full bg-slate-50">
+    <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-4 pb-36 md:pb-20 bg-slate-50">
       {/* Header */}
-      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Directorio de Proveedores</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-800">Directorio de Proveedores</h1>
+          <p className="text-xs sm:text-sm text-slate-500">
             Gestiona la información de contacto de las empresas y distribuidores.
           </p>
         </div>
         <button
           onClick={handleOpenCreate}
-          className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
+          className="w-full sm:w-auto bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-700 transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-4 h-4 shrink-0" />
           <span>Nuevo Proveedor</span>
         </button>
       </header>
 
       {/* Main card */}
-      <div className="bg-white flex-1 rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-full">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200">
         {/* Search bar */}
         <div className="p-4 border-b border-slate-100 bg-slate-50">
           <div className="flex max-w-md bg-white rounded-xl border border-slate-200 overflow-hidden focus-within:ring-2 ring-indigo-500/20 focus-within:border-indigo-500 transition-all">
@@ -139,7 +139,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         </div>
 
         {/* Mobile Suppliers List (< sm) */}
-        <div className="sm:hidden overflow-y-auto flex-1 p-2 space-y-2.5">
+        <div className="sm:hidden p-2.5 space-y-2.5">
           {filteredSuppliers.length === 0 ? (
             <div className="p-8 text-center text-slate-400">
               <Building className="w-10 h-10 mx-auto mb-2 opacity-30" />
@@ -225,7 +225,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         </div>
 
         {/* Desktop / Tablet Table (>= sm) */}
-        <div className="hidden sm:block overflow-auto flex-1 p-0">
+        <div className="hidden sm:block overflow-x-auto p-0">
           <table className="w-full text-left border-collapse whitespace-nowrap">
             <thead className="sticky top-0 bg-white z-10 shadow-sm">
               <tr className="text-slate-500 text-xs uppercase tracking-wider border-b border-slate-200">

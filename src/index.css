@@ -63,7 +63,41 @@
   }
 }
 
-/* Hide scrollbar for clean horizontal/vertical lists */
+/* Visible, smooth scrollbars for vertical & horizontal scrollable areas */
+.scroll-container {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #f1f5f9;
+}
+
+.scroll-container::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scroll-container::-webkit-scrollbar-track,
+*::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 9999px;
+}
+
+.scroll-container::-webkit-scrollbar-thumb,
+*::-webkit-scrollbar-thumb {
+  background-color: #94a3b8;
+  border-radius: 9999px;
+  border: 2px solid #f1f5f9;
+}
+
+.scroll-container::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #059669;
+}
+
+/* Hide scrollbar only when explicitly requested for compact horizontal pills */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }

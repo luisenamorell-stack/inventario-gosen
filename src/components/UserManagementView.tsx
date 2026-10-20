@@ -226,15 +226,15 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-50 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 pb-32">
+    <div className="flex-1 min-h-0 h-full w-full bg-slate-50 overflow-y-auto scroll-container p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 pb-36 md:pb-24">
       {/* Header Banner */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0 border border-emerald-200">
-            <Users className="w-6 h-6" />
+      <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0 border border-emerald-200">
+            <Users className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
-          <div>
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
               Gestión de Usuarios y Colaboradores
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
@@ -248,7 +248,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
           onClick={handleOpenNewUser}
           className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-md flex items-center justify-center gap-2 cursor-pointer transition-all shrink-0 active:scale-95"
         >
-          <UserPlus className="w-4 h-4" />
+          <UserPlus className="w-4 h-4 shrink-0" />
           <span>Crear Nuevo Colaborador</span>
         </button>
       </div>
@@ -407,19 +407,19 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
 
       {/* Modal Form: Create / Edit Collaborator */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh] animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+          <div className="bg-white w-full max-w-2xl rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90dvh] animate-in fade-in zoom-in duration-200">
             {/* Modal Header */}
-            <div className="p-4 sm:p-5 bg-slate-900 text-white flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold">
+            <div className="p-3.5 sm:p-5 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold shrink-0">
                   <UserPlus className="w-5 h-5" />
                 </div>
-                <div>
-                  <h3 className="font-extrabold text-base sm:text-lg text-white">
+                <div className="min-w-0">
+                  <h3 className="font-extrabold text-sm sm:text-lg text-white truncate">
                     {editingUser ? 'Editar Colaborador y Permisos' : 'Crear Nuevo Colaborador'}
                   </h3>
-                  <p className="text-xs text-slate-300">
+                  <p className="text-[11px] sm:text-xs text-slate-300 truncate">
                     Define credenciales y módulos autorizados para este usuario.
                   </p>
                 </div>
@@ -427,175 +427,177 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Modal Form Body */}
-            <form onSubmit={handleSubmitUser} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
-                    Nombre Completo del Empleado <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="ej. Carlos López"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
-                    Nombre de Usuario (Para Login) <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="ej. carlos2"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value.toLowerCase().trim())}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
-                    Contraseña de Acceso / PIN <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      placeholder="ej. 1234 o clave"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full pl-3.5 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
-                    Estado de la Cuenta
-                  </label>
-                  <div className="flex items-center gap-3 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setIsActive(true)}
-                      className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
-                        isActive
-                          ? 'bg-emerald-50 border-emerald-500 text-emerald-800 shadow-2xs'
-                          : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
-                      }`}
-                    >
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      <span>Activo</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setIsActive(false)}
-                      className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
-                        !isActive
-                          ? 'bg-rose-50 border-rose-500 text-rose-800 shadow-2xs'
-                          : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
-                      }`}
-                    >
-                      <XCircle className="w-4 h-4 text-rose-600" />
-                      <span>Bloqueado</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Module Permissions Checkboxes */}
-              <div className="space-y-3 pt-3 border-t border-slate-200">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            {/* Modal Form */}
+            <form onSubmit={handleSubmitUser} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <div className="flex-1 min-h-0 overflow-y-auto scroll-container p-4 sm:p-6 space-y-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block font-black text-slate-900 text-sm uppercase tracking-wide">
-                      Permisos de Acceso a Pestañas y Módulos
+                    <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
+                      Nombre Completo del Empleado <span className="text-rose-500">*</span>
                     </label>
-                    <p className="text-xs text-slate-500">
-                      Marca únicamente los paneles que este colaborador podrá abrir en la barra lateral.
-                    </p>
+                    <input
+                      type="text"
+                      required
+                      placeholder="ej. Carlos López"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs font-bold">
-                    <button
-                      type="button"
-                      onClick={handleSelectAllTabs}
-                      className="text-emerald-700 hover:underline cursor-pointer"
-                    >
-                      Marcar Todos
-                    </button>
-                    <span className="text-slate-300">|</span>
-                    <button
-                      type="button"
-                      onClick={handleDeselectAllTabs}
-                      className="text-slate-500 hover:underline cursor-pointer"
-                    >
-                      Solo Ventas
-                    </button>
+                  <div>
+                    <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
+                      Nombre de Usuario (Para Login) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="ej. carlos2"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value.toLowerCase().trim())}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                  {TAB_MODULES.map((mod) => {
-                    const Icon = mod.icon;
-                    const isChecked = allowedTabs.includes(mod.id);
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
+                      Contraseña de Acceso / PIN <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        placeholder="ej. 1234 o clave"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full pl-3.5 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
 
-                    return (
-                      <label
-                        key={mod.id}
-                        className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-start gap-3 select-none ${
-                          isChecked
-                            ? 'bg-emerald-50/70 border-emerald-400 text-slate-900 shadow-2xs'
-                            : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-white hover:border-slate-300'
+                  <div>
+                    <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
+                      Estado de la Cuenta
+                    </label>
+                    <div className="flex items-center gap-3 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsActive(true)}
+                        className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
+                          isActive
+                            ? 'bg-emerald-50 border-emerald-500 text-emerald-800 shadow-2xs'
+                            : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
                         }`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => handleToggleTabPermission(mod.id)}
-                          className="mt-1 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer shrink-0"
-                        />
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>Activo</span>
+                      </button>
 
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 font-extrabold text-xs text-slate-900">
-                            <Icon className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <span className="truncate">{mod.label}</span>
-                          </div>
-                          <p className="text-[11px] text-slate-500 font-medium leading-tight mt-0.5">
-                            {mod.description}
-                          </p>
-                        </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsActive(false)}
+                        className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
+                          !isActive
+                            ? 'bg-rose-50 border-rose-500 text-rose-800 shadow-2xs'
+                            : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                        }`}
+                      >
+                        <XCircle className="w-4 h-4 text-rose-600" />
+                        <span>Bloqueado</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Module Permissions Checkboxes */}
+                <div className="space-y-3 pt-3 border-t border-slate-200">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <label className="block font-black text-slate-900 text-xs sm:text-sm uppercase tracking-wide">
+                        Permisos de Acceso a Pestañas y Módulos
                       </label>
-                    );
-                  })}
+                      <p className="text-xs text-slate-500">
+                        Marca únicamente los paneles que este colaborador podrá abrir en la barra lateral.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-xs font-bold">
+                      <button
+                        type="button"
+                        onClick={handleSelectAllTabs}
+                        className="text-emerald-700 hover:underline cursor-pointer"
+                      >
+                        Marcar Todos
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={handleDeselectAllTabs}
+                        className="text-slate-500 hover:underline cursor-pointer"
+                      >
+                        Solo Ventas
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    {TAB_MODULES.map((mod) => {
+                      const Icon = mod.icon;
+                      const isChecked = allowedTabs.includes(mod.id);
+
+                      return (
+                        <label
+                          key={mod.id}
+                          className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-start gap-3 select-none ${
+                            isChecked
+                              ? 'bg-emerald-50/70 border-emerald-400 text-slate-900 shadow-2xs'
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleToggleTabPermission(mod.id)}
+                            className="mt-1 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer shrink-0"
+                          />
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 font-extrabold text-xs text-slate-900">
+                              <Icon className="w-4 h-4 text-emerald-600 shrink-0" />
+                              <span className="truncate">{mod.label}</span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 font-medium leading-tight mt-0.5">
+                              {mod.description}
+                            </p>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
-              {/* Submit Buttons */}
-              <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-2 shrink-0">
+              {/* Sticky Submit Buttons Footer */}
+              <div className="p-3.5 sm:p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 font-bold text-xs hover:bg-slate-100 transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
@@ -605,7 +607,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                   disabled={isSaving}
                   className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition-all flex items-center gap-2 cursor-pointer active:scale-95"
                 >
-                  <Save className="w-4 h-4" />
+                  <Save className="w-4 h-4 shrink-0" />
                   <span>{editingUser ? 'Guardar Cambios' : 'Registrar Colaborador'}</span>
                 </button>
               </div>

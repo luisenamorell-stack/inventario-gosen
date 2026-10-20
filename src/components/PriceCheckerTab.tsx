@@ -144,7 +144,7 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
       : 'text-emerald-700 bg-emerald-100';
 
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-8 h-full w-full bg-slate-100 overflow-y-auto">
+    <div className="flex-1 min-h-0 h-full w-full p-3 sm:p-6 lg:p-8 bg-slate-100 overflow-y-auto scroll-container pb-36 md:pb-24">
       <header className="mb-6 text-center max-w-2xl mx-auto">
         <h1 className="text-3xl font-bold text-slate-800">Verificador de Precios</h1>
         <p className="text-slate-500 mt-1">

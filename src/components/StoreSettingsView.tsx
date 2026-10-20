@@ -226,7 +226,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex-col p-4 lg:p-8 h-full w-full overflow-y-auto bg-slate-50/60">
+    <div className="flex-1 min-h-0 p-3 sm:p-6 lg:p-8 h-full w-full overflow-y-auto scroll-container bg-slate-50/60 pb-36 md:pb-24">
       {/* Hidden file inputs for Mobile and PC */}
       <input
         type="file"

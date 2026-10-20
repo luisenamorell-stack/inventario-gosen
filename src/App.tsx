@@ -77,7 +77,9 @@ import {
   Activity,
   User,
   ShieldCheck,
-  Tag
+  Tag,
+  ClipboardCheck,
+  Truck
 } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
@@ -758,20 +760,21 @@ export const App: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-slate-50 min-w-0 transition-all duration-350 ease-in-out pb-[calc(4rem+env(safe-area-inset-bottom,0px))] md:pb-0">
+      <main className="flex-1 flex flex-col h-full min-h-0 overflow-hidden relative bg-slate-50 min-w-0 transition-all duration-350 ease-in-out">
         {/* Top Header - Clean and Streamlined */}
-        <header className="bg-white text-slate-800 px-3 sm:px-4 py-2 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0">
+        <header className="bg-white text-slate-800 px-2.5 sm:px-4 py-2 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0 gap-2">
           {/* Left: Mobile/Desktop Sidebar Toggles + Clean Store Branding */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {/* Mobile Drawer Hamburger Button */}
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(true)}
-              className="md:hidden p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer border border-slate-200 shrink-0"
+              className="md:hidden inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer shadow-xs shrink-0 text-xs font-bold"
               aria-label="Abrir menú de navegación"
               title="Abrir menú"
             >
-              <Menu className="w-4 h-4 text-slate-700" />
+              <Menu className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Menú</span>
             </button>
 
             {/* Desktop Collapse / Expand Toggle Button */}
@@ -790,26 +793,26 @@ export const App: React.FC = () => {
             </button>
 
             {/* Store brand / Title */}
-            <div className="flex items-center gap-3 min-w-0">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               {(storeSettings.logoUrl || '/store-logo.jpg') ? (
-                <div className="h-12 sm:h-14 max-w-[240px] sm:max-w-[360px] rounded-2xl p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
+                <div className="h-9 sm:h-12 max-w-[140px] sm:max-w-[280px] rounded-xl p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
                   <img
                     src={storeSettings.logoUrl || '/store-logo.jpg'}
                     alt={storeSettings.storeName || 'Tienda Gosén'}
-                    className="h-full w-full object-contain rounded-xl mix-blend-multiply filter drop-shadow-2xs"
+                    className="h-full w-full object-contain rounded-lg mix-blend-multiply filter drop-shadow-2xs"
                   />
                 </div>
               ) : (
                 <Store className="w-5 h-5 text-emerald-600 shrink-0" />
               )}
-              <span className="font-extrabold text-slate-900 text-sm sm:text-base tracking-tight truncate">
+              <span className="font-extrabold text-slate-900 text-xs sm:text-base tracking-tight truncate">
                 {storeSettings.storeName || 'Tienda Gosén'}
               </span>
             </div>
 
             {/* Subtle background syncing spinner */}
             {isSyncing && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 animate-pulse shrink-0">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 animate-pulse shrink-0">
                 <RefreshCw className="w-3 h-3 animate-spin text-emerald-600" />
                 <span className="hidden sm:inline">Sincronizando...</span>
               </span>
@@ -817,16 +820,16 @@ export const App: React.FC = () => {
           </div>
 
           {/* Right Controls: User Profile Badge, Install App & Logout */}
-          <div className="flex items-center gap-2 text-slate-600">
+          <div className="flex items-center gap-1.5 sm:gap-2 text-slate-600 shrink-0">
             {userSession && (
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-xl bg-slate-100 border border-slate-200/80 text-xs font-bold">
+              <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 rounded-xl bg-slate-100 border border-slate-200/80 text-[11px] sm:text-xs font-bold">
                 {userSession.role === 'admin' ? (
-                  <ShieldCheck className="w-4 h-4 text-amber-600" />
+                  <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-600 shrink-0" />
                 ) : (
-                  <User className="w-4 h-4 text-emerald-600" />
+                  <User className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 shrink-0" />
                 )}
-                <span className="text-slate-900 truncate max-w-[120px]">{userSession.userName}</span>
-                <span className="text-[10px] text-slate-500 uppercase font-mono">
+                <span className="text-slate-900 truncate max-w-[75px] sm:max-w-[120px]">{userSession.userName}</span>
+                <span className="hidden md:inline text-[10px] text-slate-500 uppercase font-mono">
                   ({userSession.role === 'admin' ? 'Admin' : 'Colaborador'})
                 </span>
               </div>
@@ -846,9 +849,9 @@ export const App: React.FC = () => {
               type="button"
               onClick={handleLogout}
               title="Cerrar sesión del sistema"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors text-xs font-semibold border border-rose-200 cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors text-xs font-semibold border border-rose-200 cursor-pointer"
             >
-              <LogOut className="w-3.5 h-3.5 text-rose-600" />
+              <LogOut className="w-3.5 h-3.5 text-rose-600 shrink-0" />
               <span className="hidden sm:inline">Salir</span>
             </button>
           </div>
@@ -988,23 +991,38 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Mobile Bottom Navigation Bar (< md) filtered by permissions */}
+        {/* Mobile Bottom Navigation Bar (< md) with horizontal slide for ALL allowed modules */}
         <nav
           aria-label="Navegación rápida móvil"
-          className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom,0px))] flex items-center justify-around shadow-lg"
+          className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom,0px))] flex items-center gap-1 overflow-x-auto shadow-lg"
         >
+          {allowedTabsList.includes('dashboard') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('dashboard')}
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+                activeTab === 'dashboard'
+                  ? 'text-emerald-700 font-bold bg-emerald-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <PieChart className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Panel</span>
+            </button>
+          )}
+
           {allowedTabsList.includes('sales') && (
             <button
               type="button"
               onClick={() => handleTabChange('sales')}
-              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
                 activeTab === 'sales'
                   ? 'text-emerald-700 font-bold bg-emerald-50'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <ShoppingCart className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight">Ventas</span>
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Ventas</span>
             </button>
           )}
 
@@ -1012,14 +1030,14 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => handleTabChange('inventory')}
-              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
                 activeTab === 'inventory'
                   ? 'text-emerald-700 font-bold bg-emerald-50'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <List className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight">Stock</span>
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Stock</span>
             </button>
           )}
 
@@ -1027,14 +1045,14 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => handleTabChange('price-checker')}
-              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
                 activeTab === 'price-checker'
                   ? 'text-emerald-700 font-bold bg-emerald-50'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <Tag className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight">Precios</span>
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Precios</span>
             </button>
           )}
 
@@ -1042,29 +1060,104 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => handleTabChange('catalog')}
-              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
                 activeTab === 'catalog'
                   ? 'text-emerald-700 font-bold bg-emerald-50'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <Globe className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight">Catálogo</span>
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Catálogo</span>
             </button>
           )}
 
-          {userSession?.role === 'admin' && (
+          {allowedTabsList.includes('purchases') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('purchases')}
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+                activeTab === 'purchases'
+                  ? 'text-indigo-700 font-bold bg-indigo-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <FileText className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Compras</span>
+            </button>
+          )}
+
+          {allowedTabsList.includes('audit') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('audit')}
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+                activeTab === 'audit'
+                  ? 'text-emerald-700 font-bold bg-emerald-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <ClipboardCheck className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Auditoría</span>
+            </button>
+          )}
+
+          {allowedTabsList.includes('suppliers') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('suppliers')}
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+                activeTab === 'suppliers'
+                  ? 'text-indigo-700 font-bold bg-indigo-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Truck className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Proveedores</span>
+            </button>
+          )}
+
+          {allowedTabsList.includes('users') && (
             <button
               type="button"
               onClick={() => handleTabChange('users')}
-              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
                 activeTab === 'users'
                   ? 'text-amber-700 font-bold bg-amber-50'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <Users className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight">Usuarios</span>
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Usuarios</span>
+            </button>
+          )}
+
+          {allowedTabsList.includes('activity') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('activity')}
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+                activeTab === 'activity'
+                  ? 'text-indigo-700 font-bold bg-indigo-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Activity className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Movimientos</span>
+            </button>
+          )}
+
+          {allowedTabsList.includes('settings') && (
+            <button
+              type="button"
+              onClick={() => handleTabChange('settings')}
+              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+                activeTab === 'settings'
+                  ? 'text-emerald-700 font-bold bg-emerald-50'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Store className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Ajustes</span>
             </button>
           )}
         </nav>
