@@ -656,7 +656,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
       }
 
       return true;
-    });
+    }).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   }, [sales, historySearch, historyDateFilter, historyStatusFilter, historyPaymentFilter]);
 
   // Overall statistics for sales
@@ -757,7 +757,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-50 overflow-hidden">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-slate-50 overflow-hidden">
       {/* Top Bar / Navigation Tabs */}
       <div className="bg-white border-b border-slate-200 px-3 sm:px-6 py-2 sm:py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-3 shrink-0 shadow-xs">
         <div className="flex items-center justify-between">
@@ -1464,7 +1464,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
         </div>
       ) : (
         /* ==================== SALES HISTORY VIEW ==================== */
-        <div className="flex-1 min-h-0 flex flex-col overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-5">
+        <div className="flex-1 min-h-0 flex flex-col overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-5 pb-52 sm:pb-32 touch-pan-y scroll-smooth">
           {/* Top KPI Metrics Banner */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
             <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
