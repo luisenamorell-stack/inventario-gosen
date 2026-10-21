@@ -1016,154 +1016,164 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Mobile Bottom Navigation Dock (< md) — App Emerald & Slate Theme */}
+        {/* Mobile Bottom Navigation Dock (< md) — Compact & Uniform App Emerald & Slate Theme */}
         <nav
           aria-label="Navegación rápida móvil"
-          className="md:hidden shrink-0 w-full relative z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-1.5 sm:px-3 pt-1.5 pb-[calc(0.4rem+env(safe-area-inset-bottom,0px))] shadow-[0_-8px_24px_rgba(15,23,42,0.08)] select-none"
+          className="md:hidden shrink-0 w-full relative z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-1.5 pt-1 pb-[max(0.35rem,calc(env(safe-area-inset-bottom,0px)*0.55))] shadow-[0_-4px_16px_rgba(15,23,42,0.06)] select-none"
         >
-          <div className="grid grid-cols-5 items-end max-w-md mx-auto">
+          <div className="grid grid-cols-5 items-center gap-0.5 max-w-lg mx-auto">
             {/* 1. Left Outer: INICIO (Dashboard) */}
             <button
               type="button"
               onClick={() => handleTabChange('dashboard')}
-              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[64px] ${
+              className={`group flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
                 activeTab === 'dashboard'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+                  ? 'text-emerald-700'
+                  : 'text-slate-500 hover:text-slate-800'
               } ${!allowedTabsList.includes('dashboard') ? 'opacity-45' : ''}`}
             >
-              <LayoutGrid className="w-6 h-6 stroke-[2.2] shrink-0" />
-              <span className="text-[10px] sm:text-[11px] font-extrabold tracking-wide uppercase mt-1 leading-none">
+              <div
+                className={`w-10 h-7 rounded-lg flex items-center justify-center transition-all ${
+                  activeTab === 'dashboard'
+                    ? 'bg-emerald-100/90 text-emerald-700'
+                    : 'bg-transparent text-slate-500 group-hover:bg-slate-100'
+                }`}
+              >
+                <LayoutGrid className="w-[18px] h-[18px] stroke-[2.2] shrink-0" />
+              </div>
+              <span
+                className={`text-[9.5px] tracking-tight uppercase mt-0.5 leading-none whitespace-nowrap ${
+                  activeTab === 'dashboard' ? 'font-extrabold text-emerald-700' : 'font-semibold text-slate-500'
+                }`}
+              >
                 INICIO
               </span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
-                  activeTab === 'dashboard'
-                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
-                    : 'opacity-0'
-                }`}
-              />
             </button>
 
             {/* 2. Left Inner: INVENTARIO (Inventory) */}
             <button
               type="button"
               onClick={() => handleTabChange('inventory')}
-              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[64px] ${
+              className={`group flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
                 activeTab === 'inventory'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+                  ? 'text-emerald-700'
+                  : 'text-slate-500 hover:text-slate-800'
               } ${!allowedTabsList.includes('inventory') ? 'opacity-45' : ''}`}
             >
-              <Package className="w-6 h-6 stroke-[2.1] shrink-0" />
-              <span className="text-[9.5px] sm:text-[10.5px] font-extrabold tracking-tight uppercase mt-1 leading-none truncate max-w-full">
-                INVENTARIO
-              </span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
+              <div
+                className={`w-10 h-7 rounded-lg flex items-center justify-center transition-all ${
                   activeTab === 'inventory'
-                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
-                    : 'opacity-0'
-                }`}
-              />
-            </button>
-
-            {/* 3. Center Raised Action: VENTAS POS (Sales) */}
-            <div className="flex flex-col items-center justify-end relative -mt-8 z-10">
-              <button
-                type="button"
-                onClick={() => handleTabChange('sales')}
-                className={`group flex flex-col items-center justify-center focus:outline-none cursor-pointer ${
-                  !allowedTabsList.includes('sales') ? 'opacity-50' : ''
+                    ? 'bg-emerald-100/90 text-emerald-700'
+                    : 'bg-transparent text-slate-500 group-hover:bg-slate-100'
                 }`}
               >
-                {/* Raised Emerald Circle with White Bezel */}
-                <div
-                  className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center border-[5px] border-white transition-all duration-200 group-active:scale-95 ${
-                    activeTab === 'sales'
-                      ? 'bg-emerald-600 shadow-[0_6px_20px_rgba(5,150,105,0.45)] ring-2 ring-emerald-500/40'
-                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-[0_6px_16px_rgba(15,23,42,0.18)] ring-1 ring-slate-200'
-                  }`}
-                >
-                  <ShoppingCart className="w-7 h-7 text-white stroke-[2.3] shrink-0" />
-                </div>
+                <Package className="w-[18px] h-[18px] stroke-[2.2] shrink-0" />
+              </div>
+              <span
+                className={`text-[9.5px] tracking-tight uppercase mt-0.5 leading-none whitespace-nowrap ${
+                  activeTab === 'inventory' ? 'font-extrabold text-emerald-700' : 'font-semibold text-slate-500'
+                }`}
+              >
+                INVENTARIO
+              </span>
+            </button>
 
-                {/* Stadium Pill Label */}
-                <div
-                  className={`mt-1 px-2.5 py-0.5 rounded-full border transition-all shadow-xs flex items-center gap-1 ${
-                    activeTab === 'sales'
-                      ? 'bg-emerald-700 border-emerald-600 text-white shadow-[0_2px_8px_rgba(5,150,105,0.3)]'
-                      : 'bg-slate-800 border-slate-700 text-white'
-                  }`}
-                >
-                  <span className="text-[9px] sm:text-[10px] font-black tracking-wider uppercase whitespace-nowrap">
-                    VENTAS POS
-                  </span>
-                </div>
-              </button>
-            </div>
+            {/* 3. Center Action: VENTAS POS (Sales) — Uniform height, highlighted emerald pill */}
+            <button
+              type="button"
+              onClick={() => handleTabChange('sales')}
+              className={`group flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
+                !allowedTabsList.includes('sales') ? 'opacity-45' : ''
+              }`}
+            >
+              <div
+                className={`w-11 h-7 rounded-lg flex items-center justify-center transition-all shadow-xs ${
+                  activeTab === 'sales'
+                    ? 'bg-emerald-600 text-white ring-2 ring-emerald-500/30'
+                    : 'bg-emerald-600/90 text-white group-hover:bg-emerald-600'
+                }`}
+              >
+                <ShoppingCart className="w-[18px] h-[18px] stroke-[2.3] shrink-0" />
+              </div>
+              <span
+                className={`text-[9.5px] tracking-tight uppercase mt-0.5 leading-none whitespace-nowrap ${
+                  activeTab === 'sales' ? 'font-extrabold text-emerald-700' : 'font-bold text-emerald-700/90'
+                }`}
+              >
+                VENTAS POS
+              </span>
+            </button>
 
-            {/* 4. Right Inner: CONSULTAR PRECIO (Price Checker) */}
+            {/* 4. Right Inner: VER PRECIO (Price Checker) */}
             <button
               type="button"
               onClick={() => handleTabChange('price-checker')}
-              className={`flex flex-col items-center justify-center py-2 px-0.5 rounded-2xl transition-all cursor-pointer min-h-[64px] ${
+              className={`group flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
                 activeTab === 'price-checker'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+                  ? 'text-emerald-700'
+                  : 'text-slate-500 hover:text-slate-800'
               } ${!allowedTabsList.includes('price-checker') ? 'opacity-45' : ''}`}
             >
-              {/* Barcode Scanner Icon */}
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="w-6 h-6 shrink-0"
-              >
-                <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-                <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-                <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-                <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-                <line x1="8" y1="7" x2="8" y2="17" />
-                <line x1="12" y1="7" x2="12" y2="17" />
-                <line x1="16" y1="7" x2="16" y2="17" />
-              </svg>
-              <span className="text-[8.5px] sm:text-[9.5px] font-extrabold tracking-tight uppercase mt-1 leading-[1.05] text-center">
-                CONSULTAR PRECIO
-              </span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
+              <div
+                className={`w-10 h-7 rounded-lg flex items-center justify-center transition-all ${
                   activeTab === 'price-checker'
-                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
-                    : 'opacity-0'
+                    ? 'bg-emerald-100/90 text-emerald-700'
+                    : 'bg-transparent text-slate-500 group-hover:bg-slate-100'
                 }`}
-              />
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="w-[18px] h-[18px] shrink-0"
+                >
+                  <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+                  <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+                  <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+                  <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+                  <line x1="8" y1="7" x2="8" y2="17" />
+                  <line x1="12" y1="7" x2="12" y2="17" />
+                  <line x1="16" y1="7" x2="16" y2="17" />
+                </svg>
+              </div>
+              <span
+                className={`text-[9.5px] tracking-tight uppercase mt-0.5 leading-none whitespace-nowrap ${
+                  activeTab === 'price-checker' ? 'font-extrabold text-emerald-700' : 'font-semibold text-slate-500'
+                }`}
+              >
+                VER PRECIO
+              </span>
             </button>
 
             {/* 5. Right Outer: CONTEO (Audit) */}
             <button
               type="button"
               onClick={() => handleTabChange('audit')}
-              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[64px] ${
+              className={`group flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
                 activeTab === 'audit'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+                  ? 'text-emerald-700'
+                  : 'text-slate-500 hover:text-slate-800'
               } ${!allowedTabsList.includes('audit') ? 'opacity-45' : ''}`}
             >
-              <ClipboardCheck className="w-6 h-6 stroke-[2.1] shrink-0" />
-              <span className="text-[10px] sm:text-[11px] font-extrabold tracking-wide uppercase mt-1 leading-none">
+              <div
+                className={`w-10 h-7 rounded-lg flex items-center justify-center transition-all ${
+                  activeTab === 'audit'
+                    ? 'bg-emerald-100/90 text-emerald-700'
+                    : 'bg-transparent text-slate-500 group-hover:bg-slate-100'
+                }`}
+              >
+                <ClipboardCheck className="w-[18px] h-[18px] stroke-[2.2] shrink-0" />
+              </div>
+              <span
+                className={`text-[9.5px] tracking-tight uppercase mt-0.5 leading-none whitespace-nowrap ${
+                  activeTab === 'audit' ? 'font-extrabold text-emerald-700' : 'font-semibold text-slate-500'
+                }`}
+              >
                 CONTEO
               </span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
-                  activeTab === 'audit'
-                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
-                    : 'opacity-0'
-                }`}
-              />
             </button>
           </div>
         </nav>
