@@ -79,7 +79,9 @@ import {
   ShieldCheck,
   Tag,
   ClipboardCheck,
-  Truck
+  Truck,
+  LayoutGrid,
+  Package
 } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
@@ -991,175 +993,156 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Mobile Bottom Navigation Bar (< md) with horizontal slide for ALL allowed modules */}
+        {/* Mobile Bottom Navigation Dock (< md) — App Emerald & Slate Theme */}
         <nav
           aria-label="Navegación rápida móvil"
-          className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom,0px))] flex items-center gap-1 overflow-x-auto shadow-lg"
+          className="md:hidden shrink-0 w-full relative z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-1.5 sm:px-3 pt-1.5 pb-[calc(0.4rem+env(safe-area-inset-bottom,0px))] shadow-[0_-8px_24px_rgba(15,23,42,0.08)] select-none"
         >
-          {allowedTabsList.includes('dashboard') && (
+          <div className="grid grid-cols-5 items-end max-w-md mx-auto">
+            {/* 1. Left Outer: INICIO (Dashboard) */}
             <button
               type="button"
               onClick={() => handleTabChange('dashboard')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[64px] ${
                 activeTab === 'dashboard'
-                  ? 'text-emerald-700 font-bold bg-emerald-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
+                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+              } ${!allowedTabsList.includes('dashboard') ? 'opacity-45' : ''}`}
             >
-              <PieChart className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Panel</span>
+              <LayoutGrid className="w-6 h-6 stroke-[2.2] shrink-0" />
+              <span className="text-[10px] sm:text-[11px] font-extrabold tracking-wide uppercase mt-1 leading-none">
+                INICIO
+              </span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
+                  activeTab === 'dashboard'
+                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
+                    : 'opacity-0'
+                }`}
+              />
             </button>
-          )}
 
-          {allowedTabsList.includes('sales') && (
-            <button
-              type="button"
-              onClick={() => handleTabChange('sales')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
-                activeTab === 'sales'
-                  ? 'text-emerald-700 font-bold bg-emerald-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <ShoppingCart className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Ventas</span>
-            </button>
-          )}
-
-          {allowedTabsList.includes('inventory') && (
+            {/* 2. Left Inner: INVENTARIO (Inventory) */}
             <button
               type="button"
               onClick={() => handleTabChange('inventory')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[64px] ${
                 activeTab === 'inventory'
-                  ? 'text-emerald-700 font-bold bg-emerald-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
+                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+              } ${!allowedTabsList.includes('inventory') ? 'opacity-45' : ''}`}
             >
-              <List className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Stock</span>
+              <Package className="w-6 h-6 stroke-[2.1] shrink-0" />
+              <span className="text-[9.5px] sm:text-[10.5px] font-extrabold tracking-tight uppercase mt-1 leading-none truncate max-w-full">
+                INVENTARIO
+              </span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
+                  activeTab === 'inventory'
+                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
+                    : 'opacity-0'
+                }`}
+              />
             </button>
-          )}
 
-          {allowedTabsList.includes('price-checker') && (
+            {/* 3. Center Raised Action: VENTAS POS (Sales) */}
+            <div className="flex flex-col items-center justify-end relative -mt-8 z-10">
+              <button
+                type="button"
+                onClick={() => handleTabChange('sales')}
+                className={`group flex flex-col items-center justify-center focus:outline-none cursor-pointer ${
+                  !allowedTabsList.includes('sales') ? 'opacity-50' : ''
+                }`}
+              >
+                {/* Raised Emerald Circle with White Bezel */}
+                <div
+                  className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center border-[5px] border-white transition-all duration-200 group-active:scale-95 ${
+                    activeTab === 'sales'
+                      ? 'bg-emerald-600 shadow-[0_6px_20px_rgba(5,150,105,0.45)] ring-2 ring-emerald-500/40'
+                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-[0_6px_16px_rgba(15,23,42,0.18)] ring-1 ring-slate-200'
+                  }`}
+                >
+                  <ShoppingCart className="w-7 h-7 text-white stroke-[2.3] shrink-0" />
+                </div>
+
+                {/* Stadium Pill Label */}
+                <div
+                  className={`mt-1 px-2.5 py-0.5 rounded-full border transition-all shadow-xs flex items-center gap-1 ${
+                    activeTab === 'sales'
+                      ? 'bg-emerald-700 border-emerald-600 text-white shadow-[0_2px_8px_rgba(5,150,105,0.3)]'
+                      : 'bg-slate-800 border-slate-700 text-white'
+                  }`}
+                >
+                  <span className="text-[9px] sm:text-[10px] font-black tracking-wider uppercase whitespace-nowrap">
+                    VENTAS POS
+                  </span>
+                </div>
+              </button>
+            </div>
+
+            {/* 4. Right Inner: CONSULTAR PRECIO (Price Checker) */}
             <button
               type="button"
               onClick={() => handleTabChange('price-checker')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+              className={`flex flex-col items-center justify-center py-2 px-0.5 rounded-2xl transition-all cursor-pointer min-h-[64px] ${
                 activeTab === 'price-checker'
-                  ? 'text-emerald-700 font-bold bg-emerald-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
+                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+              } ${!allowedTabsList.includes('price-checker') ? 'opacity-45' : ''}`}
             >
-              <Tag className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Precios</span>
+              {/* Barcode Scanner Icon */}
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-6 h-6 shrink-0"
+              >
+                <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+                <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+                <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+                <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+                <line x1="8" y1="7" x2="8" y2="17" />
+                <line x1="12" y1="7" x2="12" y2="17" />
+                <line x1="16" y1="7" x2="16" y2="17" />
+              </svg>
+              <span className="text-[8.5px] sm:text-[9.5px] font-extrabold tracking-tight uppercase mt-1 leading-[1.05] text-center">
+                CONSULTAR PRECIO
+              </span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
+                  activeTab === 'price-checker'
+                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
+                    : 'opacity-0'
+                }`}
+              />
             </button>
-          )}
 
-          {allowedTabsList.includes('catalog') && (
-            <button
-              type="button"
-              onClick={() => handleTabChange('catalog')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
-                activeTab === 'catalog'
-                  ? 'text-emerald-700 font-bold bg-emerald-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <Globe className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Catálogo</span>
-            </button>
-          )}
-
-          {allowedTabsList.includes('purchases') && (
-            <button
-              type="button"
-              onClick={() => handleTabChange('purchases')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
-                activeTab === 'purchases'
-                  ? 'text-indigo-700 font-bold bg-indigo-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <FileText className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Compras</span>
-            </button>
-          )}
-
-          {allowedTabsList.includes('audit') && (
+            {/* 5. Right Outer: CONTEO (Audit) */}
             <button
               type="button"
               onClick={() => handleTabChange('audit')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
+              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[64px] ${
                 activeTab === 'audit'
-                  ? 'text-emerald-700 font-bold bg-emerald-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
+                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+              } ${!allowedTabsList.includes('audit') ? 'opacity-45' : ''}`}
             >
-              <ClipboardCheck className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Auditoría</span>
+              <ClipboardCheck className="w-6 h-6 stroke-[2.1] shrink-0" />
+              <span className="text-[10px] sm:text-[11px] font-extrabold tracking-wide uppercase mt-1 leading-none">
+                CONTEO
+              </span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
+                  activeTab === 'audit'
+                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
+                    : 'opacity-0'
+                }`}
+              />
             </button>
-          )}
-
-          {allowedTabsList.includes('suppliers') && (
-            <button
-              type="button"
-              onClick={() => handleTabChange('suppliers')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
-                activeTab === 'suppliers'
-                  ? 'text-indigo-700 font-bold bg-indigo-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <Truck className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Proveedores</span>
-            </button>
-          )}
-
-          {allowedTabsList.includes('users') && (
-            <button
-              type="button"
-              onClick={() => handleTabChange('users')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
-                activeTab === 'users'
-                  ? 'text-amber-700 font-bold bg-amber-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <Users className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Usuarios</span>
-            </button>
-          )}
-
-          {allowedTabsList.includes('activity') && (
-            <button
-              type="button"
-              onClick={() => handleTabChange('activity')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
-                activeTab === 'activity'
-                  ? 'text-indigo-700 font-bold bg-indigo-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <Activity className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Movimientos</span>
-            </button>
-          )}
-
-          {allowedTabsList.includes('settings') && (
-            <button
-              type="button"
-              onClick={() => handleTabChange('settings')}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer shrink-0 min-w-[60px] ${
-                activeTab === 'settings'
-                  ? 'text-emerald-700 font-bold bg-emerald-50'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <Store className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">Ajustes</span>
-            </button>
-          )}
+          </div>
         </nav>
       </main>
 
