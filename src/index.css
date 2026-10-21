@@ -2,13 +2,39 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     background-color: #f8fafc;
     color: #1e293b;
-    margin: 0;
-    padding: 0;
     transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  /* Prevent iOS Safari on iPhone from auto-zooming and shifting the top header off-screen when focusing inputs */
+  @media screen and (max-width: 768px) {
+    input[type="text"],
+    input[type="number"],
+    input[type="tel"],
+    input[type="password"],
+    input[type="search"],
+    input[type="email"],
+    input[type="date"],
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
   }
 
   html.dark body {

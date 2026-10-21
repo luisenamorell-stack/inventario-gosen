@@ -162,7 +162,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         id="mobile-sidebar-drawer"
         aria-label="Menú principal de navegación"
         aria-hidden={!isMobileOpen}
-        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-slate-900 text-white flex flex-col justify-between shadow-2xl transition-transform duration-350 ease-in-out md:hidden ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-slate-900 text-white flex flex-col justify-between shadow-2xl transition-transform duration-350 ease-in-out md:hidden pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] ${
           isMobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >

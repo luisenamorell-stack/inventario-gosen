@@ -267,6 +267,29 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isMobileMenuOpen]);
 
+  // Prevent iOS Safari on iPhone from scrolling the window and pushing the top header off-screen
+  useEffect(() => {
+    const resetIosScroll = () => {
+      if (window.scrollY !== 0 || document.documentElement.scrollTop !== 0 || document.body.scrollTop !== 0) {
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+      }
+    };
+
+    resetIosScroll();
+    const handleFocusOut = () => {
+      setTimeout(resetIosScroll, 50);
+    };
+
+    window.addEventListener('focusout', handleFocusOut);
+    window.addEventListener('orientationchange', resetIosScroll);
+    return () => {
+      window.removeEventListener('focusout', handleFocusOut);
+      window.removeEventListener('orientationchange', resetIosScroll);
+    };
+  }, [isAuthenticated, activeTab]);
+
   // Real-time Firestore Subscriptions
   useEffect(() => {
     // 1. Subscribe to real-time inventory
@@ -711,7 +734,7 @@ export const App: React.FC = () => {
   // Public Catalog View (?catalogo=1) or Admin Preview
   if (isPublicCatalogMode || isAdminPreviewMode) {
     return (
-      <div className="w-full h-screen h-[100dvh] overflow-y-auto bg-slate-50 scroll-smooth">
+      <div className="fixed inset-0 w-full h-full overflow-y-auto bg-slate-50 scroll-smooth">
         <PublicCatalogView
           inventory={inventory}
           storeSettings={storeSettings}
@@ -725,7 +748,7 @@ export const App: React.FC = () => {
   // Login Screen if not authenticated
   if (!isAuthenticated || !userSession) {
     return (
-      <div className="min-h-screen w-screen overflow-auto bg-slate-950">
+      <div className="fixed inset-0 w-full h-full overflow-y-auto bg-slate-950 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]">
         <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
         <LoginView
           storeSettings={storeSettings}
@@ -742,7 +765,7 @@ export const App: React.FC = () => {
     : (userSession.allowedTabs || ['sales', 'inventory', 'price-checker']);
 
   return (
-    <div className="h-screen h-[100dvh] min-h-[100dvh] flex flex-col md:flex-row overflow-hidden text-slate-800 bg-slate-50">
+    <div className="fixed inset-0 w-full h-full max-h-[100dvh] flex flex-col md:flex-row overflow-hidden text-slate-800 bg-slate-50">
       {/* Toast notifications */}
       <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
 
@@ -762,16 +785,16 @@ export const App: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col h-full min-h-0 overflow-hidden relative bg-slate-50 min-w-0 transition-all duration-350 ease-in-out">
-        {/* Top Header - Clean and Streamlined */}
-        <header className="bg-white text-slate-800 px-2.5 sm:px-4 py-2 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0 gap-2">
-          {/* Left: Mobile/Desktop Sidebar Toggles + Clean Store Branding */}
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+      <main className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden relative bg-slate-50 transition-all duration-350 ease-in-out">
+        {/* Top Header - iPhone Safe Area & Responsive Mobile Layout */}
+        <header className="sticky top-0 z-30 w-full bg-white text-slate-800 px-2 sm:px-4 pt-[max(0.5rem,env(safe-area-inset-top,0px))] pb-2 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0 gap-1.5 sm:gap-2">
+          {/* Left: Mobile/Desktop Sidebar Toggles + Store Branding */}
+          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-1">
             {/* Mobile Drawer Hamburger Button */}
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(true)}
-              className="md:hidden inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer shadow-xs shrink-0 text-xs font-bold"
+              className="md:hidden inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white transition-all cursor-pointer shadow-xs shrink-0 text-xs font-bold"
               aria-label="Abrir menú de navegación"
               title="Abrir menú"
             >
@@ -795,28 +818,28 @@ export const App: React.FC = () => {
             </button>
 
             {/* Store brand / Title */}
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
               {(storeSettings.logoUrl || '/store-logo.jpg') ? (
-                <div className="h-9 sm:h-12 max-w-[140px] sm:max-w-[280px] rounded-xl p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
+                <div className="h-8 w-8 sm:h-11 sm:w-auto sm:max-w-[200px] rounded-lg p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
                   <img
                     src={storeSettings.logoUrl || '/store-logo.jpg'}
                     alt={storeSettings.storeName || 'Tienda Gosén'}
-                    className="h-full w-full object-contain rounded-lg mix-blend-multiply filter drop-shadow-2xs"
+                    className="h-full w-full object-contain rounded-md mix-blend-multiply filter drop-shadow-2xs"
                   />
                 </div>
               ) : (
                 <Store className="w-5 h-5 text-emerald-600 shrink-0" />
               )}
-              <span className="font-extrabold text-slate-900 text-xs sm:text-base tracking-tight truncate">
+              <span className="font-extrabold text-slate-900 text-xs sm:text-base tracking-tight truncate block">
                 {storeSettings.storeName || 'Tienda Gosén'}
               </span>
             </div>
 
             {/* Subtle background syncing spinner */}
             {isSyncing && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 animate-pulse shrink-0">
+              <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 animate-pulse shrink-0">
                 <RefreshCw className="w-3 h-3 animate-spin text-emerald-600" />
-                <span className="hidden sm:inline">Sincronizando...</span>
+                <span className="hidden md:inline">Sincronizando...</span>
               </span>
             )}
           </div>
@@ -824,13 +847,13 @@ export const App: React.FC = () => {
           {/* Right Controls: User Profile Badge, Install App & Logout */}
           <div className="flex items-center gap-1.5 sm:gap-2 text-slate-600 shrink-0">
             {userSession && (
-              <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 rounded-xl bg-slate-100 border border-slate-200/80 text-[11px] sm:text-xs font-bold">
+              <div className="hidden min-[380px]:flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200/80 text-[11px] sm:text-xs font-bold">
                 {userSession.role === 'admin' ? (
-                  <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-600 shrink-0" />
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                 ) : (
-                  <User className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 shrink-0" />
+                  <User className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                 )}
-                <span className="text-slate-900 truncate max-w-[75px] sm:max-w-[120px]">{userSession.userName}</span>
+                <span className="text-slate-900 truncate max-w-[64px] sm:max-w-[120px]">{userSession.userName}</span>
                 <span className="hidden md:inline text-[10px] text-slate-500 uppercase font-mono">
                   ({userSession.role === 'admin' ? 'Admin' : 'Colaborador'})
                 </span>
@@ -851,10 +874,10 @@ export const App: React.FC = () => {
               type="button"
               onClick={handleLogout}
               title="Cerrar sesión del sistema"
-              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors text-xs font-semibold border border-rose-200 cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-2 sm:py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 transition-all text-xs font-bold border border-rose-200 cursor-pointer shrink-0"
             >
               <LogOut className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span className="hidden sm:inline">Salir</span>
+              <span>Salir</span>
             </button>
           </div>
         </header>
