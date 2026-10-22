@@ -85,6 +85,7 @@ import {
 } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
+import { SplashScreen } from './components/SplashScreen';
 
 export const App: React.FC = () => {
   // Public Customer Catalog Mode Detection (?catalogo=1)
@@ -142,6 +143,34 @@ export const App: React.FC = () => {
   const [pingLatency, setPingLatency] = useState<number | null>(null);
   const [isPinging, setIsPinging] = useState<boolean>(false);
 
+  // Walking Shoe Splash Screen State on App Open
+  const [showSplash, setShowSplash] = useState<boolean>(true);
+  const [isSplashExiting, setIsSplashExiting] = useState<boolean>(false);
+
+  useEffect(() => {
+    const exitTimer = setTimeout(() => {
+      setIsSplashExiting(true);
+    }, 2200);
+    const hideTimer = setTimeout(() => {
+      setShowSplash(false);
+    }, 2700);
+    return () => {
+      clearTimeout(exitTimer);
+      clearTimeout(hideTimer);
+    };
+  }, []);
+
+  const triggerBriefSplash = (durationMs = 1500) => {
+    setIsSplashExiting(false);
+    setShowSplash(true);
+    setTimeout(() => {
+      setIsSplashExiting(true);
+    }, Math.max(400, durationMs - 450));
+    setTimeout(() => {
+      setShowSplash(false);
+    }, durationMs);
+  };
+
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -169,6 +198,7 @@ export const App: React.FC = () => {
 
   // Auth Handlers
   const handleLoginSuccess = (session: UserSession, remember: boolean) => {
+    triggerBriefSplash(1600);
     setUserSession(session);
     setIsAuthenticated(true);
 
@@ -735,6 +765,9 @@ export const App: React.FC = () => {
   if (isPublicCatalogMode || isAdminPreviewMode) {
     return (
       <div className="fixed inset-0 w-full h-full overflow-y-auto bg-slate-50 scroll-smooth">
+        {showSplash && (
+          <SplashScreen storeSettings={storeSettings} isExiting={isSplashExiting} />
+        )}
         <PublicCatalogView
           inventory={inventory}
           storeSettings={storeSettings}
@@ -749,6 +782,9 @@ export const App: React.FC = () => {
   if (!isAuthenticated || !userSession) {
     return (
       <div className="fixed inset-0 w-full h-full overflow-y-auto bg-slate-950 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]">
+        {showSplash && (
+          <SplashScreen storeSettings={storeSettings} isExiting={isSplashExiting} />
+        )}
         <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
         <LoginView
           storeSettings={storeSettings}
@@ -766,6 +802,9 @@ export const App: React.FC = () => {
 
   return (
     <div className="fixed inset-0 w-full h-full flex flex-col md:flex-row overflow-hidden text-slate-800 bg-slate-50">
+      {showSplash && (
+        <SplashScreen storeSettings={storeSettings} isExiting={isSplashExiting} />
+      )}
       {/* Toast notifications */}
       <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
 
