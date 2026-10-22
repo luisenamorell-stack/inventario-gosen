@@ -785,21 +785,21 @@ export const App: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden relative bg-slate-50 pb-[74px] md:pb-0 transition-all duration-350 ease-in-out">
+      <main className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden relative bg-slate-50 pb-[64px] md:pb-0 transition-all duration-350 ease-in-out">
         {/* Top Header - iPhone Safe Area & Responsive Mobile Layout */}
-        <header className="sticky top-0 z-30 w-full bg-white text-slate-800 px-2 sm:px-4 pt-[max(0.5rem,env(safe-area-inset-top,0px))] pb-2 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0 gap-1.5 sm:gap-2">
+        <header className="sticky top-0 z-30 w-full max-w-full overflow-hidden bg-white text-slate-800 px-3 sm:px-4 pt-[max(0.5rem,env(safe-area-inset-top,0px))] pb-2 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0 gap-2">
           {/* Left: Mobile/Desktop Sidebar Toggles + Store Branding */}
-          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-1">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 overflow-hidden">
             {/* Mobile Drawer Hamburger Button */}
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(true)}
-              className="md:hidden inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white transition-all cursor-pointer shadow-xs shrink-0 text-xs font-bold"
+              className="md:hidden inline-flex items-center justify-center gap-1.5 p-2 sm:px-2.5 sm:py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white transition-all cursor-pointer shadow-xs shrink-0 text-xs font-bold"
               aria-label="Abrir menú de navegación"
               title="Abrir menú"
             >
               <Menu className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>Menú</span>
+              <span className="hidden sm:inline">Menú</span>
             </button>
 
             {/* Desktop Collapse / Expand Toggle Button */}
@@ -818,9 +818,9 @@ export const App: React.FC = () => {
             </button>
 
             {/* Store brand / Title */}
-            <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
+            <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1 overflow-hidden">
               {(storeSettings.logoUrl || '/store-logo.jpg') ? (
-                <div className="h-8 w-8 sm:h-11 sm:w-auto sm:max-w-[200px] rounded-lg p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
+                <div className="h-8 w-8 sm:h-10 sm:w-auto sm:max-w-[180px] rounded-lg p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
                   <img
                     src={storeSettings.logoUrl || '/store-logo.jpg'}
                     alt={storeSettings.storeName || 'Tienda Gosén'}
@@ -830,7 +830,7 @@ export const App: React.FC = () => {
               ) : (
                 <Store className="w-5 h-5 text-emerald-600 shrink-0" />
               )}
-              <span className="font-extrabold text-slate-900 text-xs sm:text-base tracking-tight truncate block">
+              <span className="font-extrabold text-slate-900 text-sm sm:text-base tracking-tight truncate block">
                 {storeSettings.storeName || 'Tienda Gosén'}
               </span>
             </div>
@@ -847,13 +847,18 @@ export const App: React.FC = () => {
           {/* Right Controls: User Profile Badge, Install App & Logout */}
           <div className="flex items-center gap-1.5 sm:gap-2 text-slate-600 shrink-0">
             {userSession && (
-              <div className="hidden min-[380px]:flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200/80 text-[11px] sm:text-xs font-bold">
+              <div
+                className="flex items-center justify-center gap-1.5 p-2 sm:px-3 sm:py-1.5 rounded-xl bg-slate-100 border border-slate-200/80 text-xs font-bold shrink-0"
+                title={`${userSession.userName} (${userSession.role === 'admin' ? 'Admin' : 'Colaborador'})`}
+              >
                 {userSession.role === 'admin' ? (
-                  <ShieldCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <ShieldCheck className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-amber-600 shrink-0" />
                 ) : (
-                  <User className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <User className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-emerald-600 shrink-0" />
                 )}
-                <span className="text-slate-900 truncate max-w-[64px] sm:max-w-[120px]">{userSession.userName}</span>
+                <span className="hidden sm:inline text-slate-900 truncate max-w-[120px]">
+                  {userSession.userName}
+                </span>
                 <span className="hidden md:inline text-[10px] text-slate-500 uppercase font-mono">
                   ({userSession.role === 'admin' ? 'Admin' : 'Colaborador'})
                 </span>
@@ -864,7 +869,7 @@ export const App: React.FC = () => {
               type="button"
               onClick={() => setIsInstallPromptOpen(true)}
               title="Instalar aplicación móvil o de escritorio"
-              className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors text-xs font-bold border border-emerald-200 cursor-pointer"
+              className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors text-xs font-bold border border-emerald-200 cursor-pointer shrink-0"
             >
               <Download className="w-3.5 h-3.5 text-emerald-600" />
               <span>Instalar App</span>
@@ -874,10 +879,11 @@ export const App: React.FC = () => {
               type="button"
               onClick={handleLogout}
               title="Cerrar sesión del sistema"
-              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-2 sm:py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 transition-all text-xs font-bold border border-rose-200 cursor-pointer shrink-0"
+              aria-label="Cerrar sesión"
+              className="inline-flex items-center justify-center gap-1.5 p-2 sm:px-3 sm:py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 transition-all text-xs font-bold border border-rose-200 cursor-pointer shrink-0"
             >
-              <LogOut className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span>Salir</span>
+              <LogOut className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-rose-600 shrink-0" />
+              <span className="hidden sm:inline">Salir</span>
             </button>
           </div>
         </header>
@@ -1016,60 +1022,46 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Mobile Bottom Navigation Dock (< md) — App Emerald & Slate Theme pinned to bottom edge */}
+        {/* Mobile Bottom Navigation Dock (< md) — Vertically centered & flush to bottom edge */}
         <nav
           aria-label="Navegación rápida móvil"
-          className="md:hidden fixed bottom-0 left-0 right-0 w-full z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-1.5 sm:px-3 pt-1.5 pb-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] select-none"
+          className="md:hidden fixed bottom-0 left-0 right-0 w-full z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 py-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] select-none"
         >
-          <div className="grid grid-cols-5 items-end max-w-md mx-auto">
+          <div className="grid grid-cols-5 items-center max-w-md mx-auto">
             {/* 1. Left Outer: INICIO (Dashboard) */}
             <button
               type="button"
               onClick={() => handleTabChange('dashboard')}
-              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[60px] ${
+              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
                 activeTab === 'dashboard'
                   ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
               } ${!allowedTabsList.includes('dashboard') ? 'opacity-45' : ''}`}
             >
-              <LayoutGrid className="w-6 h-6 stroke-[2.2] shrink-0" />
-              <span className="text-[10px] sm:text-[11px] font-extrabold tracking-wide uppercase mt-1 leading-none">
+              <LayoutGrid className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2] shrink-0" />
+              <span className="text-[9.5px] sm:text-[10.5px] font-extrabold tracking-wide uppercase mt-1 leading-none">
                 INICIO
               </span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
-                  activeTab === 'dashboard'
-                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
-                    : 'opacity-0'
-                }`}
-              />
             </button>
 
             {/* 2. Left Inner: INVENTARIO (Inventory) */}
             <button
               type="button"
               onClick={() => handleTabChange('inventory')}
-              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[60px] ${
+              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
                 activeTab === 'inventory'
                   ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
               } ${!allowedTabsList.includes('inventory') ? 'opacity-45' : ''}`}
             >
-              <Package className="w-6 h-6 stroke-[2.1] shrink-0" />
-              <span className="text-[9.5px] sm:text-[10.5px] font-extrabold tracking-tight uppercase mt-1 leading-none truncate max-w-full">
+              <Package className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.1] shrink-0" />
+              <span className="text-[9px] sm:text-[10px] font-extrabold tracking-tight uppercase mt-1 leading-none truncate max-w-full">
                 INVENTARIO
               </span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
-                  activeTab === 'inventory'
-                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
-                    : 'opacity-0'
-                }`}
-              />
             </button>
 
             {/* 3. Center Raised Action: VENTAS POS (Sales) */}
-            <div className="flex flex-col items-center justify-end relative -mt-8 z-10">
+            <div className="flex flex-col items-center justify-center relative -mt-6 z-10">
               <button
                 type="button"
                 onClick={() => handleTabChange('sales')}
@@ -1079,24 +1071,24 @@ export const App: React.FC = () => {
               >
                 {/* Raised Emerald Circle with White Bezel */}
                 <div
-                  className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center border-[5px] border-white transition-all duration-200 group-active:scale-95 ${
+                  className={`w-13 h-13 sm:w-14 sm:h-14 rounded-full flex items-center justify-center border-4 border-white transition-all duration-200 group-active:scale-95 ${
                     activeTab === 'sales'
                       ? 'bg-emerald-600 shadow-[0_6px_20px_rgba(5,150,105,0.45)] ring-2 ring-emerald-500/40'
                       : 'bg-emerald-600 hover:bg-emerald-700 shadow-[0_6px_16px_rgba(15,23,42,0.18)] ring-1 ring-slate-200'
                   }`}
                 >
-                  <ShoppingCart className="w-7 h-7 text-white stroke-[2.3] shrink-0" />
+                  <ShoppingCart className="w-6 h-6 text-white stroke-[2.3] shrink-0" />
                 </div>
 
                 {/* Stadium Pill Label */}
                 <div
-                  className={`mt-1 px-2.5 py-0.5 rounded-full border transition-all shadow-xs flex items-center gap-1 ${
+                  className={`mt-1 px-2 py-0.5 rounded-full border transition-all shadow-xs flex items-center justify-center ${
                     activeTab === 'sales'
                       ? 'bg-emerald-700 border-emerald-600 text-white shadow-[0_2px_8px_rgba(5,150,105,0.3)]'
                       : 'bg-slate-800 border-slate-700 text-white'
                   }`}
                 >
-                  <span className="text-[9px] sm:text-[10px] font-black tracking-wider uppercase whitespace-nowrap">
+                  <span className="text-[8.5px] sm:text-[9.5px] font-black tracking-wider uppercase whitespace-nowrap leading-none">
                     VENTAS POS
                   </span>
                 </div>
@@ -1107,7 +1099,7 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => handleTabChange('price-checker')}
-              className={`flex flex-col items-center justify-center py-2 px-0.5 rounded-2xl transition-all cursor-pointer min-h-[60px] ${
+              className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all cursor-pointer ${
                 activeTab === 'price-checker'
                   ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
@@ -1121,7 +1113,7 @@ export const App: React.FC = () => {
                 strokeWidth="2.2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="w-6 h-6 shrink-0"
+                className="w-5 h-5 sm:w-6 sm:h-6 shrink-0"
               >
                 <path d="M3 7V5a2 2 0 0 1 2-2h2" />
                 <path d="M17 3h2a2 2 0 0 1 2 2v2" />
@@ -1131,39 +1123,25 @@ export const App: React.FC = () => {
                 <line x1="12" y1="7" x2="12" y2="17" />
                 <line x1="16" y1="7" x2="16" y2="17" />
               </svg>
-              <span className="text-[8.5px] sm:text-[9.5px] font-extrabold tracking-tight uppercase mt-1 leading-[1.05] text-center">
+              <span className="text-[8px] sm:text-[9px] font-extrabold tracking-tight uppercase mt-1 leading-tight text-center">
                 CONSULTAR PRECIO
               </span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
-                  activeTab === 'price-checker'
-                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
-                    : 'opacity-0'
-                }`}
-              />
             </button>
 
             {/* 5. Right Outer: CONTEO (Audit) */}
             <button
               type="button"
               onClick={() => handleTabChange('audit')}
-              className={`flex flex-col items-center justify-center py-2 px-1 rounded-2xl transition-all cursor-pointer min-h-[60px] ${
+              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
                 activeTab === 'audit'
                   ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
               } ${!allowedTabsList.includes('audit') ? 'opacity-45' : ''}`}
             >
-              <ClipboardCheck className="w-6 h-6 stroke-[2.1] shrink-0" />
-              <span className="text-[10px] sm:text-[11px] font-extrabold tracking-wide uppercase mt-1 leading-none">
+              <ClipboardCheck className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.1] shrink-0" />
+              <span className="text-[9.5px] sm:text-[10.5px] font-extrabold tracking-wide uppercase mt-1 leading-none">
                 CONTEO
               </span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full mt-1 transition-all ${
-                  activeTab === 'audit'
-                    ? 'bg-emerald-600 shadow-[0_0_6px_rgba(5,150,105,0.6)] opacity-100'
-                    : 'opacity-0'
-                }`}
-              />
             </button>
           </div>
         </nav>
