@@ -18,11 +18,16 @@ import {
   Truck
 } from 'lucide-react';
 import Chart from 'chart.js/auto';
+import {
+  DashboardStatCardsSkeleton,
+  DashboardLowStockSkeleton,
+} from './SkeletonLoaders';
 
 interface DashboardViewProps {
   inventory: Product[];
   auditHistory: AuditHistoryRecord[];
   sales?: SaleRecord[];
+  isLoading?: boolean;
   onOpenNewProduct: () => void;
   onStartAudit: () => void;
   onNavigateToSales?: () => void;
@@ -35,6 +40,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   inventory,
   auditHistory,
   sales = [],
+  isLoading = false,
   onOpenNewProduct,
   onStartAudit,
   onNavigateToSales,
@@ -177,6 +183,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </header>
 
       {/* 4 Stat Cards */}
+      {isLoading ? (
+        <DashboardStatCardsSkeleton />
+      ) : (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 mb-6 sm:mb-8">
         {/* Total Modelos */}
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800/80 flex items-center group hover:border-blue-200 dark:hover:border-blue-800 transition-colors">
@@ -232,6 +241,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </div>
+      )}
 
       {/* Main Content: Chart + Critical Alerts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
@@ -246,6 +256,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </span>
           </div>
           <div className="flex-1 relative w-full h-full min-h-[250px]">
+            {isLoading && (
+              <div className="absolute inset-0 z-10 bg-white dark:bg-slate-900 flex items-end justify-around gap-4 p-4">
+                <div className="w-full h-3/5 animate-pulse bg-gray-200 dark:bg-slate-800 rounded-md" />
+                <div className="w-full h-4/5 animate-pulse bg-gray-200 dark:bg-slate-800 rounded-md" />
+                <div className="w-full h-2/5 animate-pulse bg-gray-200 dark:bg-slate-800 rounded-md" />
+                <div className="w-full h-3/4 animate-pulse bg-gray-200 dark:bg-slate-800 rounded-md" />
+              </div>
+            )}
             <canvas ref={chartCanvasRef}></canvas>
           </div>
         </div>
@@ -257,7 +275,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span>Productos por Agotarse</span>
           </h3>
           <div className="flex-1 overflow-y-auto space-y-3 pr-2 no-scrollbar">
-            {lowStockItems.length === 0 ? (
+            {isLoading ? (
+              <DashboardLowStockSkeleton count={4} />
+            ) : lowStockItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-slate-400 dark:text-slate-500 py-10">
                 <ShieldCheck className="w-12 h-12 text-emerald-400/60 mb-3" />
                 <p className="text-sm font-medium text-center">

@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
 import { playSound } from '../utils/audio';
+import { PosProductGridSkeleton } from './SkeletonLoaders';
 
 export const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
@@ -63,6 +64,7 @@ interface SalesViewProps {
   inventory: Product[];
   sales: SaleRecord[];
   storeSettings: StoreSettings;
+  isLoading?: boolean;
   onRecordSale: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
   onCancelSale: (sale: SaleRecord) => Promise<void>;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -72,6 +74,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   inventory,
   sales,
   storeSettings,
+  isLoading = false,
   onRecordSale,
   onCancelSale,
   showToast,
@@ -934,7 +937,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
             {/* Product Catalog Grid */}
             <div className="flex-1 min-h-0 p-2.5 sm:p-4 overflow-y-auto scroll-container pb-28 lg:pb-6">
-              {filteredCatalog.length === 0 ? (
+              {isLoading ? (
+                <PosProductGridSkeleton count={8} />
+              ) : filteredCatalog.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400">
                   <Package className="w-12 h-12 mb-3 text-slate-300 stroke-1" />
                   <p className="font-semibold text-slate-600 text-base">No se encontraron productos</p>

@@ -146,30 +146,43 @@ export const App: React.FC = () => {
   // Walking Shoe Splash Screen State on App Open
   const [showSplash, setShowSplash] = useState<boolean>(true);
   const [isSplashExiting, setIsSplashExiting] = useState<boolean>(false);
+  // Skeleton loader state for Firebase inventory data
+  const [isSkeletonTransition, setIsSkeletonTransition] = useState<boolean>(true);
 
   useEffect(() => {
     const exitTimer = setTimeout(() => {
       setIsSplashExiting(true);
-    }, 2200);
+    }, 1600);
     const hideTimer = setTimeout(() => {
       setShowSplash(false);
-    }, 2700);
+    }, 2000);
+    // Keep skeleton loaders visible briefly after splash exits so Firebase card skeletons transition smoothly
+    const skeletonTimer = setTimeout(() => {
+      setIsSkeletonTransition(false);
+    }, 3100);
     return () => {
       clearTimeout(exitTimer);
       clearTimeout(hideTimer);
+      clearTimeout(skeletonTimer);
     };
   }, []);
 
   const triggerBriefSplash = (durationMs = 1500) => {
     setIsSplashExiting(false);
     setShowSplash(true);
+    setIsSkeletonTransition(true);
     setTimeout(() => {
       setIsSplashExiting(true);
     }, Math.max(400, durationMs - 450));
     setTimeout(() => {
       setShowSplash(false);
     }, durationMs);
+    setTimeout(() => {
+      setIsSkeletonTransition(false);
+    }, durationMs + 950);
   };
+
+  const isInventoryLoading = isConnecting || isSkeletonTransition || isPinging;
 
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -771,6 +784,7 @@ export const App: React.FC = () => {
         <PublicCatalogView
           inventory={inventory}
           storeSettings={storeSettings}
+          isLoading={isInventoryLoading}
           isAdminPreview={isAdminPreviewMode}
           onBackToAdmin={() => setIsAdminPreviewMode(false)}
         />
@@ -933,6 +947,7 @@ export const App: React.FC = () => {
             inventory={inventory}
             auditHistory={auditHistory}
             sales={sales}
+            isLoading={isInventoryLoading}
             onOpenNewProduct={() => {
               handleTabChange('inventory');
               setOpenProductModalTrigger(true);
@@ -950,6 +965,7 @@ export const App: React.FC = () => {
             inventory={inventory}
             sales={sales}
             storeSettings={storeSettings}
+            isLoading={isInventoryLoading}
             onRecordSale={handleRecordSale}
             onCancelSale={handleCancelSale}
             showToast={showToast}
@@ -960,6 +976,7 @@ export const App: React.FC = () => {
           <InventoryView
             inventory={inventory}
             suppliers={suppliers}
+            isLoading={isInventoryLoading}
             initialSearchCode={inventorySearchQuery}
             onSaveProduct={handleSaveProduct}
             onDeleteProduct={handleDeleteProduct}

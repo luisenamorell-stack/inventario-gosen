@@ -16,10 +16,15 @@ import {
 
 import { ConfirmDialog } from './ConfirmDialog';
 import { ImageUploader } from './ImageUploader';
+import {
+  InventoryMobileCardSkeleton,
+  InventoryTableRowsSkeleton,
+} from './SkeletonLoaders';
 
 interface InventoryViewProps {
   inventory: Product[];
   suppliers: Supplier[];
+  isLoading?: boolean;
   initialSearchCode?: string;
   onSaveProduct: (product: Product, oldCode?: string) => void;
   onDeleteProduct: (id: string) => void;
@@ -32,6 +37,7 @@ interface InventoryViewProps {
 export const InventoryView: React.FC<InventoryViewProps> = ({
   inventory,
   suppliers,
+  isLoading = false,
   initialSearchCode = '',
   onSaveProduct,
   onDeleteProduct,
@@ -345,19 +351,26 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           </div>
 
           <span className="text-slate-400 font-medium">
-            {filteredInventory.length} {filteredInventory.length === 1 ? 'artículo' : 'artículos'}
+            {isLoading ? (
+              <span className="inline-block h-4 w-20 animate-pulse bg-gray-200 rounded-md align-middle" />
+            ) : (
+              `${filteredInventory.length} ${filteredInventory.length === 1 ? 'artículo' : 'artículos'}`
+            )}
           </span>
         </div>
 
         {/* Mobile Product Cards List (< sm) */}
-        <div className="sm:hidden p-2.5 space-y-2.5">
-          {filteredInventory.length === 0 ? (
-            <div className="p-8 text-center text-slate-400">
-              <Box className="w-10 h-10 mx-auto mb-2 opacity-30" />
-              <p className="font-medium text-sm">No se encontraron artículos con los filtros aplicados.</p>
-            </div>
-          ) : (
-            filteredInventory.map((item) => {
+        {isLoading ? (
+          <InventoryMobileCardSkeleton count={6} />
+        ) : (
+          <div className="sm:hidden p-2.5 space-y-2.5">
+            {filteredInventory.length === 0 ? (
+              <div className="p-8 text-center text-slate-400">
+                <Box className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                <p className="font-medium text-sm">No se encontraron artículos con los filtros aplicados.</p>
+              </div>
+            ) : (
+              filteredInventory.map((item) => {
               const stockNumber = Number(item.stock) || 0;
               const stockColor =
                 stockNumber <= 0
@@ -450,6 +463,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             })
           )}
         </div>
+        )}
 
         {/* Desktop / Tablet Table (>= sm) */}
         <div className="hidden sm:block overflow-x-auto">
@@ -542,7 +556,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               </tr>
             </thead>
             <tbody className="text-sm divide-y divide-slate-100">
-              {filteredInventory.length === 0 ? (
+              {isLoading ? (
+                <InventoryTableRowsSkeleton rows={6} />
+              ) : filteredInventory.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="p-12 text-center text-slate-400">
                     <Box className="w-10 h-10 mx-auto mb-2 opacity-30" />

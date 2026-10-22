@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Product, StoreSettings } from '../types';
 import { WhatsAppIcon } from './SalesView';
+import { PublicCatalogGridSkeleton } from './SkeletonLoaders';
 import {
   ShoppingBag,
   Search,
@@ -31,6 +32,7 @@ interface CartItem {
 interface PublicCatalogViewProps {
   inventory: Product[];
   storeSettings: StoreSettings;
+  isLoading?: boolean;
   onBackToAdmin?: () => void;
   isAdminPreview?: boolean;
 }
@@ -38,6 +40,7 @@ interface PublicCatalogViewProps {
 export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
   inventory,
   storeSettings,
+  isLoading = false,
   onBackToAdmin,
   isAdminPreview = false,
 }) => {
@@ -438,7 +441,9 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
         </div>
 
         {/* Product Catalog Grid */}
-        {filteredProducts.length === 0 ? (
+        {isLoading ? (
+          <PublicCatalogGridSkeleton count={8} />
+        ) : filteredProducts.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center text-slate-500 space-y-3 shadow-2xs">
             <ShoppingBag className="w-12 h-12 mx-auto text-slate-400 stroke-1" />
             <p className="font-bold text-slate-800 text-base">No se encontraron productos en esta selección</p>
