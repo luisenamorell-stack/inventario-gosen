@@ -40,6 +40,7 @@ import {
   saveStoreSettingsToFirestore,
   DEFAULT_STORE_SETTINGS,
   saveProductToFirestore,
+  bulkSaveProductsToFirestore,
   deleteProductFromFirestore,
   saveSupplierToFirestore,
   deleteSupplierFromFirestore,
@@ -529,6 +530,51 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleBulkSaveProducts = async (
+    productsToSave: Product[],
+    newSuppliers: Supplier[],
+    summary: { createdCount: number; updatedCount: number; totalUnitsProcessed: number; mode: 'add' | 'replace' }
+  ) => {
+    setIsSyncing(true);
+    try {
+      // Optimistic local state update
+      if (newSuppliers.length > 0) {
+        setSuppliers((prev) => [...prev, ...newSuppliers]);
+      }
+
+      setInventory((prev) => {
+        const map = new Map<string, Product>();
+        prev.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
+        productsToSave.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
+        return Array.from(map.values());
+      });
+
+      await bulkSaveProductsToFirestore(productsToSave, newSuppliers);
+      setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'admin',
+        action: `Carga masiva Excel (${productsToSave.length} artículos procesados)`,
+        module: 'inventory',
+        details: `Nuevos: ${summary.createdCount}, Actualizados: ${summary.updatedCount}, Modo: ${
+          summary.mode === 'add' ? 'Sumar al stock' : 'Reemplazar stock'
+        }`,
+      });
+
+      showToast(
+        `¡Carga masiva exitosa! ${summary.createdCount} nuevos y ${summary.updatedCount} actualizados en Firebase.`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Error in bulk save:', err);
+      showToast('Error en carga masiva: ' + (err.message || 'desconocido'), 'error');
+      throw err;
+    } finally {
+      setTimeout(() => setIsSyncing(false), 400);
+    }
+  };
+
   const handleDeleteProduct = async (id: string) => {
     setIsSyncing(true);
     try {
@@ -979,6 +1025,7 @@ export const App: React.FC = () => {
             isLoading={isInventoryLoading}
             initialSearchCode={inventorySearchQuery}
             onSaveProduct={handleSaveProduct}
+            onBulkSaveProducts={handleBulkSaveProducts}
             onDeleteProduct={handleDeleteProduct}
             onOpenSupplierModal={() => {
               handleTabChange('suppliers');

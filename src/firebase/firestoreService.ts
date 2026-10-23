@@ -151,6 +151,70 @@ export async function deleteProductFromFirestore(id: string, code?: string): Pro
   }
 }
 
+export async function bulkSaveProductsToFirestore(
+  products: Product[],
+  newSuppliers: Supplier[] = []
+): Promise<void> {
+  if (products.length === 0 && newSuppliers.length === 0) return;
+
+  const CHUNK_SIZE = 400;
+  try {
+    // 1. Save any new suppliers discovered in the Excel upload
+    if (newSuppliers.length > 0) {
+      for (let i = 0; i < newSuppliers.length; i += CHUNK_SIZE) {
+        const chunk = newSuppliers.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((sup) => {
+          const docId = (sup.id || sup.name || Date.now().toString()).trim().replace(/\//g, '_');
+          const supRef = doc(db, 'suppliers', docId);
+          batch.set(
+            supRef,
+            {
+              name: sup.name.trim(),
+              contact: sup.contact?.trim() || '',
+              phone: sup.phone?.trim() || '',
+              email: sup.email?.trim() || '',
+              address: sup.address?.trim() || '',
+            },
+            { merge: true }
+          );
+        });
+        await batch.commit();
+      }
+    }
+
+    // 2. Save products in chunks of 400 to respect Firestore 500-op batch limit
+    for (let i = 0; i < products.length; i += CHUNK_SIZE) {
+      const chunk = products.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+
+      chunk.forEach((product) => {
+        const docId = product.code.trim().replace(/\//g, '_');
+        if (!docId) return;
+        const docRef = doc(db, 'inventory', docId);
+        const payload: Record<string, any> = {
+          code: product.code.trim(),
+          name: product.name.trim(),
+          category: (product.category || 'General').trim(),
+          cost: Math.max(0, Number(product.cost) || 0),
+          price: Math.max(0, Number(product.price) || 0),
+          stock: Math.max(0, Math.round(Number(product.stock) || 0)),
+        };
+
+        if (product.size !== undefined) payload.size = product.size.trim();
+        if (product.supplier !== undefined) payload.supplier = product.supplier.trim();
+        if (product.img?.trim()) payload.img = product.img.trim();
+
+        batch.set(docRef, payload, { merge: true });
+      });
+
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'batch:inventory/bulk_import');
+  }
+}
+
 // ----------------- REAL-TIME SUPPLIERS -----------------
 
 export function subscribeToSuppliers(

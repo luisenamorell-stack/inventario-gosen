@@ -11,7 +11,8 @@ import {
   Sparkles,
   ArrowUpDown,
   ArrowDown,
-  ArrowUp
+  ArrowUp,
+  FileSpreadsheet
 } from 'lucide-react';
 
 import { ConfirmDialog } from './ConfirmDialog';
@@ -20,6 +21,7 @@ import {
   InventoryMobileCardSkeleton,
   InventoryTableRowsSkeleton,
 } from './SkeletonLoaders';
+import { BulkStockImportModal, StockUpdateMode } from './BulkStockImportModal';
 
 interface InventoryViewProps {
   inventory: Product[];
@@ -27,6 +29,11 @@ interface InventoryViewProps {
   isLoading?: boolean;
   initialSearchCode?: string;
   onSaveProduct: (product: Product, oldCode?: string) => void;
+  onBulkSaveProducts?: (
+    products: Product[],
+    newSuppliers: Supplier[],
+    summary: { createdCount: number; updatedCount: number; totalUnitsProcessed: number; mode: StockUpdateMode }
+  ) => Promise<void>;
   onDeleteProduct: (id: string) => void;
   onOpenSupplierModal: () => void;
   showModalInitially?: boolean;
@@ -40,6 +47,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   isLoading = false,
   initialSearchCode = '',
   onSaveProduct,
+  onBulkSaveProducts,
   onDeleteProduct,
   onOpenSupplierModal,
   showModalInitially = false,
@@ -65,6 +73,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(showModalInitially);
+  const [isBulkImportOpen, setIsBulkImportOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
@@ -227,13 +236,25 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <h1 className="text-xl sm:text-2xl font-bold text-slate-800">Catálogo de Productos</h1>
           <p className="text-xs sm:text-sm text-slate-500">Gestiona todos los artículos de la tienda.</p>
         </div>
-        <button
-          onClick={handleOpenCreate}
-          className="w-full sm:w-auto bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
-        >
-          <Plus className="w-4 h-4 shrink-0" />
-          <span>Nuevo Artículo</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={() => setIsBulkImportOpen(true)}
+            className="flex-1 sm:flex-initial bg-slate-900 text-white px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer border border-slate-800"
+            title="Subir stock o catálogo masivamente desde Excel (.xlsx / .csv) o copiando y pegando"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>Carga Masiva Excel</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenCreate}
+            className="flex-1 sm:flex-initial bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <Plus className="w-4 h-4 shrink-0" />
+            <span>Nuevo Artículo</span>
+          </button>
+        </div>
       </header>
 
       {/* Main card table container */}
@@ -951,6 +972,24 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           }
         }}
         onCancel={() => setItemToDelete(null)}
+      />
+
+      {/* Bulk Stock & Catalog Excel Importer Modal (Option 1 + Option 2) */}
+      <BulkStockImportModal
+        isOpen={isBulkImportOpen}
+        onClose={() => setIsBulkImportOpen(false)}
+        inventory={inventory}
+        suppliers={suppliers}
+        onConfirmBulkImport={async (finalProducts, newSuppliers, summary) => {
+          if (onBulkSaveProducts) {
+            await onBulkSaveProducts(finalProducts, newSuppliers, summary);
+          } else {
+            for (const prod of finalProducts) {
+              await onSaveProduct(prod);
+            }
+          }
+        }}
+        showToast={showToast}
       />
     </div>
   );
