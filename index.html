@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f172a" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -28,11 +28,20 @@
 <body class="w-full h-full overflow-hidden bg-slate-50 text-slate-800 antialiased selection:bg-emerald-500 selection:text-white">
   <div id="root" class="h-full w-full"></div>
   <script>
+    if ('caches' in window) {
+      caches.keys().then(function(keys) {
+        keys.forEach(function(key) {
+          if (key !== 'tienda-gosen-v6') {
+            caches.delete(key);
+          }
+        });
+      });
+    }
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function() {
         navigator.serviceWorker.register('/sw.js').then(
           function(reg) {
-            console.log('Tienda Gosén ServiceWorker registration successful with scope: ', reg.scope);
+            reg.update();
           },
           function(err) {
             console.log('Tienda Gosén ServiceWorker registration failed: ', err);

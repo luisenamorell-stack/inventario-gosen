@@ -884,9 +884,9 @@ export const App: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden relative bg-slate-50 pb-[64px] md:pb-0 transition-all duration-350 ease-in-out">
-        {/* Top Header - iPhone Safe Area & Responsive Mobile Layout */}
-        <header className="sticky top-0 z-30 w-full max-w-full overflow-hidden bg-white text-slate-800 px-3 sm:px-4 pt-[max(0.5rem,env(safe-area-inset-top,0px))] pb-2 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0 gap-2">
+      <main className="flex-1 flex flex-col min-h-0 min-w-0 w-full h-full overflow-hidden relative bg-slate-50 transition-all duration-350 ease-in-out">
+        {/* Top Header - Compact & Responsive Mobile Layout */}
+        <header className="w-full max-w-full overflow-hidden bg-white text-slate-800 px-3 sm:px-4 py-2 sm:py-2.5 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0 gap-2 z-30">
           {/* Left: Mobile/Desktop Sidebar Toggles + Store Branding */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 overflow-hidden">
             {/* Mobile Drawer Hamburger Button */}
@@ -919,7 +919,7 @@ export const App: React.FC = () => {
             {/* Store brand / Title */}
             <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1 overflow-hidden">
               {(storeSettings.logoUrl || '/store-logo.jpg') ? (
-                <div className="h-8 w-8 sm:h-10 sm:w-auto sm:max-w-[180px] rounded-lg p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
+                <div className="h-8 w-8 sm:h-9 sm:w-auto sm:max-w-[160px] rounded-lg p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
                   <img
                     src={storeSettings.logoUrl || '/store-logo.jpg'}
                     alt={storeSettings.storeName || 'Tienda Gosén'}
@@ -987,162 +987,164 @@ export const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Tab Views */}
-        {activeTab === 'dashboard' && allowedTabsList.includes('dashboard') && (
-          <DashboardView
-            inventory={inventory}
-            auditHistory={auditHistory}
-            sales={sales}
-            isLoading={isInventoryLoading}
-            onOpenNewProduct={() => {
-              handleTabChange('inventory');
-              setOpenProductModalTrigger(true);
-            }}
-            onStartAudit={() => handleTabChange('audit')}
-            onNavigateToSales={() => handleTabChange('sales')}
-            onNavigateToPurchases={() => handleTabChange('purchases')}
-            onFilterInventoryByCode={handleFilterInventoryByCode}
-            onNavigateToAudit={() => handleTabChange('audit')}
-          />
-        )}
+        {/* Tab Views Container — Reserves exact 60px on mobile for the fixed bottom bar */}
+        <div className="flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden relative pb-[60px] md:pb-0">
+          {activeTab === 'dashboard' && allowedTabsList.includes('dashboard') && (
+            <DashboardView
+              inventory={inventory}
+              auditHistory={auditHistory}
+              sales={sales}
+              isLoading={isInventoryLoading}
+              onOpenNewProduct={() => {
+                handleTabChange('inventory');
+                setOpenProductModalTrigger(true);
+              }}
+              onStartAudit={() => handleTabChange('audit')}
+              onNavigateToSales={() => handleTabChange('sales')}
+              onNavigateToPurchases={() => handleTabChange('purchases')}
+              onFilterInventoryByCode={handleFilterInventoryByCode}
+              onNavigateToAudit={() => handleTabChange('audit')}
+            />
+          )}
 
-        {activeTab === 'sales' && allowedTabsList.includes('sales') && (
-          <SalesView
-            inventory={inventory}
-            sales={sales}
-            storeSettings={storeSettings}
-            isLoading={isInventoryLoading}
-            onRecordSale={handleRecordSale}
-            onCancelSale={handleCancelSale}
-            showToast={showToast}
-          />
-        )}
+          {activeTab === 'sales' && allowedTabsList.includes('sales') && (
+            <SalesView
+              inventory={inventory}
+              sales={sales}
+              storeSettings={storeSettings}
+              isLoading={isInventoryLoading}
+              onRecordSale={handleRecordSale}
+              onCancelSale={handleCancelSale}
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'inventory' && allowedTabsList.includes('inventory') && (
-          <InventoryView
-            inventory={inventory}
-            suppliers={suppliers}
-            isLoading={isInventoryLoading}
-            initialSearchCode={inventorySearchQuery}
-            onSaveProduct={handleSaveProduct}
-            onBulkSaveProducts={handleBulkSaveProducts}
-            onDeleteProduct={handleDeleteProduct}
-            onOpenSupplierModal={() => {
-              handleTabChange('suppliers');
-              setOpenSupplierModalTrigger(true);
-            }}
-            showModalInitially={openProductModalTrigger}
-            onCloseInitialModal={() => setOpenProductModalTrigger(false)}
-            showToast={showToast}
-          />
-        )}
+          {activeTab === 'inventory' && allowedTabsList.includes('inventory') && (
+            <InventoryView
+              inventory={inventory}
+              suppliers={suppliers}
+              isLoading={isInventoryLoading}
+              initialSearchCode={inventorySearchQuery}
+              onSaveProduct={handleSaveProduct}
+              onBulkSaveProducts={handleBulkSaveProducts}
+              onDeleteProduct={handleDeleteProduct}
+              onOpenSupplierModal={() => {
+                handleTabChange('suppliers');
+                setOpenSupplierModalTrigger(true);
+              }}
+              showModalInitially={openProductModalTrigger}
+              onCloseInitialModal={() => setOpenProductModalTrigger(false)}
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'price-checker' && allowedTabsList.includes('price-checker') && (
-          <PriceCheckerTab
-            inventory={inventory}
-            showToast={showToast}
-          />
-        )}
+          {activeTab === 'price-checker' && allowedTabsList.includes('price-checker') && (
+            <PriceCheckerTab
+              inventory={inventory}
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'catalog' && allowedTabsList.includes('catalog') && (
-          <DigitalCatalogView
-            storeSettings={storeSettings}
-            inventory={inventory}
-            onSaveSettings={handleSaveStoreSettings}
-            onOpenPreview={() => setIsAdminPreviewMode(true)}
-            showToast={showToast}
-          />
-        )}
+          {activeTab === 'catalog' && allowedTabsList.includes('catalog') && (
+            <DigitalCatalogView
+              storeSettings={storeSettings}
+              inventory={inventory}
+              onSaveSettings={handleSaveStoreSettings}
+              onOpenPreview={() => setIsAdminPreviewMode(true)}
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'purchases' && allowedTabsList.includes('purchases') && (
-          <PurchasesView
-            suppliers={suppliers}
-            inventory={inventory}
-            purchases={purchases}
-            storeSettings={storeSettings}
-            onRecordPurchase={handleRecordPurchase}
-            onCancelPurchase={handleCancelPurchase}
-            onSaveSupplier={handleSaveSupplier}
-            showToast={showToast}
-          />
-        )}
+          {activeTab === 'purchases' && allowedTabsList.includes('purchases') && (
+            <PurchasesView
+              suppliers={suppliers}
+              inventory={inventory}
+              purchases={purchases}
+              storeSettings={storeSettings}
+              onRecordPurchase={handleRecordPurchase}
+              onCancelPurchase={handleCancelPurchase}
+              onSaveSupplier={handleSaveSupplier}
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'audit' && allowedTabsList.includes('audit') && (
-          <AuditView
-            inventory={inventory}
-            suppliers={suppliers}
-            onApplyAuditChanges={handleApplyAuditChanges}
-            showToast={showToast}
-            storeSettings={storeSettings}
-          />
-        )}
+          {activeTab === 'audit' && allowedTabsList.includes('audit') && (
+            <AuditView
+              inventory={inventory}
+              suppliers={suppliers}
+              onApplyAuditChanges={handleApplyAuditChanges}
+              showToast={showToast}
+              storeSettings={storeSettings}
+            />
+          )}
 
-        {activeTab === 'suppliers' && allowedTabsList.includes('suppliers') && (
-          <SuppliersView
-            suppliers={suppliers}
-            inventory={inventory}
-            onSaveSupplier={handleSaveSupplier}
-            onDeleteSupplier={handleDeleteSupplier}
-            showModalInitially={openSupplierModalTrigger}
-            onCloseInitialModal={() => setOpenSupplierModalTrigger(false)}
-          />
-        )}
+          {activeTab === 'suppliers' && allowedTabsList.includes('suppliers') && (
+            <SuppliersView
+              suppliers={suppliers}
+              inventory={inventory}
+              onSaveSupplier={handleSaveSupplier}
+              onDeleteSupplier={handleDeleteSupplier}
+              showModalInitially={openSupplierModalTrigger}
+              onCloseInitialModal={() => setOpenSupplierModalTrigger(false)}
+            />
+          )}
 
-        {activeTab === 'users' && allowedTabsList.includes('users') && (
-          <UserManagementView
-            users={users}
-            storeSettings={storeSettings}
-            onSaveUser={handleSaveUser}
-            onDeleteUser={handleDeleteUser}
-            showToast={showToast}
-          />
-        )}
+          {activeTab === 'users' && allowedTabsList.includes('users') && (
+            <UserManagementView
+              users={users}
+              storeSettings={storeSettings}
+              onSaveUser={handleSaveUser}
+              onDeleteUser={handleDeleteUser}
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'activity' && allowedTabsList.includes('activity') && (
-          <ActivityLogView
-            logs={activityLogs}
-            showToast={showToast}
-          />
-        )}
+          {activeTab === 'activity' && allowedTabsList.includes('activity') && (
+            <ActivityLogView
+              logs={activityLogs}
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'settings' && allowedTabsList.includes('settings') && (
-          <StoreSettingsView
-            currentSettings={storeSettings}
-            onSaveSettings={handleSaveStoreSettings}
-            showToast={showToast}
-            isFirebaseConnected={isFirebaseConnected}
-            lastSyncTime={lastSyncTime}
-            pingLatency={pingLatency}
-            onTestConnection={handleTestConnection}
-            isPinging={isPinging}
-            inventoryCount={inventory.length}
-            suppliersCount={suppliers.length}
-            auditHistoryCount={auditHistory.length}
-            salesCount={sales.length}
-            purchasesCount={purchases.length}
-            onResetData={() => setShowResetConfirm(true)}
-            onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
-          />
-        )}
+          {activeTab === 'settings' && allowedTabsList.includes('settings') && (
+            <StoreSettingsView
+              currentSettings={storeSettings}
+              onSaveSettings={handleSaveStoreSettings}
+              showToast={showToast}
+              isFirebaseConnected={isFirebaseConnected}
+              lastSyncTime={lastSyncTime}
+              pingLatency={pingLatency}
+              onTestConnection={handleTestConnection}
+              isPinging={isPinging}
+              inventoryCount={inventory.length}
+              suppliersCount={suppliers.length}
+              auditHistoryCount={auditHistory.length}
+              salesCount={sales.length}
+              purchasesCount={purchases.length}
+              onResetData={() => setShowResetConfirm(true)}
+              onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
+            />
+          )}
+        </div>
 
-        {/* Mobile Bottom Navigation Dock (< md) — Vertically centered & flush to bottom edge */}
+        {/* Mobile Bottom Navigation Dock (< md) — Fixed 60px height, vertically centered & flush to bottom edge */}
         <nav
           aria-label="Navegación rápida móvil"
-          className="md:hidden fixed bottom-0 left-0 right-0 w-full z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 py-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] select-none"
+          className="md:hidden fixed bottom-0 left-0 right-0 w-full h-[60px] z-30 bg-white border-t border-slate-200 px-1.5 flex items-center justify-center shadow-[0_-4px_16px_rgba(15,23,42,0.08)] select-none"
         >
-          <div className="grid grid-cols-5 items-center max-w-md mx-auto">
+          <div className="grid grid-cols-5 items-center w-full max-w-md mx-auto h-full">
             {/* 1. Left Outer: INICIO (Dashboard) */}
             <button
               type="button"
               onClick={() => handleTabChange('dashboard')}
-              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center h-12 px-1 rounded-xl transition-all cursor-pointer ${
                 activeTab === 'dashboard'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
+                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-2xs'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
               } ${!allowedTabsList.includes('dashboard') ? 'opacity-45' : ''}`}
             >
-              <LayoutGrid className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2] shrink-0" />
-              <span className="text-[9.5px] sm:text-[10.5px] font-extrabold tracking-wide uppercase mt-1 leading-none">
+              <LayoutGrid className="w-5 h-5 stroke-[2.2] shrink-0" />
+              <span className="text-[9px] font-extrabold tracking-wide uppercase mt-1 leading-none whitespace-nowrap">
                 INICIO
               </span>
             </button>
@@ -1151,20 +1153,20 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => handleTabChange('inventory')}
-              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center h-12 px-1 rounded-xl transition-all cursor-pointer ${
                 activeTab === 'inventory'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
+                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-2xs'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
               } ${!allowedTabsList.includes('inventory') ? 'opacity-45' : ''}`}
             >
-              <Package className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.1] shrink-0" />
-              <span className="text-[9px] sm:text-[10px] font-extrabold tracking-tight uppercase mt-1 leading-none truncate max-w-full">
+              <Package className="w-5 h-5 stroke-[2.1] shrink-0" />
+              <span className="text-[8.5px] sm:text-[9px] font-extrabold tracking-tight uppercase mt-1 leading-none whitespace-nowrap">
                 INVENTARIO
               </span>
             </button>
 
             {/* 3. Center Raised Action: VENTAS POS (Sales) */}
-            <div className="flex flex-col items-center justify-center relative -mt-6 z-10">
+            <div className="flex flex-col items-center justify-center relative -mt-5 z-10">
               <button
                 type="button"
                 onClick={() => handleTabChange('sales')}
@@ -1174,24 +1176,24 @@ export const App: React.FC = () => {
               >
                 {/* Raised Emerald Circle with White Bezel */}
                 <div
-                  className={`w-13 h-13 sm:w-14 sm:h-14 rounded-full flex items-center justify-center border-4 border-white transition-all duration-200 group-active:scale-95 ${
+                  className={`w-12 h-12 rounded-full flex items-center justify-center border-[3.5px] border-white transition-all duration-200 group-active:scale-95 ${
                     activeTab === 'sales'
-                      ? 'bg-emerald-600 shadow-[0_6px_20px_rgba(5,150,105,0.45)] ring-2 ring-emerald-500/40'
-                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-[0_6px_16px_rgba(15,23,42,0.18)] ring-1 ring-slate-200'
+                      ? 'bg-emerald-600 shadow-[0_4px_14px_rgba(5,150,105,0.45)] ring-2 ring-emerald-500/40'
+                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-[0_4px_12px_rgba(15,23,42,0.18)] ring-1 ring-slate-200'
                   }`}
                 >
-                  <ShoppingCart className="w-6 h-6 text-white stroke-[2.3] shrink-0" />
+                  <ShoppingCart className="w-5 h-5 text-white stroke-[2.3] shrink-0" />
                 </div>
 
                 {/* Stadium Pill Label */}
                 <div
-                  className={`mt-1 px-2 py-0.5 rounded-full border transition-all shadow-xs flex items-center justify-center ${
+                  className={`mt-0.5 px-2 py-0.5 rounded-full border transition-all shadow-2xs flex items-center justify-center ${
                     activeTab === 'sales'
-                      ? 'bg-emerald-700 border-emerald-600 text-white shadow-[0_2px_8px_rgba(5,150,105,0.3)]'
+                      ? 'bg-emerald-700 border-emerald-600 text-white'
                       : 'bg-slate-800 border-slate-700 text-white'
                   }`}
                 >
-                  <span className="text-[8.5px] sm:text-[9.5px] font-black tracking-wider uppercase whitespace-nowrap leading-none">
+                  <span className="text-[8px] font-black tracking-wider uppercase whitespace-nowrap leading-none">
                     VENTAS POS
                   </span>
                 </div>
@@ -1202,9 +1204,9 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => handleTabChange('price-checker')}
-              className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center h-12 px-0.5 rounded-xl transition-all cursor-pointer ${
                 activeTab === 'price-checker'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
+                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-2xs'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
               } ${!allowedTabsList.includes('price-checker') ? 'opacity-45' : ''}`}
             >
@@ -1216,7 +1218,7 @@ export const App: React.FC = () => {
                 strokeWidth="2.2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="w-5 h-5 sm:w-6 sm:h-6 shrink-0"
+                className="w-5 h-5 shrink-0"
               >
                 <path d="M3 7V5a2 2 0 0 1 2-2h2" />
                 <path d="M17 3h2a2 2 0 0 1 2 2v2" />
@@ -1226,8 +1228,8 @@ export const App: React.FC = () => {
                 <line x1="12" y1="7" x2="12" y2="17" />
                 <line x1="16" y1="7" x2="16" y2="17" />
               </svg>
-              <span className="text-[8px] sm:text-[9px] font-extrabold tracking-tight uppercase mt-1 leading-tight text-center">
-                CONSULTAR PRECIO
+              <span className="text-[7.5px] sm:text-[8.5px] font-extrabold tracking-tighter uppercase mt-1 leading-none whitespace-nowrap">
+                PRECIOS
               </span>
             </button>
 
@@ -1235,14 +1237,14 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => handleTabChange('audit')}
-              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              className={`flex flex-col items-center justify-center h-12 px-1 rounded-xl transition-all cursor-pointer ${
                 activeTab === 'audit'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-xs'
+                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-2xs'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
               } ${!allowedTabsList.includes('audit') ? 'opacity-45' : ''}`}
             >
-              <ClipboardCheck className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.1] shrink-0" />
-              <span className="text-[9.5px] sm:text-[10.5px] font-extrabold tracking-wide uppercase mt-1 leading-none">
+              <ClipboardCheck className="w-5 h-5 stroke-[2.1] shrink-0" />
+              <span className="text-[9px] font-extrabold tracking-wide uppercase mt-1 leading-none whitespace-nowrap">
                 CONTEO
               </span>
             </button>

@@ -135,14 +135,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [inventory]);
 
   return (
-    <div className="flex-1 min-h-0 p-3 sm:p-6 lg:p-8 h-full w-full overflow-y-auto scroll-container bg-slate-50/50 dark:bg-slate-950 transition-colors duration-200 pb-36 md:pb-24">
+    <div className="flex-1 min-h-0 p-3 sm:p-6 lg:p-8 h-full w-full overflow-y-auto scroll-container bg-slate-50/50 dark:bg-slate-950 transition-colors duration-200 pb-20 md:pb-24">
       {/* Header */}
-      <header className="mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
+      <header className="mb-4 sm:mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-3 sm:gap-4">
         <div>
-          <h1 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight">
+          <h1 className="text-2xl sm:text-3xl font-black text-slate-800 dark:text-white tracking-tight">
             Panel de Control
           </h1>
-          <p className="text-slate-500 dark:text-slate-400 font-medium mt-1">
+          <p className="text-xs sm:text-base text-slate-500 dark:text-slate-400 font-medium mt-0.5 sm:mt-1">
             Resumen general y métricas de tu inventario.
           </p>
         </div>

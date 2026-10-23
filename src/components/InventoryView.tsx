@@ -229,18 +229,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   ).filter(Boolean);
 
   return (
-    <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-4 pb-36 md:pb-20">
+    <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-3 sm:space-y-4 pb-20 md:pb-20">
       {/* Header */}
-      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4">
+      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5 sm:gap-4">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-800">Catálogo de Productos</h1>
+          <h1 className="text-lg sm:text-2xl font-bold text-slate-800 leading-tight">Catálogo de Productos</h1>
           <p className="text-xs sm:text-sm text-slate-500">Gestiona todos los artículos de la tienda.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+        <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
           <button
             type="button"
             onClick={() => setIsBulkImportOpen(true)}
-            className="flex-1 sm:flex-initial bg-slate-900 text-white px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer border border-slate-800"
+            className="bg-slate-900 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer border border-slate-800 whitespace-nowrap"
             title="Subir stock o catálogo masivamente desde Excel (.xlsx / .csv) o copiando y pegando"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -249,7 +249,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <button
             type="button"
             onClick={handleOpenCreate}
-            className="flex-1 sm:flex-initial bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+            className="bg-emerald-600 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer whitespace-nowrap"
           >
             <Plus className="w-4 h-4 shrink-0" />
             <span>Nuevo Artículo</span>
