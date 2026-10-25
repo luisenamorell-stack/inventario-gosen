@@ -88,7 +88,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [discountType, setDiscountType] = useState<'amount' | 'percent'>('amount');
+  const [discountValue, setDiscountValue] = useState<string>('');
   const [applyTax, setApplyTax] = useState<boolean>(false); // 15% ISV Honduras optional
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer' | 'other'>('cash');
   const [cashGiven, setCashGiven] = useState<string>('');
@@ -320,7 +321,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   // Clear entire cart
   const clearCart = () => {
     setCart([]);
-    setDiscountPercent(0);
+    setDiscountValue('');
     setCashGiven('');
     setCustomerName('Consumidor Final');
     setCustomerRtn('');
@@ -335,8 +336,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
   }, [cart]);
 
   const discountAmount = useMemo(() => {
-    return (cartSubtotal * Math.min(100, Math.max(0, discountPercent))) / 100;
-  }, [cartSubtotal, discountPercent]);
+    const rawVal = Math.max(0, parseFloat(discountValue) || 0);
+    if (rawVal <= 0 || cartSubtotal <= 0) return 0;
+    if (discountType === 'percent') {
+      const clampedPct = Math.min(100, rawVal);
+      return (cartSubtotal * clampedPct) / 100;
+    }
+    return Math.min(cartSubtotal, rawVal);
+  }, [cartSubtotal, discountValue, discountType]);
 
   const subtotalAfterDiscount = useMemo(() => {
     return Math.max(0, cartSubtotal - discountAmount);
@@ -1377,32 +1384,71 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     </span>
                   </div>
 
-                  {/* Optional Discount selector */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <span>Descuento:</span>
-                      <div className="flex items-center gap-1">
-                        {[0, 5, 10, 15].map((pct) => (
+                  {/* Manual Discount Input (Lempiras L. or Percentage %) */}
+                  <div className="flex items-center justify-between gap-2 py-0.5">
+                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                      <span className="shrink-0 font-medium text-slate-700">Descuento:</span>
+                      <div className="flex items-center bg-slate-200/80 p-0.5 rounded-lg border border-slate-300/70 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setDiscountType('amount')}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
+                            discountType === 'amount'
+                              ? 'bg-slate-800 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title="Descuento manual en Lempiras (L.)"
+                        >
+                          L.
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDiscountType('percent')}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
+                            discountType === 'percent'
+                              ? 'bg-slate-800 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title="Descuento manual en Porcentaje (%)"
+                        >
+                          %
+                        </button>
+                      </div>
+
+                      <div className="relative flex-1 max-w-[130px]">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                          {discountType === 'amount' ? 'L.' : '%'}
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          max={discountType === 'percent' ? 100 : cartSubtotal || undefined}
+                          step="any"
+                          placeholder="0.00"
+                          value={discountValue}
+                          onChange={(e) => setDiscountValue(e.target.value)}
+                          className="w-full pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                        />
+                        {discountValue && (
                           <button
-                            key={pct}
                             type="button"
-                            onClick={() => setDiscountPercent(pct)}
-                            className={`text-[10px] px-1.5 py-0.5 rounded font-bold cursor-pointer ${
-                              discountPercent === pct
-                                ? 'bg-slate-800 text-white'
-                                : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                            }`}
+                            onClick={() => setDiscountValue('')}
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-rose-600 cursor-pointer"
+                            title="Quitar descuento"
                           >
-                            {pct}%
+                            <X className="w-3 h-3" />
                           </button>
-                        ))}
+                        )}
                       </div>
                     </div>
-                    {discountAmount > 0 && (
-                      <span className="font-semibold text-rose-600">
-                        - L. {discountAmount.toFixed(2)}
-                      </span>
-                    )}
+
+                    <span
+                      className={`font-bold shrink-0 ${
+                        discountAmount > 0 ? 'text-rose-600' : 'text-slate-400'
+                      }`}
+                    >
+                      - L. {discountAmount.toFixed(2)}
+                    </span>
                   </div>
 
                   {/* Optional ISV 15% checkbox */}
