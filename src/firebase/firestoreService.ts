@@ -6,7 +6,11 @@ import {
   onSnapshot,
   writeBatch,
   getDocs,
-  getDocFromServer
+  getDoc,
+  getDocFromServer,
+  query,
+  limit,
+  WriteBatch
 } from 'firebase/firestore';
 import { Product, Supplier, AuditHistoryRecord, StoreSettings, SaleRecord, SaleItem, PurchaseInvoice, PurchaseItem, UserAccount, ActivityLogRecord } from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
@@ -64,6 +68,181 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+// ----------------- LOCAL CACHE & 1-READ SYNC STAMP HELPERS -----------------
+
+const CACHE_KEYS = {
+  INVENTORY: 'stockmaster_cached_inventory_v1',
+  INVENTORY_TS: 'stockmaster_inventory_sync_ts_v1',
+  SUPPLIERS: 'stockmaster_cached_suppliers_v1',
+  SALES: 'stockmaster_cached_sales_v1',
+  PURCHASES: 'stockmaster_cached_purchases_v1',
+  AUDIT: 'stockmaster_cached_audit_v1',
+  USERS: 'stockmaster_cached_users_v1',
+  SEEDED: 'stockmaster_seeded_v1',
+};
+
+function safeReadCache<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function safeWriteCache<T>(key: string, data: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (err) {
+    console.warn(`Could not write cache for ${key}:`, err);
+  }
+}
+
+export function getCachedInventory(): Product[] | null {
+  return safeReadCache<Product[]>(CACHE_KEYS.INVENTORY);
+}
+
+export function setCachedInventory(items: Product[], syncTs?: number): void {
+  const sorted = [...items].sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+  safeWriteCache(CACHE_KEYS.INVENTORY, sorted);
+  if (syncTs !== undefined) {
+    try {
+      localStorage.setItem(CACHE_KEYS.INVENTORY_TS, String(syncTs));
+    } catch {}
+  }
+  if (sorted.length > 0) {
+    try {
+      localStorage.setItem(CACHE_KEYS.SEEDED, '1');
+    } catch {}
+  }
+}
+
+export function getCachedSuppliers(): Supplier[] | null {
+  return safeReadCache<Supplier[]>(CACHE_KEYS.SUPPLIERS);
+}
+
+export function setCachedSuppliers(items: Supplier[]): void {
+  safeWriteCache(CACHE_KEYS.SUPPLIERS, items);
+}
+
+export function getCachedSales(): SaleRecord[] | null {
+  return safeReadCache<SaleRecord[]>(CACHE_KEYS.SALES);
+}
+
+export function setCachedSales(items: SaleRecord[]): void {
+  safeWriteCache(CACHE_KEYS.SALES, items);
+}
+
+export function getCachedPurchases(): PurchaseInvoice[] | null {
+  return safeReadCache<PurchaseInvoice[]>(CACHE_KEYS.PURCHASES);
+}
+
+export function setCachedPurchases(items: PurchaseInvoice[]): void {
+  safeWriteCache(CACHE_KEYS.PURCHASES, items);
+}
+
+export function getCachedAuditHistory(): AuditHistoryRecord[] | null {
+  return safeReadCache<AuditHistoryRecord[]>(CACHE_KEYS.AUDIT);
+}
+
+export function setCachedAuditHistory(items: AuditHistoryRecord[]): void {
+  safeWriteCache(CACHE_KEYS.AUDIT, items);
+}
+
+export function getCachedUsers(): UserAccount[] | null {
+  return safeReadCache<UserAccount[]>(CACHE_KEYS.USERS);
+}
+
+export function setCachedUsers(items: UserAccount[]): void {
+  safeWriteCache(CACHE_KEYS.USERS, items);
+}
+
+/**
+ * Updates the lightweight 1-document sync stamp (`settings/sync_state`) whenever
+ * inventory changes, and advances the local timestamp so this device does not
+ * need to re-download the inventory collection.
+ */
+export async function touchInventorySyncStamp(batch?: WriteBatch): Promise<number> {
+  const now = Date.now();
+  const syncRef = doc(db, 'settings', 'sync_state');
+  try {
+    localStorage.setItem(CACHE_KEYS.INVENTORY_TS, String(now));
+  } catch {}
+
+  if (batch) {
+    batch.set(syncRef, { updatedAt: now }, { merge: true });
+    return now;
+  }
+
+  try {
+    await setDoc(syncRef, { updatedAt: now }, { merge: true });
+  } catch (err) {
+    console.warn('Could not update sync_state stamp:', err);
+  }
+  return now;
+}
+
+/**
+ * Smart Inventory Reader:
+ * 1. Checks `settings/sync_state` (1 Firestore document read).
+ * 2. If local cache exists and its timestamp >= remote `updatedAt` (and !forceRefresh),
+ *    returns the cached inventory immediately with 0 collection reads.
+ * 3. Otherwise downloads `inventory` collection once, updates localStorage cache & timestamp.
+ */
+export async function fetchInventorySmart(
+  forceRefresh = false
+): Promise<{ items: Product[]; fromCache: boolean; readsUsed: number }> {
+  const cached = getCachedInventory();
+  const localTs = Number(localStorage.getItem(CACHE_KEYS.INVENTORY_TS) || 0);
+
+  try {
+    const syncRef = doc(db, 'settings', 'sync_state');
+    const syncSnap = await getDoc(syncRef);
+    const remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
+
+    if (!forceRefresh && cached && cached.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
+      return { items: cached, fromCache: true, readsUsed: 1 };
+    }
+
+    const collRef = collection(db, 'inventory');
+    const snapshot = await getDocs(collRef);
+    const items: Product[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      items.push({
+        id: docSnap.id,
+        code: data.code || docSnap.id,
+        name: data.name || '',
+        category: data.category || 'Otros',
+        size: data.size || '',
+        supplier: data.supplier || '',
+        cost: Number(data.cost) || 0,
+        price: Number(data.price) || 0,
+        stock: Number(data.stock) || 0,
+        img: data.img || '',
+      });
+    });
+
+    items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+    const effectiveTs = remoteTs > 0 ? remoteTs : Date.now();
+    setCachedInventory(items, effectiveTs);
+
+    // Initialize sync_state stamp if it did not exist yet
+    if (remoteTs === 0 && items.length > 0) {
+      await setDoc(syncRef, { updatedAt: effectiveTs }, { merge: true }).catch(() => {});
+    }
+
+    return { items, fromCache: false, readsUsed: items.length + 1 };
+  } catch (error) {
+    if (cached && cached.length > 0) {
+      console.warn('Using cached inventory due to connection issue:', error);
+      return { items: cached, fromCache: true, readsUsed: 0 };
+    }
+    handleFirestoreError(error, OperationType.GET, 'inventory');
+  }
+}
+
 // ----------------- REAL-TIME INVENTORY -----------------
 
 export function subscribeToInventory(
@@ -92,6 +271,7 @@ export function subscribeToInventory(
       });
       // Sort alphabetically for stable UI rendering
       items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+      setCachedInventory(items);
       onData(items);
     },
     (error) => {
@@ -105,14 +285,12 @@ export async function saveProductToFirestore(product: Product, oldCode?: string)
   const docId = product.code.trim().replace(/\//g, '_');
   const path = `inventory/${docId}`;
   try {
+    const batch = writeBatch(db);
+
     // If the product code changed, remove previous document to prevent duplicates
     if (oldCode && oldCode.trim() !== product.code.trim()) {
       const oldDocId = oldCode.trim().replace(/\//g, '_');
-      try {
-        await deleteDoc(doc(db, 'inventory', oldDocId));
-      } catch (err) {
-        console.warn('Could not delete old product doc during rename:', err);
-      }
+      batch.delete(doc(db, 'inventory', oldDocId));
     }
 
     const docRef = doc(db, 'inventory', docId);
@@ -129,7 +307,9 @@ export async function saveProductToFirestore(product: Product, oldCode?: string)
     if (product.supplier?.trim()) payload.supplier = product.supplier.trim();
     if (product.img?.trim()) payload.img = product.img.trim();
 
-    await setDoc(docRef, payload, { merge: true });
+    batch.set(docRef, payload, { merge: true });
+    await touchInventorySyncStamp(batch);
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -142,12 +322,15 @@ export async function deleteProductFromFirestore(id: string, code?: string): Pro
   if (code) idsToDelete.add(code.trim());
   if (code) idsToDelete.add(code.trim().replace(/\//g, '_'));
 
+  const batch = writeBatch(db);
   for (const docId of idsToDelete) {
-    try {
-      await deleteDoc(doc(db, 'inventory', docId));
-    } catch (error) {
-      console.warn(`Could not delete doc ${docId}:`, error);
-    }
+    batch.delete(doc(db, 'inventory', docId));
+  }
+  await touchInventorySyncStamp(batch);
+  try {
+    await batch.commit();
+  } catch (error) {
+    console.warn('Could not delete product doc in batch:', error);
   }
 }
 
@@ -208,6 +391,11 @@ export async function bulkSaveProductsToFirestore(
         batch.set(docRef, payload, { merge: true });
       });
 
+      // Touch sync stamp on the final chunk
+      if (i + CHUNK_SIZE >= products.length) {
+        await touchInventorySyncStamp(batch);
+      }
+
       await batch.commit();
     }
   } catch (error) {
@@ -215,7 +403,35 @@ export async function bulkSaveProductsToFirestore(
   }
 }
 
-// ----------------- REAL-TIME SUPPLIERS -----------------
+// ----------------- SUPPLIERS (ON-DEMAND & REAL-TIME) -----------------
+
+export async function fetchSuppliersOnce(forceRefresh = false): Promise<Supplier[]> {
+  const cached = getCachedSuppliers();
+  if (!forceRefresh && cached && cached.length > 0) {
+    return cached;
+  }
+  try {
+    const snapshot = await getDocs(collection(db, 'suppliers'));
+    const suppliers: Supplier[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      suppliers.push({
+        id: docSnap.id,
+        name: data.name || '',
+        contact: data.contact || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        address: data.address || '',
+      });
+    });
+    suppliers.sort((a, b) => a.name.localeCompare(b.name));
+    setCachedSuppliers(suppliers);
+    return suppliers;
+  } catch (error) {
+    if (cached) return cached;
+    handleFirestoreError(error, OperationType.GET, 'suppliers');
+  }
+}
 
 export function subscribeToSuppliers(
   onData: (suppliers: Supplier[]) => void,
@@ -238,6 +454,7 @@ export function subscribeToSuppliers(
         });
       });
       suppliers.sort((a, b) => a.name.localeCompare(b.name));
+      setCachedSuppliers(suppliers);
       onData(suppliers);
     },
     (error) => {
@@ -279,6 +496,7 @@ export async function saveSupplierToFirestore(
         }
       });
       if (count > 0) {
+        await touchInventorySyncStamp(batch);
         await batch.commit();
       }
     }
@@ -303,7 +521,38 @@ export async function deleteSupplierFromFirestore(id: string, name?: string): Pr
   }
 }
 
-// ----------------- REAL-TIME AUDIT HISTORY & ATOMIC COMMIT -----------------
+// ----------------- AUDIT HISTORY & ATOMIC COMMIT -----------------
+
+export async function fetchAuditHistoryOnce(forceRefresh = false): Promise<AuditHistoryRecord[]> {
+  const cached = getCachedAuditHistory();
+  if (!forceRefresh && cached && cached.length > 0) {
+    return cached;
+  }
+  try {
+    const snapshot = await getDocs(collection(db, 'audit_history'));
+    const records: AuditHistoryRecord[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      records.push({
+        id: docSnap.id,
+        date: data.date || '',
+        timestamp: Number(data.timestamp) || Date.now(),
+        match: Number(data.match) || 0,
+        missing: Number(data.missing) || 0,
+        extra: Number(data.extra) || 0,
+        netImpact: Number(data.netImpact) || 0,
+        totalItems: Number(data.totalItems) || 0,
+        scope: data.scope || undefined,
+      });
+    });
+    records.sort((a, b) => a.timestamp - b.timestamp);
+    setCachedAuditHistory(records);
+    return records;
+  } catch (error) {
+    if (cached) return cached;
+    handleFirestoreError(error, OperationType.GET, 'audit_history');
+  }
+}
 
 export function subscribeToAuditHistory(
   onData: (records: AuditHistoryRecord[]) => void,
@@ -329,6 +578,7 @@ export function subscribeToAuditHistory(
       });
       // Sort chronologically ascending
       records.sort((a, b) => a.timestamp - b.timestamp);
+      setCachedAuditHistory(records);
       onData(records);
     },
     (error) => {
@@ -375,6 +625,7 @@ export async function applyAuditChangesToFirestore(
     }
 
     batch.set(auditRef, auditData);
+    await touchInventorySyncStamp(batch);
 
     await batch.commit();
   } catch (error) {
@@ -382,11 +633,22 @@ export async function applyAuditChangesToFirestore(
   }
 }
 
-// ----------------- SEED INITIAL DATA IF EMPTY -----------------
+// ----------------- SEED INITIAL DATA IF EMPTY (OPTIMIZED: MAX 1 READ) -----------------
 
 export async function seedInitialDataIfEmpty(): Promise<boolean> {
   try {
-    const invSnap = await getDocs(collection(db, 'inventory'));
+    // Skip completely (0 reads) if we already know the database has been seeded or cached
+    if (localStorage.getItem(CACHE_KEYS.SEEDED) === '1') {
+      return false;
+    }
+    const cachedInv = getCachedInventory();
+    if (cachedInv && cachedInv.length > 0) {
+      localStorage.setItem(CACHE_KEYS.SEEDED, '1');
+      return false;
+    }
+
+    // Check only 1 document instead of downloading the entire collection
+    const invSnap = await getDocs(query(collection(db, 'inventory'), limit(1)));
     if (invSnap.empty) {
       console.log('Seeding initial products to Firestore...');
       const batch = writeBatch(db);
@@ -419,10 +681,14 @@ export async function seedInitialDataIfEmpty(): Promise<boolean> {
         });
       });
 
+      await touchInventorySyncStamp(batch);
       await batch.commit();
+      localStorage.setItem(CACHE_KEYS.SEEDED, '1');
       console.log('Successfully seeded initial inventory and suppliers to Firestore.');
       return true;
     }
+
+    localStorage.setItem(CACHE_KEYS.SEEDED, '1');
     return false;
   } catch (err) {
     console.warn('Initial seeding check skipped or failed:', err);
@@ -454,6 +720,38 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   address: '',
   accessPassword: 'GOSEN2026',
 };
+
+export async function fetchStoreSettingsOnce(): Promise<StoreSettings> {
+  try {
+    const docRef = doc(db, 'settings', 'store_profile');
+    const snapshot = await getDoc(docRef);
+    if (snapshot.exists()) {
+      const data = snapshot.data();
+      const settings: StoreSettings = {
+        storeName: data.storeName || 'Tienda Gosén',
+        tagline: data.tagline || 'Control de Inventario y Ventas',
+        logoUrl: data.logoUrl || '/store-logo.jpg',
+        phone: data.phone || '',
+        address: data.address || '',
+        accessPassword: data.accessPassword || 'GOSEN2026',
+        whatsappOrderPhone: data.whatsappOrderPhone || '',
+        catalogWelcomeMsg: data.catalogWelcomeMsg || '',
+        updatedAt: Number(data.updatedAt) || Date.now(),
+      };
+      try {
+        localStorage.setItem('stockmaster_store_settings', JSON.stringify(settings));
+      } catch {}
+      return settings;
+    }
+    return DEFAULT_STORE_SETTINGS;
+  } catch (error) {
+    try {
+      const cached = localStorage.getItem('stockmaster_store_settings');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return DEFAULT_STORE_SETTINGS;
+  }
+}
 
 export function subscribeToStoreSettings(
   onData: (settings: StoreSettings) => void,
@@ -497,6 +795,8 @@ export async function saveStoreSettingsToFirestore(settings: StoreSettings): Pro
     phone: settings.phone?.trim() || '',
     address: settings.address?.trim() || '',
     accessPassword: settings.accessPassword?.trim() || 'GOSEN2026',
+    whatsappOrderPhone: settings.whatsappOrderPhone?.trim() || '',
+    catalogWelcomeMsg: settings.catalogWelcomeMsg?.trim() || '',
     updatedAt: Date.now(),
   };
 
@@ -508,6 +808,59 @@ export async function saveStoreSettingsToFirestore(settings: StoreSettings): Pro
 }
 
 // ----------------- SALES & POS OPERATIONS -----------------
+
+export async function fetchSalesOnce(forceRefresh = false): Promise<SaleRecord[]> {
+  const cached = getCachedSales();
+  if (!forceRefresh && cached && cached.length > 0) {
+    return cached;
+  }
+  try {
+    const snapshot = await getDocs(collection(db, 'sales'));
+    const records: SaleRecord[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      records.push({
+        id: docSnap.id,
+        saleNumber: data.saleNumber || `VTA-${docSnap.id.slice(-6)}`,
+        timestamp: Number(data.timestamp) || Date.now(),
+        date: data.date || '',
+        items: Array.isArray(data.items)
+          ? data.items.map((it: any) => ({
+              productId: it.productId || '',
+              code: it.code || '',
+              name: it.name || '',
+              category: it.category || '',
+              size: it.size || '',
+              price: Number(it.price) || 0,
+              cost: Number(it.cost) || 0,
+              quantity: Number(it.quantity) || 1,
+              subtotal: Number(it.subtotal) || 0,
+            }))
+          : [],
+        totalItems: Number(data.totalItems) || 0,
+        subtotal: Number(data.subtotal) || 0,
+        discount: Number(data.discount) || 0,
+        tax: Number(data.tax) || 0,
+        total: Number(data.total) || 0,
+        paymentMethod: data.paymentMethod || 'cash',
+        amountPaid: Number(data.amountPaid) || 0,
+        change: Number(data.change) || 0,
+        customerName: data.customerName || 'Consumidor Final',
+        customerPhone: data.customerPhone || '',
+        customerRtn: data.customerRtn || '',
+        notes: data.notes || '',
+        status: data.status === 'cancelled' ? 'cancelled' : 'completed',
+        cashier: data.cashier || 'Cajero',
+      });
+    });
+    records.sort((a, b) => b.timestamp - a.timestamp);
+    setCachedSales(records);
+    return records;
+  } catch (error) {
+    if (cached) return cached;
+    handleFirestoreError(error, OperationType.GET, 'sales');
+  }
+}
 
 export function subscribeToSales(
   onData: (sales: SaleRecord[]) => void,
@@ -556,6 +909,7 @@ export function subscribeToSales(
       });
       // Sort newest first
       records.sort((a, b) => b.timestamp - a.timestamp);
+      setCachedSales(records);
       onData(records);
     },
     (error) => {
@@ -621,6 +975,7 @@ export async function recordSaleInFirestore(
     };
 
     batch.set(saleRef, payload);
+    await touchInventorySyncStamp(batch);
 
     await batch.commit();
 
@@ -657,6 +1012,7 @@ export async function cancelSaleInFirestore(
 
     // 2. Mark sale as cancelled
     batch.update(saleRef, { status: 'cancelled' });
+    await touchInventorySyncStamp(batch);
 
     await batch.commit();
   } catch (error) {
@@ -673,6 +1029,57 @@ export async function deleteSaleFromFirestore(saleId: string): Promise<void> {
 }
 
 // ----------------- PURCHASES / FACTURAS DE COMPRA -----------------
+
+export async function fetchPurchasesOnce(forceRefresh = false): Promise<PurchaseInvoice[]> {
+  const cached = getCachedPurchases();
+  if (!forceRefresh && cached && cached.length > 0) {
+    return cached;
+  }
+  try {
+    const snapshot = await getDocs(collection(db, 'purchases'));
+    const records: PurchaseInvoice[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      records.push({
+        id: docSnap.id,
+        invoiceNumber: data.invoiceNumber || `FAC-${docSnap.id.slice(-6)}`,
+        supplierId: data.supplierId || '',
+        supplierName: data.supplierName || 'Proveedor',
+        date: data.date || '',
+        timestamp: Number(data.timestamp) || Date.now(),
+        paymentCondition: data.paymentCondition === 'credit' ? 'credit' : 'cash',
+        dueDate: data.dueDate || '',
+        items: Array.isArray(data.items)
+          ? data.items.map((it: any) => ({
+              productId: it.productId || '',
+              code: it.code || '',
+              name: it.name || '',
+              category: it.category || '',
+              size: it.size || '',
+              cost: Number(it.cost) || 0,
+              salePrice: it.salePrice ? Number(it.salePrice) : undefined,
+              quantity: Number(it.quantity) || 1,
+              subtotal: Number(it.subtotal) || 0,
+            }))
+          : [],
+        totalItems: Number(data.totalItems) || 0,
+        subtotal: Number(data.subtotal) || 0,
+        tax: Number(data.tax) || 0,
+        discount: Number(data.discount) || 0,
+        total: Number(data.total) || 0,
+        notes: data.notes || '',
+        status: data.status === 'cancelled' ? 'cancelled' : 'completed',
+        receivedBy: data.receivedBy || 'Administrador',
+      });
+    });
+    records.sort((a, b) => b.timestamp - a.timestamp);
+    setCachedPurchases(records);
+    return records;
+  } catch (error) {
+    if (cached) return cached;
+    handleFirestoreError(error, OperationType.GET, 'purchases');
+  }
+}
 
 export function subscribeToPurchases(
   onData: (purchases: PurchaseInvoice[]) => void,
@@ -719,6 +1126,7 @@ export function subscribeToPurchases(
       });
       // Sort newest first
       records.sort((a, b) => b.timestamp - a.timestamp);
+      setCachedPurchases(records);
       onData(records);
     },
     (error) => {
@@ -814,6 +1222,7 @@ export async function recordPurchaseInFirestore(
     };
 
     batch.set(purchaseRef, invoicePayload);
+    await touchInventorySyncStamp(batch);
 
     await batch.commit();
 
@@ -851,6 +1260,7 @@ export async function cancelPurchaseInFirestore(
 
     // 2. Mark invoice as cancelled
     batch.update(purchaseRef, { status: 'cancelled' });
+    await touchInventorySyncStamp(batch);
 
     await batch.commit();
   } catch (error) {
@@ -867,6 +1277,38 @@ export async function deletePurchaseFromFirestore(purchaseId: string): Promise<v
 }
 
 // ----------------- COLLABORATORS & USERS MANAGEMENT -----------------
+
+export async function fetchUsersOnce(forceRefresh = false): Promise<UserAccount[]> {
+  const cached = getCachedUsers();
+  if (!forceRefresh && cached && cached.length > 0) {
+    return cached;
+  }
+  try {
+    const snapshot = await getDocs(collection(db, 'users'));
+    const records: UserAccount[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      records.push({
+        id: docSnap.id,
+        name: data.name || '',
+        username: data.username || '',
+        password: data.password || '',
+        role: data.role === 'admin' ? 'admin' : 'collaborator',
+        isActive: data.isActive !== false,
+        allowedTabs: Array.isArray(data.allowedTabs) ? data.allowedTabs : ['sales', 'inventory', 'price-checker'],
+        createdAt: Number(data.createdAt) || Date.now(),
+        lastLoginAt: data.lastLoginAt ? Number(data.lastLoginAt) : undefined,
+      });
+    });
+    records.sort((a, b) => a.name.localeCompare(b.name));
+    setCachedUsers(records);
+    return records;
+  } catch (error) {
+    if (cached) return cached;
+    console.warn('Could not fetch users:', error);
+    return [];
+  }
+}
 
 export function subscribeToUsers(
   onData: (users: UserAccount[]) => void,
@@ -892,6 +1334,7 @@ export function subscribeToUsers(
         });
       });
       records.sort((a, b) => a.name.localeCompare(b.name));
+      setCachedUsers(records);
       onData(records);
     },
     (error) => {
@@ -930,6 +1373,31 @@ export async function deleteUserFromFirestore(userId: string): Promise<void> {
 }
 
 // ----------------- ACTIVITY LOGS & MOVEMENT AUDIT TRAIL -----------------
+
+export async function fetchActivityLogsOnce(): Promise<ActivityLogRecord[]> {
+  try {
+    const snapshot = await getDocs(query(collection(db, 'activity_logs'), limit(150)));
+    const records: ActivityLogRecord[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      records.push({
+        id: docSnap.id,
+        timestamp: Number(data.timestamp) || Date.now(),
+        date: data.date || new Date().toLocaleString('es-HN'),
+        userName: data.userName || 'Usuario',
+        userRole: data.userRole === 'admin' ? 'admin' : 'collaborator',
+        action: data.action || '',
+        module: data.module || 'sales',
+        details: data.details || '',
+      });
+    });
+    records.sort((a, b) => b.timestamp - a.timestamp);
+    return records;
+  } catch (error) {
+    console.warn('Could not fetch activity logs:', error);
+    return [];
+  }
+}
 
 export function subscribeToActivityLogs(
   onData: (logs: ActivityLogRecord[]) => void,
@@ -992,4 +1460,5 @@ export async function logActivityInFirestore(
     console.warn('Could not record activity log in Firestore:', error);
   }
 }
+
 

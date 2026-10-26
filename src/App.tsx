@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Product,
   Supplier,
@@ -29,14 +29,26 @@ import { ActivityLogView } from './components/ActivityLogView';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
 import {
-  subscribeToInventory,
-  subscribeToSuppliers,
-  subscribeToAuditHistory,
-  subscribeToStoreSettings,
-  subscribeToSales,
-  subscribeToPurchases,
-  subscribeToUsers,
-  subscribeToActivityLogs,
+  getCachedInventory,
+  setCachedInventory,
+  getCachedSuppliers,
+  setCachedSuppliers,
+  getCachedSales,
+  setCachedSales,
+  getCachedPurchases,
+  setCachedPurchases,
+  getCachedAuditHistory,
+  setCachedAuditHistory,
+  getCachedUsers,
+  setCachedUsers,
+  fetchInventorySmart,
+  fetchStoreSettingsOnce,
+  fetchSuppliersOnce,
+  fetchSalesOnce,
+  fetchPurchasesOnce,
+  fetchAuditHistoryOnce,
+  fetchUsersOnce,
+  fetchActivityLogsOnce,
   saveStoreSettingsToFirestore,
   DEFAULT_STORE_SETTINGS,
   saveProductToFirestore,
@@ -103,14 +115,27 @@ export const App: React.FC = () => {
   });
   const [isAdminPreviewMode, setIsAdminPreviewMode] = useState<boolean>(false);
 
-  // Application Data State
-  const [inventory, setInventory] = useState<Product[]>(INITIAL_INVENTORY);
-  const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
-  const [auditHistory, setAuditHistory] = useState<AuditHistoryRecord[]>(INITIAL_AUDIT_HISTORY);
-  const [sales, setSales] = useState<SaleRecord[]>([]);
-  const [purchases, setPurchases] = useState<PurchaseInvoice[]>([]);
-  const [users, setUsers] = useState<UserAccount[]>([]);
+  // Application Data State — Initialized immediately from localStorage cache (0 reads on paint)
+  const [inventory, setInventory] = useState<Product[]>(() => {
+    const cached = getCachedInventory();
+    return cached && cached.length > 0 ? cached : INITIAL_INVENTORY;
+  });
+  const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
+    const cached = getCachedSuppliers();
+    return cached && cached.length > 0 ? cached : INITIAL_SUPPLIERS;
+  });
+  const [auditHistory, setAuditHistory] = useState<AuditHistoryRecord[]>(() => {
+    const cached = getCachedAuditHistory();
+    return cached && cached.length > 0 ? cached : INITIAL_AUDIT_HISTORY;
+  });
+  const [sales, setSales] = useState<SaleRecord[]>(() => getCachedSales() || []);
+  const [purchases, setPurchases] = useState<PurchaseInvoice[]>(() => getCachedPurchases() || []);
+  const [users, setUsers] = useState<UserAccount[]>(() => getCachedUsers() || []);
   const [activityLogs, setActivityLogs] = useState<ActivityLogRecord[]>([]);
+
+  // Track which secondary collections have been synced during this browser session
+  const loadedModulesRef = useRef<Record<string, boolean>>({});
+  const lastVisibilityCheckRef = useRef<number>(Date.now());
 
   // Store Branding & Profile State
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(() => {
@@ -136,9 +161,12 @@ export const App: React.FC = () => {
     return userSession !== null;
   });
 
-  // Real-time Connection State
+  // Connection & Sync State
   const [isFirebaseConnected, setIsFirebaseConnected] = useState<boolean>(false);
-  const [isConnecting, setIsConnecting] = useState<boolean>(true);
+  const [isConnecting, setIsConnecting] = useState<boolean>(() => {
+    const cached = getCachedInventory();
+    return !(cached && cached.length > 0);
+  });
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [pingLatency, setPingLatency] = useState<number | null>(null);
@@ -160,7 +188,7 @@ export const App: React.FC = () => {
     // Keep skeleton loaders visible briefly after splash exits so Firebase card skeletons transition smoothly
     const skeletonTimer = setTimeout(() => {
       setIsSkeletonTransition(false);
-    }, 3100);
+    }, 2400);
     return () => {
       clearTimeout(exitTimer);
       clearTimeout(hideTimer);
@@ -180,7 +208,7 @@ export const App: React.FC = () => {
     }, durationMs);
     setTimeout(() => {
       setIsSkeletonTransition(false);
-    }, durationMs + 950);
+    }, durationMs + 750);
   };
 
   const isInventoryLoading = isConnecting || isSkeletonTransition || isPinging;
@@ -334,122 +362,196 @@ export const App: React.FC = () => {
     };
   }, [isAuthenticated, activeTab]);
 
-  // Real-time Firestore Subscriptions
+  // 1. Smart Initial Load: Store Settings + 1-Read Inventory Sync Check
   useEffect(() => {
-    // 1. Subscribe to real-time inventory
-    const unsubscribeInv = subscribeToInventory(
-      (items) => {
-        setInventory(items);
-        setIsFirebaseConnected(true);
-        setIsConnecting(false);
-        setLastSyncTime(new Date());
-        setIsSyncing(true);
-        setTimeout(() => setIsSyncing(false), 600);
-      },
-      (err) => {
-        console.error('Inventory real-time error:', err);
-        setIsFirebaseConnected(false);
-        setIsConnecting(false);
-      }
-    );
+    let isMounted = true;
 
-    // 2. Subscribe to real-time suppliers
-    const unsubscribeSup = subscribeToSuppliers(
-      (sups) => {
-        setSuppliers(sups);
-        setIsFirebaseConnected(true);
-        setLastSyncTime(new Date());
-      },
-      (err) => {
-        console.error('Suppliers real-time error:', err);
-      }
-    );
+    const initCoreData = async () => {
+      setIsSyncing(true);
+      try {
+        // Seed check only runs if localStorage has never seen data (max 1 read)
+        if (!isPublicCatalogMode) {
+          await seedInitialDataIfEmpty();
+        }
 
-    // 3. Subscribe to real-time audit history
-    const unsubscribeAudit = subscribeToAuditHistory(
-      (records) => {
-        setAuditHistory(records);
-        setIsFirebaseConnected(true);
-        setLastSyncTime(new Date());
-      },
-      (err) => {
-        console.error('Audit history real-time error:', err);
-      }
-    );
+        const [settings, invResult] = await Promise.all([
+          fetchStoreSettingsOnce(),
+          fetchInventorySmart(false),
+        ]);
 
-    // 4. Subscribe to real-time store settings
-    const unsubscribeSettings = subscribeToStoreSettings(
-      (settings) => {
+        if (!isMounted) return;
         setStoreSettings(settings);
-        try {
-          localStorage.setItem('stockmaster_store_settings', JSON.stringify(settings));
-        } catch {}
-      },
-      (err) => {
-        console.warn('Store settings real-time subscription error:', err);
-      }
-    );
-
-    // 5. Subscribe to real-time sales transactions & history
-    const unsubscribeSales = subscribeToSales(
-      (salesRecords) => {
-        setSales(salesRecords);
+        setInventory(invResult.items);
         setIsFirebaseConnected(true);
+        setIsConnecting(false);
         setLastSyncTime(new Date());
-      },
-      (err) => {
-        console.error('Sales subscription real-time error:', err);
+      } catch (err) {
+        console.error('Error loading core data:', err);
+        if (isMounted) {
+          setIsFirebaseConnected(false);
+          setIsConnecting(false);
+        }
+      } finally {
+        if (isMounted) {
+          setTimeout(() => setIsSyncing(false), 400);
+        }
       }
-    );
+    };
 
-    // 6. Subscribe to real-time purchases from suppliers
-    const unsubscribePurchases = subscribeToPurchases(
-      (purchaseRecords) => {
-        setPurchases(purchaseRecords);
-        setIsFirebaseConnected(true);
-        setLastSyncTime(new Date());
-      },
-      (err) => {
-        console.error('Purchases subscription real-time error:', err);
-      }
-    );
-
-    // 7. Subscribe to real-time collaborator users
-    const unsubscribeUsers = subscribeToUsers(
-      (userList) => {
-        setUsers(userList);
-      },
-      (err) => {
-        console.warn('Users subscription error:', err);
-      }
-    );
-
-    // 8. Subscribe to real-time activity logs
-    const unsubscribeActivity = subscribeToActivityLogs(
-      (logs) => {
-        setActivityLogs(logs);
-      },
-      (err) => {
-        console.warn('Activity logs subscription error:', err);
-      }
-    );
-
-    // Seed check
-    seedInitialDataIfEmpty().catch((err) => {
-      console.warn('Initial seed check error:', err);
-    });
+    initCoreData();
 
     return () => {
-      unsubscribeInv();
-      unsubscribeSup();
-      unsubscribeAudit();
-      unsubscribeSettings();
-      unsubscribeSales();
-      unsubscribePurchases();
-      unsubscribeUsers();
-      unsubscribeActivity();
+      isMounted = false;
     };
+  }, [isPublicCatalogMode]);
+
+  // 2. Load Users on Login Screen (only if not in Public Catalog Mode)
+  useEffect(() => {
+    if (isPublicCatalogMode) return;
+    if (!isAuthenticated && !loadedModulesRef.current['users']) {
+      loadedModulesRef.current['users'] = true;
+      fetchUsersOnce(false)
+        .then((list) => setUsers(list))
+        .catch((err) => console.warn('Users load warning:', err));
+    }
+  }, [isPublicCatalogMode, isAuthenticated]);
+
+  // 3. Lazy-Load Secondary Collections Based on Active Tab (Saves 90%+ unnecessary reads)
+  useEffect(() => {
+    if (isPublicCatalogMode || !isAuthenticated) return;
+
+    const loadTabDependencies = async () => {
+      try {
+        if (activeTab === 'dashboard') {
+          if (!loadedModulesRef.current['sales']) {
+            loadedModulesRef.current['sales'] = true;
+            fetchSalesOnce(false).then(setSales).catch(console.warn);
+          }
+          if (!loadedModulesRef.current['audit']) {
+            loadedModulesRef.current['audit'] = true;
+            fetchAuditHistoryOnce(false).then(setAuditHistory).catch(console.warn);
+          }
+        } else if (activeTab === 'sales') {
+          if (!loadedModulesRef.current['sales']) {
+            loadedModulesRef.current['sales'] = true;
+            fetchSalesOnce(false).then(setSales).catch(console.warn);
+          }
+        } else if (activeTab === 'inventory') {
+          if (!loadedModulesRef.current['suppliers']) {
+            loadedModulesRef.current['suppliers'] = true;
+            fetchSuppliersOnce(false).then(setSuppliers).catch(console.warn);
+          }
+        } else if (activeTab === 'purchases') {
+          if (!loadedModulesRef.current['purchases']) {
+            loadedModulesRef.current['purchases'] = true;
+            fetchPurchasesOnce(false).then(setPurchases).catch(console.warn);
+          }
+          if (!loadedModulesRef.current['suppliers']) {
+            loadedModulesRef.current['suppliers'] = true;
+            fetchSuppliersOnce(false).then(setSuppliers).catch(console.warn);
+          }
+        } else if (activeTab === 'audit') {
+          if (!loadedModulesRef.current['suppliers']) {
+            loadedModulesRef.current['suppliers'] = true;
+            fetchSuppliersOnce(false).then(setSuppliers).catch(console.warn);
+          }
+          if (!loadedModulesRef.current['audit']) {
+            loadedModulesRef.current['audit'] = true;
+            fetchAuditHistoryOnce(false).then(setAuditHistory).catch(console.warn);
+          }
+        } else if (activeTab === 'suppliers') {
+          if (!loadedModulesRef.current['suppliers']) {
+            loadedModulesRef.current['suppliers'] = true;
+            fetchSuppliersOnce(false).then(setSuppliers).catch(console.warn);
+          }
+        } else if (activeTab === 'users') {
+          if (!loadedModulesRef.current['users']) {
+            loadedModulesRef.current['users'] = true;
+            fetchUsersOnce(false).then(setUsers).catch(console.warn);
+          }
+        } else if (activeTab === 'activity') {
+          if (!loadedModulesRef.current['activity']) {
+            loadedModulesRef.current['activity'] = true;
+            fetchActivityLogsOnce().then(setActivityLogs).catch(console.warn);
+          }
+        }
+      } catch (err) {
+        console.warn('Lazy module load warning:', err);
+      }
+    };
+
+    loadTabDependencies();
+  }, [activeTab, isAuthenticated, isPublicCatalogMode]);
+
+  // 4. Lightweight 1-Read Sync Check When Returning to Tab After > 5 Minutes
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const elapsed = Date.now() - lastVisibilityCheckRef.current;
+        if (elapsed > 5 * 60 * 1000) {
+          lastVisibilityCheckRef.current = Date.now();
+          fetchInventorySmart(false)
+            .then((res) => {
+              if (!res.fromCache) {
+                setInventory(res.items);
+                setLastSyncTime(new Date());
+              }
+            })
+            .catch(() => {});
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
+
+  // Manual Cloud Sync Button Handler
+  const handleManualSync = useCallback(async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const [invResult, settings] = await Promise.all([
+        fetchInventorySmart(true),
+        fetchStoreSettingsOnce(),
+      ]);
+      setInventory(invResult.items);
+      setStoreSettings(settings);
+
+      // Also refresh current active tab's secondary data if applicable
+      if (activeTab === 'sales' || activeTab === 'dashboard') {
+        const freshSales = await fetchSalesOnce(true);
+        setSales(freshSales);
+      } else if (activeTab === 'purchases') {
+        const [freshPurchases, freshSuppliers] = await Promise.all([
+          fetchPurchasesOnce(true),
+          fetchSuppliersOnce(true),
+        ]);
+        setPurchases(freshPurchases);
+        setSuppliers(freshSuppliers);
+      } else if (activeTab === 'suppliers' || activeTab === 'inventory') {
+        const freshSuppliers = await fetchSuppliersOnce(true);
+        setSuppliers(freshSuppliers);
+      } else if (activeTab === 'audit') {
+        const freshAudit = await fetchAuditHistoryOnce(true);
+        setAuditHistory(freshAudit);
+      } else if (activeTab === 'users') {
+        const freshUsers = await fetchUsersOnce(true);
+        setUsers(freshUsers);
+      } else if (activeTab === 'activity') {
+        const freshLogs = await fetchActivityLogsOnce();
+        setActivityLogs(freshLogs);
+      }
+
+      setIsFirebaseConnected(true);
+      setLastSyncTime(new Date());
+      showToast(`Inventario sincronizado con la nube (${invResult.items.length} artículos)`, 'success');
+    } catch (err: any) {
+      console.error('Manual sync error:', err);
+      showToast('No se pudo sincronizar con la nube. Usando datos en caché.', 'warning');
+    } finally {
+      setTimeout(() => setIsSyncing(false), 400);
+    }
+  }, [activeTab, isSyncing]);
 
   // Save Store Settings
   const handleSaveStoreSettings = async (newSettings: StoreSettings) => {
@@ -483,7 +585,7 @@ export const App: React.FC = () => {
         setPingLatency(result.latencyMs);
         setIsFirebaseConnected(true);
         setLastSyncTime(new Date());
-        showToast(`Conexión en tiempo real con Firestore activa (${result.latencyMs}ms)`, 'success');
+        showToast(`Conexión con Firestore activa (${result.latencyMs}ms)`, 'success');
       } else {
         setIsFirebaseConnected(false);
         showToast(`Error al conectar con Firestore: ${result.error || 'Desconocido'}`, 'error');
@@ -496,18 +598,21 @@ export const App: React.FC = () => {
     }
   };
 
-  // Inventory Handlers
+  // Inventory Handlers (Optimistic local + cache update, 0 collection re-reads)
   const handleSaveProduct = async (product: Product, oldCode?: string) => {
     setIsSyncing(true);
     try {
       setInventory((prev) => {
         const index = prev.findIndex((p) => p.code.toLowerCase() === (oldCode || product.code).toLowerCase());
+        let next: Product[];
         if (index >= 0) {
-          const copy = [...prev];
-          copy[index] = product;
-          return copy;
+          next = [...prev];
+          next[index] = product;
+        } else {
+          next = [product, ...prev];
         }
-        return [product, ...prev];
+        setCachedInventory(next, Date.now());
+        return next;
       });
 
       await saveProductToFirestore(product, oldCode);
@@ -537,16 +642,22 @@ export const App: React.FC = () => {
   ) => {
     setIsSyncing(true);
     try {
-      // Optimistic local state update
+      // Optimistic local state & cache update
       if (newSuppliers.length > 0) {
-        setSuppliers((prev) => [...prev, ...newSuppliers]);
+        setSuppliers((prev) => {
+          const nextSup = [...prev, ...newSuppliers];
+          setCachedSuppliers(nextSup);
+          return nextSup;
+        });
       }
 
       setInventory((prev) => {
         const map = new Map<string, Product>();
         prev.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
         productsToSave.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
-        return Array.from(map.values());
+        const nextInv = Array.from(map.values());
+        setCachedInventory(nextInv, Date.now());
+        return nextInv;
       });
 
       await bulkSaveProductsToFirestore(productsToSave, newSuppliers);
@@ -581,7 +692,11 @@ export const App: React.FC = () => {
       const itemToDelete = inventory.find((p) => p.id === id);
       const code = itemToDelete?.code;
 
-      setInventory((prev) => prev.filter((p) => p.id !== id && (code ? p.code !== code : true)));
+      setInventory((prev) => {
+        const next = prev.filter((p) => p.id !== id && (code ? p.code !== code : true));
+        setCachedInventory(next, Date.now());
+        return next;
+      });
 
       await deleteProductFromFirestore(id, code);
       setLastSyncTime(new Date());
@@ -593,7 +708,7 @@ export const App: React.FC = () => {
         module: 'inventory',
       });
 
-      showToast('Artículo eliminado en tiempo real', 'info');
+      showToast('Artículo eliminado correctamente', 'info');
     } catch (err: any) {
       console.error('Error deleting product:', err);
       showToast('Error al eliminar: ' + (err.message || 'desconocido'), 'error');
@@ -608,13 +723,20 @@ export const App: React.FC = () => {
     try {
       setSuppliers((prev) => {
         const index = prev.findIndex((s) => s.id === supplier.id);
-        if (index >= 0) {
-          const copy = [...prev];
-          copy[index] = supplier;
-          return copy;
-        }
-        return [...prev, supplier];
+        const next = index >= 0 ? prev.map((s, i) => (i === index ? supplier : s)) : [...prev, supplier];
+        setCachedSuppliers(next);
+        return next;
       });
+
+      if (oldName && oldName !== supplier.name) {
+        setInventory((prev) => {
+          const nextInv = prev.map((item) =>
+            item.supplier === oldName ? { ...item, supplier: supplier.name.trim() } : item
+          );
+          setCachedInventory(nextInv, Date.now());
+          return nextInv;
+        });
+      }
 
       await saveSupplierToFirestore(supplier, oldName, inventory);
       setLastSyncTime(new Date());
@@ -639,7 +761,11 @@ export const App: React.FC = () => {
     setIsSyncing(true);
     try {
       const supToDelete = suppliers.find((s) => s.id === id);
-      setSuppliers((prev) => prev.filter((s) => s.id !== id));
+      setSuppliers((prev) => {
+        const next = prev.filter((s) => s.id !== id);
+        setCachedSuppliers(next);
+        return next;
+      });
       await deleteSupplierFromFirestore(id, supToDelete?.name);
       setLastSyncTime(new Date());
 
@@ -668,7 +794,12 @@ export const App: React.FC = () => {
     setIsSyncing(true);
     try {
       setInventory(updatedInventory);
-      setAuditHistory((prev) => [...prev, historyRecord]);
+      setCachedInventory(updatedInventory, Date.now());
+      setAuditHistory((prev) => {
+        const next = [...prev, historyRecord];
+        setCachedAuditHistory(next);
+        return next;
+      });
 
       await applyAuditChangesToFirestore(updatedInventory, historyRecord, auditedCodes);
       setLastSyncTime(new Date());
@@ -695,7 +826,7 @@ export const App: React.FC = () => {
     handleTabChange('inventory');
   };
 
-  // Sales Handlers
+  // Sales Handlers (Direct local stock deduction + cache update, 0 collection re-reads)
   const handleRecordSale = async (saleData: Omit<SaleRecord, 'id'>) => {
     setIsSyncing(true);
     try {
@@ -706,6 +837,30 @@ export const App: React.FC = () => {
       };
 
       const recorded = await recordSaleInFirestore(payload, inventory);
+
+      // Update local inventory stock & cache directly
+      setInventory((prev) => {
+        const nextInv = prev.map((prod) => {
+          const soldItem = saleData.items.find(
+            (it) => it.code.trim().toLowerCase() === prod.code.trim().toLowerCase() || it.productId === prod.id
+          );
+          if (!soldItem) return prod;
+          return {
+            ...prod,
+            stock: Math.max(0, (Number(prod.stock) || 0) - (Number(soldItem.quantity) || 1)),
+          };
+        });
+        setCachedInventory(nextInv, Date.now());
+        return nextInv;
+      });
+
+      // Prepend sale to local sales state & cache
+      setSales((prev) => {
+        const nextSales = [recorded, ...prev];
+        setCachedSales(nextSales);
+        return nextSales;
+      });
+
       setLastSyncTime(new Date());
 
       logActivityInFirestore({
@@ -726,6 +881,29 @@ export const App: React.FC = () => {
     setIsSyncing(true);
     try {
       await cancelSaleInFirestore(sale, inventory);
+
+      // Restore local inventory stock & cache directly
+      setInventory((prev) => {
+        const nextInv = prev.map((prod) => {
+          const soldItem = sale.items.find(
+            (it) => it.code.trim().toLowerCase() === prod.code.trim().toLowerCase() || it.productId === prod.id
+          );
+          if (!soldItem) return prod;
+          return {
+            ...prod,
+            stock: (Number(prod.stock) || 0) + (Number(soldItem.quantity) || 1),
+          };
+        });
+        setCachedInventory(nextInv, Date.now());
+        return nextInv;
+      });
+
+      setSales((prev) => {
+        const nextSales = prev.map((s) => (s.id === sale.id ? { ...s, status: 'cancelled' as const } : s));
+        setCachedSales(nextSales);
+        return nextSales;
+      });
+
       setLastSyncTime(new Date());
 
       logActivityInFirestore({
@@ -740,7 +918,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // Supplier Purchases Handlers
+  // Supplier Purchases Handlers (Direct local stock addition + cache update)
   const handleRecordPurchase = async (purchaseData: Omit<PurchaseInvoice, 'id'>) => {
     setIsSyncing(true);
     try {
@@ -751,6 +929,49 @@ export const App: React.FC = () => {
       };
 
       const recorded = await recordPurchaseInFirestore(payload, inventory);
+
+      setInventory((prev) => {
+        const map = new Map<string, Product>();
+        prev.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
+
+        purchaseData.items.forEach((item) => {
+          const key = item.code.trim().toLowerCase();
+          const existing = map.get(key);
+          if (existing) {
+            map.set(key, {
+              ...existing,
+              stock: (Number(existing.stock) || 0) + (Number(item.quantity) || 0),
+              cost: Number(item.cost) || existing.cost,
+              price: item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : existing.price,
+              supplier: existing.supplier || purchaseData.supplierName,
+            });
+          } else {
+            map.set(key, {
+              id: item.code.trim().replace(/\//g, '_'),
+              code: item.code.trim(),
+              name: item.name.trim(),
+              category: item.category?.trim() || 'General',
+              size: item.size?.trim() || '',
+              supplier: purchaseData.supplierName.trim(),
+              cost: Number(item.cost) || 0,
+              price: item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : (Number(item.cost) || 0) * 1.35,
+              stock: Number(item.quantity) || 0,
+              img: '',
+            });
+          }
+        });
+
+        const nextInv = Array.from(map.values());
+        setCachedInventory(nextInv, Date.now());
+        return nextInv;
+      });
+
+      setPurchases((prev) => {
+        const nextPurchases = [recorded, ...prev];
+        setCachedPurchases(nextPurchases);
+        return nextPurchases;
+      });
+
       setLastSyncTime(new Date());
 
       logActivityInFirestore({
@@ -771,6 +992,28 @@ export const App: React.FC = () => {
     setIsSyncing(true);
     try {
       await cancelPurchaseInFirestore(purchase, inventory);
+
+      setInventory((prev) => {
+        const nextInv = prev.map((prod) => {
+          const purchasedItem = purchase.items.find(
+            (it) => it.code.trim().toLowerCase() === prod.code.trim().toLowerCase() || it.productId === prod.id
+          );
+          if (!purchasedItem) return prod;
+          return {
+            ...prod,
+            stock: Math.max(0, (Number(prod.stock) || 0) - (Number(purchasedItem.quantity) || 0)),
+          };
+        });
+        setCachedInventory(nextInv, Date.now());
+        return nextInv;
+      });
+
+      setPurchases((prev) => {
+        const nextPurchases = prev.map((p) => (p.id === purchase.id ? { ...p, status: 'cancelled' as const } : p));
+        setCachedPurchases(nextPurchases);
+        return nextPurchases;
+      });
+
       setLastSyncTime(new Date());
 
       logActivityInFirestore({
@@ -788,7 +1031,17 @@ export const App: React.FC = () => {
   const handleSaveUser = async (userPayload: UserAccount) => {
     setIsSyncing(true);
     try {
-      await saveUserToFirestore(userPayload);
+      const userId = userPayload.id || `usr_${Date.now()}`;
+      const normalizedUser: UserAccount = { ...userPayload, id: userId };
+
+      setUsers((prev) => {
+        const idx = prev.findIndex((u) => u.id === userId);
+        const next = idx >= 0 ? prev.map((u, i) => (i === idx ? normalizedUser : u)) : [...prev, normalizedUser];
+        setCachedUsers(next);
+        return next;
+      });
+
+      await saveUserToFirestore(normalizedUser);
       setLastSyncTime(new Date());
 
       logActivityInFirestore({
@@ -806,6 +1059,12 @@ export const App: React.FC = () => {
   const handleDeleteUser = async (userId: string) => {
     setIsSyncing(true);
     try {
+      setUsers((prev) => {
+        const next = prev.filter((u) => u.id !== userId);
+        setCachedUsers(next);
+        return next;
+      });
+
       await deleteUserFromFirestore(userId);
       setLastSyncTime(new Date());
 
@@ -933,18 +1192,25 @@ export const App: React.FC = () => {
                 {storeSettings.storeName || 'Tienda Gosén'}
               </span>
             </div>
-
-            {/* Subtle background syncing spinner */}
-            {isSyncing && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 animate-pulse shrink-0">
-                <RefreshCw className="w-3 h-3 animate-spin text-emerald-600" />
-                <span className="hidden md:inline">Sincronizando...</span>
-              </span>
-            )}
           </div>
 
-          {/* Right Controls: User Profile Badge, Install App & Logout */}
+          {/* Right Controls: Manual Cloud Sync Button, User Profile Badge, Install App & Logout */}
           <div className="flex items-center gap-1.5 sm:gap-2 text-slate-600 shrink-0">
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              title="Sincronizar cambios recientes desde la nube (Modo ahorro de lecturas activo)"
+              className={`inline-flex items-center justify-center gap-1.5 p-2 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shrink-0 ${
+                isSyncing
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border-slate-200/80 hover:border-emerald-200 active:scale-95'
+              }`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
+            </button>
+
             {userSession && (
               <div
                 className="flex items-center justify-center gap-1.5 p-2 sm:px-3 sm:py-1.5 rounded-xl bg-slate-100 border border-slate-200/80 text-xs font-bold shrink-0"
