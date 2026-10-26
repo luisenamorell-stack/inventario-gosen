@@ -4,6 +4,9 @@ import {
   SaleRecord,
   SaleItem,
   StoreSettings,
+  UserSession,
+  UserAccount,
+  UserRole,
 } from '../types';
 import {
   ShoppingCart,
@@ -39,7 +42,9 @@ import {
   ChevronLeft,
   Copy,
   MessageCircle,
-  Share2
+  Share2,
+  ShieldCheck,
+  Users,
 } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
 import { playSound } from '../utils/audio';
@@ -64,6 +69,8 @@ interface SalesViewProps {
   inventory: Product[];
   sales: SaleRecord[];
   storeSettings: StoreSettings;
+  userSession?: UserSession | null;
+  users?: UserAccount[];
   isLoading?: boolean;
   onRecordSale: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
   onCancelSale: (sale: SaleRecord) => Promise<void>;
@@ -74,6 +81,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
   inventory,
   sales,
   storeSettings,
+  userSession,
+  users = [],
   isLoading = false,
   onRecordSale,
   onCancelSale,
@@ -116,6 +125,56 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [historyDateFilter, setHistoryDateFilter] = useState<'today' | 'yesterday' | 'week' | 'month' | 'all'>('today');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'completed' | 'cancelled'>('all');
   const [historyPaymentFilter, setHistoryPaymentFilter] = useState<'all' | 'cash' | 'card' | 'transfer'>('all');
+  const [historySellerFilter, setHistorySellerFilter] = useState<'all' | 'admin' | 'collaborator'>('all');
+
+  // Helper to resolve who made a sale (Name + Role: Administrador vs Colaborador)
+  const getSaleSellerInfo = (
+    sale: SaleRecord
+  ): { name: string; role: UserRole; roleLabel: 'Administrador' | 'Colaborador' } => {
+    const rawCashier = (sale.cashier || '').trim();
+    const lowerCashier = rawCashier.toLowerCase();
+
+    // Check if explicitly saved role exists
+    let resolvedRole: UserRole | undefined =
+      sale.cashierRole === 'admin' || sale.cashierRole === 'collaborator'
+        ? sale.cashierRole
+        : undefined;
+
+    // If not explicitly saved on older records, check against registered users or standard admin labels
+    if (!resolvedRole) {
+      const matchedCollaborator = users.find(
+        (u) =>
+          u.name.trim().toLowerCase() === lowerCashier ||
+          u.username.trim().toLowerCase() === lowerCashier
+      );
+      if (matchedCollaborator) {
+        resolvedRole = matchedCollaborator.role || 'collaborator';
+      } else if (
+        !rawCashier ||
+        lowerCashier === 'administrador' ||
+        lowerCashier === 'admin' ||
+        lowerCashier === 'caja principal' ||
+        lowerCashier === 'cajero'
+      ) {
+        resolvedRole = 'admin';
+      } else {
+        resolvedRole = 'collaborator';
+      }
+    }
+
+    const displayName =
+      !rawCashier || lowerCashier === 'caja principal' || lowerCashier === 'cajero'
+        ? resolvedRole === 'admin'
+          ? 'Administrador'
+          : rawCashier || 'Colaborador'
+        : rawCashier;
+
+    return {
+      name: displayName,
+      role: resolvedRole,
+      roleLabel: resolvedRole === 'admin' ? 'Administrador' : 'Colaborador',
+    };
+  };
 
   // Cancel sale dialog state
   const [saleToCancel, setSaleToCancel] = useState<SaleRecord | null>(null);
@@ -431,7 +490,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
         customerPhone: customerPhone.trim() || undefined,
         notes: saleNotes.trim() || undefined,
         status: 'completed',
-        cashier: 'Caja Principal',
+        cashier: userSession?.userName || 'Administrador',
+        cashierRole: userSession?.role || 'admin',
       };
 
       const result = await onRecordSale(saleData);
@@ -530,9 +590,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
     if (sale.customerPhone) {
       text += `*Teléfono:* ${sale.customerPhone}\n`;
     }
-    if (sale.cashier) {
-      text += `*Cajero:* ${sale.cashier}\n`;
-    }
+    const sellerInfo = getSaleSellerInfo(sale);
+    text += `*Atendido por:* ${sellerInfo.name} (${sellerInfo.roleLabel})\n`;
     if (sale.status === 'cancelled') {
       text += `\n⚠️ *VENTA ANULADA*\n`;
     }
@@ -541,8 +600,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
     sale.items.forEach((item) => {
       const sizeStr = item.size ? ` (Talla: ${item.size})` : '';
+      const codeStr = item.code ? `Cód: ${item.code} • ` : '';
       text += `• *${item.quantity}x* ${item.name}${sizeStr}\n`;
-      text += `  ↳ L. ${item.subtotal.toFixed(2)}  _(L. ${item.price.toFixed(2)} c/u)_\n`;
+      text += `  ↳ ${codeStr}L. ${item.subtotal.toFixed(2)}  _(L. ${item.price.toFixed(2)} c/u)_\n`;
     });
 
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -654,20 +714,29 @@ export const SalesView: React.FC<SalesViewProps> = ({
       // Payment filter
       if (historyPaymentFilter !== 'all' && s.paymentMethod !== historyPaymentFilter) return false;
 
-      // Search query (sale number, customer name, rtn, or item name/code)
+      const sellerInfo = getSaleSellerInfo(s);
+
+      // Seller Role filter (Administrador vs Colaborador)
+      if (historySellerFilter !== 'all' && sellerInfo.role !== historySellerFilter) return false;
+
+      // Search query (sale number, customer name, rtn, seller name/role, or item name/code)
       if (q) {
         const matchesSaleNum = s.saleNumber.toLowerCase().includes(q);
         const matchesCustomer = (s.customerName || '').toLowerCase().includes(q);
         const matchesRtn = (s.customerRtn || '').toLowerCase().includes(q);
+        const matchesSeller =
+          sellerInfo.name.toLowerCase().includes(q) ||
+          sellerInfo.roleLabel.toLowerCase().includes(q);
         const matchesItem = s.items.some(
           (it) => it.name.toLowerCase().includes(q) || it.code.toLowerCase().includes(q)
         );
-        if (!matchesSaleNum && !matchesCustomer && !matchesRtn && !matchesItem) return false;
+        if (!matchesSaleNum && !matchesCustomer && !matchesRtn && !matchesSeller && !matchesItem)
+          return false;
       }
 
       return true;
     }).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-  }, [sales, historySearch, historyDateFilter, historyStatusFilter, historyPaymentFilter]);
+  }, [sales, users, historySearch, historyDateFilter, historyStatusFilter, historyPaymentFilter, historySellerFilter]);
 
   // Overall statistics for sales
   const salesMetrics = useMemo(() => {
@@ -726,6 +795,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
       'Fecha',
       'Cliente',
       'RTN/DNI',
+      'Vendedor / Usuario',
+      'Rol Vendedor',
       'Método de Pago',
       'Artículos (Cant)',
       'Subtotal (L)',
@@ -738,22 +809,27 @@ export const SalesView: React.FC<SalesViewProps> = ({
       'Detalle Productos',
     ];
 
-    const rows = filteredSalesHistory.map((s) => [
-      `"${s.saleNumber}"`,
-      `"${s.date}"`,
-      `"${s.customerName || 'Consumidor Final'}"`,
-      `"${s.customerRtn || ''}"`,
-      `"${s.paymentMethod}"`,
-      s.totalItems,
-      s.subtotal.toFixed(2),
-      s.discount.toFixed(2),
-      s.tax.toFixed(2),
-      s.total.toFixed(2),
-      s.amountPaid.toFixed(2),
-      s.change.toFixed(2),
-      `"${s.status === 'completed' ? 'Completada' : 'Anulada'}"`,
-      `"${s.items.map((it) => `${it.quantity}x ${it.name} (${it.code})`).join('; ')}"`,
-    ]);
+    const rows = filteredSalesHistory.map((s) => {
+      const seller = getSaleSellerInfo(s);
+      return [
+        `"${s.saleNumber}"`,
+        `"${s.date}"`,
+        `"${s.customerName || 'Consumidor Final'}"`,
+        `"${s.customerRtn || ''}"`,
+        `"${seller.name}"`,
+        `"${seller.roleLabel}"`,
+        `"${s.paymentMethod}"`,
+        s.totalItems,
+        s.subtotal.toFixed(2),
+        s.discount.toFixed(2),
+        s.tax.toFixed(2),
+        s.total.toFixed(2),
+        s.amountPaid.toFixed(2),
+        s.change.toFixed(2),
+        `"${s.status === 'completed' ? 'Completada' : 'Anulada'}"`,
+        `"${s.items.map((it) => `${it.quantity}x ${it.name} (${it.code})`).join('; ')}"`,
+      ];
+    });
 
     const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
@@ -1574,12 +1650,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
           {/* History Filters & Action Toolbar */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-            {/* Search Box */}
+              {/* Search Box */}
             <div className="relative flex-1 max-w-md">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 type="text"
-                placeholder="Buscar por N° de venta, cliente o producto..."
+                placeholder="Buscar por N° de venta, cliente, vendedor o producto..."
                 value={historySearch}
                 onChange={(e) => setHistorySearch(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -1650,6 +1726,18 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </button>
               </div>
 
+              {/* Seller Role Filter */}
+              <select
+                value={historySellerFilter}
+                onChange={(e) => setHistorySellerFilter(e.target.value as any)}
+                className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                title="Filtrar por quién realizó la venta"
+              >
+                <option value="all">Vendedor: Todos</option>
+                <option value="admin">Administrador</option>
+                <option value="collaborator">Colaboradores</option>
+              </select>
+
               {/* Status Filter */}
               <select
                 value={historyStatusFilter}
@@ -1690,6 +1778,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 <div className="sm:hidden p-2.5 space-y-2.5">
                   {filteredSalesHistory.map((sale) => {
                     const isCancelled = sale.status === 'cancelled';
+                    const sellerInfo = getSaleSellerInfo(sale);
                     return (
                       <div
                         key={sale.id}
@@ -1729,6 +1818,30 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               L. {sale.total.toFixed(2)}
                             </span>
                           </div>
+                        </div>
+
+                        {/* Seller / Cashier Info Row on Mobile */}
+                        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-100 text-xs">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            {sellerInfo.role === 'admin' ? (
+                              <ShieldCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            ) : (
+                              <User className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            )}
+                            <span className="text-slate-500 text-[11px] shrink-0">Vendedor:</span>
+                            <span className="font-bold text-slate-800 truncate">
+                              {sellerInfo.name}
+                            </span>
+                          </div>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-md border shrink-0 ${
+                              sellerInfo.role === 'admin'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                            }`}
+                          >
+                            {sellerInfo.roleLabel}
+                          </span>
                         </div>
 
                         {/* Preview of sold items inside the mobile card */}
@@ -1810,6 +1923,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       <th className="py-3 px-4">N° Venta</th>
                       <th className="py-3 px-4">Fecha y Hora</th>
                       <th className="py-3 px-4">Cliente</th>
+                      <th className="py-3 px-4">Vendedor / Usuario</th>
                       <th className="py-3 px-4">Artículos</th>
                       <th className="py-3 px-4">Método</th>
                       <th className="py-3 px-4 text-right">Total</th>
@@ -1820,6 +1934,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   <tbody className="divide-y divide-slate-100 text-slate-700">
                     {filteredSalesHistory.map((sale) => {
                       const isCancelled = sale.status === 'cancelled';
+                      const sellerInfo = getSaleSellerInfo(sale);
 
                       return (
                         <tr
@@ -1841,6 +1956,27 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 RTN: {sale.customerRtn}
                               </div>
                             )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-col items-start gap-1">
+                              <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                                {sellerInfo.role === 'admin' ? (
+                                  <ShieldCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                ) : (
+                                  <User className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                )}
+                                <span>{sellerInfo.name}</span>
+                              </span>
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                  sellerInfo.role === 'admin'
+                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                    : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                }`}
+                              >
+                                {sellerInfo.roleLabel}
+                              </span>
+                            </div>
                           </td>
                           <td className="py-3 px-4">
                             <span className="inline-flex items-center gap-1 font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full text-xs">
@@ -2008,8 +2144,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     </div>
                   )}
                   <div className="flex justify-between gap-2">
-                    <span className="text-slate-500 shrink-0">Cajero:</span>
-                    <span className="text-right">{completedSale.cashier || 'Caja Principal'}</span>
+                    <span className="text-slate-500 shrink-0">Atendido por:</span>
+                    <span className="font-semibold text-right">
+                      {getSaleSellerInfo(completedSale).name} ({getSaleSellerInfo(completedSale).roleLabel})
+                    </span>
                   </div>
                   {completedSale.status === 'cancelled' && (
                     <div className="text-center py-1 text-rose-600 font-bold border border-rose-300 rounded bg-rose-50 my-1">

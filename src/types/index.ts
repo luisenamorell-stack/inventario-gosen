@@ -134,6 +134,7 @@ export interface SaleRecord {
   notes?: string;
   status: 'completed' | 'cancelled';
   cashier?: string;
+  cashierRole?: UserRole;
 }
 
 export interface PurchaseItem {

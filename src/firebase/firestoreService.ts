@@ -850,7 +850,11 @@ export async function fetchSalesOnce(forceRefresh = false): Promise<SaleRecord[]
         customerRtn: data.customerRtn || '',
         notes: data.notes || '',
         status: data.status === 'cancelled' ? 'cancelled' : 'completed',
-        cashier: data.cashier || 'Cajero',
+        cashier: data.cashier || 'Administrador',
+        cashierRole:
+          data.cashierRole === 'admin' || data.cashierRole === 'collaborator'
+            ? data.cashierRole
+            : undefined,
       });
     });
     records.sort((a, b) => b.timestamp - a.timestamp);
@@ -904,7 +908,11 @@ export function subscribeToSales(
           customerRtn: data.customerRtn || '',
           notes: data.notes || '',
           status: data.status === 'cancelled' ? 'cancelled' : 'completed',
-          cashier: data.cashier || 'Cajero',
+          cashier: data.cashier || 'Administrador',
+          cashierRole:
+            data.cashierRole === 'admin' || data.cashierRole === 'collaborator'
+              ? data.cashierRole
+              : undefined,
         });
       });
       // Sort newest first
@@ -971,7 +979,13 @@ export async function recordSaleInFirestore(
       customerRtn: (saleData.customerRtn || '').trim(),
       notes: (saleData.notes || '').trim(),
       status: 'completed',
-      cashier: (saleData.cashier || 'Cajero').trim(),
+      cashier: (saleData.cashier || 'Administrador').trim(),
+      cashierRole:
+        saleData.cashierRole === 'admin' || saleData.cashierRole === 'collaborator'
+          ? saleData.cashierRole
+          : (saleData.cashier || '').toLowerCase().includes('admin')
+          ? 'admin'
+          : 'collaborator',
     };
 
     batch.set(saleRef, payload);

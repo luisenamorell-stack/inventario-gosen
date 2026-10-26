@@ -830,10 +830,15 @@ export const App: React.FC = () => {
   const handleRecordSale = async (saleData: Omit<SaleRecord, 'id'>) => {
     setIsSyncing(true);
     try {
-      const activeCashier = userSession?.userName || saleData.cashier || 'Cajero';
+      const activeCashier = userSession?.userName || saleData.cashier || 'Administrador';
+      const activeCashierRole =
+        userSession?.role ||
+        saleData.cashierRole ||
+        (activeCashier.toLowerCase().includes('admin') ? 'admin' : 'collaborator');
       const payload = {
         ...saleData,
         cashier: activeCashier,
+        cashierRole: activeCashierRole,
       };
 
       const recorded = await recordSaleInFirestore(payload, inventory);
@@ -1278,6 +1283,8 @@ export const App: React.FC = () => {
               inventory={inventory}
               sales={sales}
               storeSettings={storeSettings}
+              userSession={userSession}
+              users={users}
               isLoading={isInventoryLoading}
               onRecordSale={handleRecordSale}
               onCancelSale={handleCancelSale}
