@@ -4,11 +4,13 @@ import { StoreSettings } from '../types';
 interface SplashScreenProps {
   storeSettings?: StoreSettings;
   isExiting?: boolean;
+  welcomeUser?: string | null;
+  welcomeRole?: 'admin' | 'collaborator' | null;
 }
 
 /**
  * High-precision metallic vector recreation of the Tienda Gosén "G-Shoe" emblem
- * designed for 2D/3D-style walking stride animation.
+ * designed for 60fps GPU-accelerated walking stride animation.
  */
 const GosenShoeSvg: React.FC<{
   idPrefix: string;
@@ -16,13 +18,15 @@ const GosenShoeSvg: React.FC<{
 }> = ({ idPrefix, isBackFoot = false }) => {
   const metalGradId = `${idPrefix}-metal`;
   const highlightGradId = `${idPrefix}-highlight`;
-  const edgeGradId = `${idPrefix}-edge`;
-  const glowFilterId = `${idPrefix}-glow`;
 
   return (
     <svg
       viewBox="0 0 240 130"
-      className="w-full h-full overflow-visible"
+      className={`w-full h-full overflow-visible ${
+        isBackFoot
+          ? 'drop-shadow-[0_4px_6px_rgba(2,6,23,0.55)]'
+          : 'drop-shadow-[0_7px_10px_rgba(2,6,23,0.75)]'
+      }`}
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
@@ -43,27 +47,10 @@ const GosenShoeSvg: React.FC<{
           <stop offset="50%" stopColor="#34d399" stopOpacity={isBackFoot ? '0.2' : '0.45'} />
           <stop offset="100%" stopColor="#ffffff" stopOpacity={isBackFoot ? '0.4' : '0.85'} />
         </linearGradient>
-
-        {/* Deep 3D Bevel Under-Shadow */}
-        <linearGradient id={edgeGradId} x1="120" y1="20" x2="120" y2="115" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#334155" />
-          <stop offset="100%" stopColor="#0f172a" />
-        </linearGradient>
-
-        <filter id={glowFilterId} x="-15%" y="-15%" width="130%" height="130%">
-          <feDropShadow
-            dx="0"
-            dy={isBackFoot ? '4' : '7'}
-            stdDeviation={isBackFoot ? '4' : '6'}
-            floodColor="#020617"
-            floodOpacity={isBackFoot ? '0.55' : '0.75'}
-          />
-        </filter>
       </defs>
 
-      <g filter={`url(#${glowFilterId})`}>
+      <g>
         {/* Outer Shoe Silhouette + Integrated "G" Body (matches Tienda Gosén Logo) */}
-        {/* 1. Upper Shoe Collar, Tongue, Instep & Toe Cap */}
         <path
           d="M 42 30
              C 51 44, 62 53, 74 52
@@ -139,13 +126,15 @@ const GosenShoeSvg: React.FC<{
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   storeSettings,
   isExiting = false,
+  welcomeUser,
+  welcomeRole,
 }) => {
   const storeName = storeSettings?.storeName || 'TIENDA GOSÉN';
 
   return (
     <div
-      className={`fixed inset-0 z-100 flex flex-col items-center justify-center bg-[#040d21] text-white select-none overflow-hidden transition-opacity duration-500 ${
-        isExiting ? 'opacity-0 pointer-events-none' : 'opacity-100'
+      className={`fixed inset-0 z-100 flex flex-col items-center justify-center bg-[#040d21] text-white select-none overflow-hidden transition-all duration-300 ease-out will-change-[opacity,transform] ${
+        isExiting ? 'opacity-0 scale-[1.03] pointer-events-none' : 'opacity-100 scale-100'
       }`}
       style={{
         background:
@@ -200,19 +189,30 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           >
             {storeName}
           </h1>
-          <p className="mt-1.5 text-xs sm:text-sm font-semibold text-emerald-400/90 tracking-widest uppercase">
-            Paso a paso con tu inventario
-          </p>
+          {welcomeUser ? (
+            <div className="mt-2.5 flex flex-col items-center gap-1 animate-in fade-in zoom-in-95 duration-200">
+              <span className="px-3.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs sm:text-sm font-extrabold tracking-wide shadow-sm">
+                ¡Bienvenido, {welcomeUser}!
+              </span>
+              <span className="text-[11px] font-semibold text-slate-300/80 uppercase tracking-widest">
+                Acceso {welcomeRole === 'admin' ? 'Administrador' : 'Colaborador'}
+              </span>
+            </div>
+          ) : (
+            <p className="mt-1.5 text-xs sm:text-sm font-semibold text-emerald-400/90 tracking-widest uppercase">
+              Paso a paso con tu inventario
+            </p>
+          )}
         </div>
 
         {/* Loading Progress Indicator */}
-        <div className="mt-7 w-52 sm:w-60 flex flex-col items-center gap-2.5">
+        <div className="mt-6 w-52 sm:w-60 flex flex-col items-center gap-2">
           <div className="w-full h-1.5 bg-slate-900/90 rounded-full overflow-hidden border border-slate-700/60 p-[1px]">
             <div className="h-full bg-gradient-to-r from-emerald-500 via-teal-300 to-emerald-500 rounded-full animate-pulse w-full origin-left" />
           </div>
           <div className="flex items-center gap-2 text-[11px] font-bold text-slate-300/90 tracking-wider uppercase">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span>Cargando sistema...</span>
+            <span>{welcomeUser ? 'Abriendo panel...' : 'Cargando sistema...'}</span>
           </div>
         </div>
       </div>

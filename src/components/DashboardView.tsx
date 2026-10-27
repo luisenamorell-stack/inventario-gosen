@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { Product, AuditHistoryRecord, SaleRecord } from '../types';
 import {
   Box,
@@ -51,16 +51,31 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
 
-  // Compute metrics
-  const totalModels = inventory.length;
-  const totalStock = inventory.reduce((sum, item) => sum + (Number(item.stock) || 0), 0);
-  const totalValue = inventory.reduce(
-    (sum, item) => sum + (Number(item.stock) || 0) * (Number(item.cost) || 0),
-    0
-  );
-  const lowStockItems = [...inventory]
-    .filter((item) => Number(item.stock) <= 3)
-    .sort((a, b) => Number(a.stock) - Number(b.stock));
+  // Compute metrics with useMemo for instantaneous rendering
+  const { totalModels, totalStock, totalValue, lowStockItems } = useMemo(() => {
+    let stockSum = 0;
+    let valueSum = 0;
+    const lowItems: Product[] = [];
+
+    inventory.forEach((item) => {
+      const st = Number(item.stock) || 0;
+      const co = Number(item.cost) || 0;
+      stockSum += st;
+      valueSum += st * co;
+      if (st <= 3) {
+        lowItems.push(item);
+      }
+    });
+
+    lowItems.sort((a, b) => Number(a.stock) - Number(b.stock));
+
+    return {
+      totalModels: inventory.length,
+      totalStock: stockSum,
+      totalValue: valueSum,
+      lowStockItems: lowItems.slice(0, 25),
+    };
+  }, [inventory]);
 
   // Render Chart.js
   useEffect(() => {

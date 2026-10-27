@@ -353,11 +353,25 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                           </div>
                         </div>
                         <div className="text-right shrink-0">
-                          <p className="text-sm font-black text-blue-700 tabular-nums">
-                            L {Number(item.price).toFixed(2)}
-                          </p>
+                          {Number(item.discount) > 0 ? (
+                            <div className="flex flex-col items-end">
+                              <span className="text-[10px] text-slate-400 line-through font-mono">
+                                L {Number(item.price).toFixed(2)}
+                              </span>
+                              <span className="text-sm font-black text-emerald-700 tabular-nums">
+                                L {Math.max(0, Number(item.price) - Number(item.discount)).toFixed(2)}
+                              </span>
+                              <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.2 rounded">
+                                -L {Number(item.discount).toFixed(2)}
+                              </span>
+                            </div>
+                          ) : (
+                            <p className="text-sm font-black text-blue-700 tabular-nums">
+                              L {Number(item.price).toFixed(2)}
+                            </p>
+                          )}
                           <p
-                            className={`text-[11px] font-semibold tabular-nums ${
+                            className={`text-[11px] font-semibold tabular-nums mt-0.5 ${
                               stockNum > 0 ? 'text-emerald-600' : 'text-rose-500'
                             }`}
                           >
@@ -406,19 +420,62 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
             </p>
 
             {/* Price Box */}
-            <div className="bg-blue-50 rounded-2xl p-6 border border-blue-100 flex flex-col items-center justify-center mb-6 shadow-inner">
-              <p className="text-xs text-blue-600 font-semibold mb-1 uppercase tracking-wide">
-                Precio de Venta{' '}
-                {selectedProduct.size && (
-                  <span className="bg-blue-200 text-blue-800 px-2 py-0.5 rounded ml-1 font-bold">
-                    Talla {selectedProduct.size}
-                  </span>
-                )}
-              </p>
-              <p className="text-5xl sm:text-6xl font-black text-blue-900 tracking-tight">
-                L {Number(selectedProduct.price).toFixed(2)}
-              </p>
-            </div>
+            {(() => {
+              const basePrice = Number(selectedProduct.price) || 0;
+              const disc = Math.min(basePrice, Math.max(0, Number(selectedProduct.discount) || 0));
+              const finalPrice = Math.max(0, basePrice - disc);
+
+              return (
+                <div
+                  className={`rounded-2xl p-6 border flex flex-col items-center justify-center mb-6 shadow-inner ${
+                    disc > 0
+                      ? 'bg-emerald-50/90 border-emerald-200'
+                      : 'bg-blue-50 border-blue-100'
+                  }`}
+                >
+                  <p
+                    className={`text-xs font-semibold mb-1 uppercase tracking-wide ${
+                      disc > 0 ? 'text-emerald-700' : 'text-blue-600'
+                    }`}
+                  >
+                    {disc > 0 ? 'Precio Final con Descuento' : 'Precio de Venta'}{' '}
+                    {selectedProduct.size && (
+                      <span
+                        className={`px-2 py-0.5 rounded ml-1 font-bold ${
+                          disc > 0
+                            ? 'bg-emerald-200 text-emerald-900'
+                            : 'bg-blue-200 text-blue-800'
+                        }`}
+                      >
+                        Talla {selectedProduct.size}
+                      </span>
+                    )}
+                  </p>
+
+                  {disc > 0 && (
+                    <div className="flex items-center justify-center gap-2 my-1 flex-wrap">
+                      <span className="text-lg font-bold text-slate-400 line-through font-mono">
+                        Antes: L {basePrice.toFixed(2)}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-rose-600 text-white shadow-xs">
+                        Descuento: -L {disc.toFixed(2)}
+                        {selectedProduct.discountType === 'percent' && selectedProduct.discountValue
+                          ? ` (${selectedProduct.discountValue}%)`
+                          : ''}
+                      </span>
+                    </div>
+                  )}
+
+                  <p
+                    className={`text-5xl sm:text-6xl font-black tracking-tight ${
+                      disc > 0 ? 'text-emerald-800' : 'text-blue-900'
+                    }`}
+                  >
+                    L {finalPrice.toFixed(2)}
+                  </p>
+                </div>
+              );
+            })()}
 
             {/* Global Stock Badge */}
             <div

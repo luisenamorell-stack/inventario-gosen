@@ -7,6 +7,9 @@ export interface Product {
   supplier?: string;
   cost: number;
   price: number;
+  discount?: number;
+  discountType?: 'fixed' | 'percent';
+  discountValue?: number;
   stock: number;
   img?: string;
 }
@@ -108,6 +111,8 @@ export interface SaleItem {
   name: string;
   category?: string;
   size?: string;
+  originalPrice?: number;
+  unitDiscount?: number;
   price: number;
   cost?: number;
   quantity: number;

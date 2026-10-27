@@ -19,6 +19,9 @@ service cloud.firestore {
              (!('supplier' in data) || (data.supplier is string && data.supplier.size() <= 200)) &&
              (!('cost' in data) || (data.cost is number)) &&
              data.price is number &&
+             (!('discount' in data) || (data.discount is number)) &&
+             (!('discountType' in data) || (data.discountType is string && data.discountType.size() <= 20)) &&
+             (!('discountValue' in data) || (data.discountValue is number)) &&
              (data.stock is number || data.stock is int) &&
              (!('img' in data) || (data.img is string && data.img.size() <= 500000));
     }

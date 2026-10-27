@@ -219,6 +219,9 @@ export async function fetchInventorySmart(
         supplier: data.supplier || '',
         cost: Number(data.cost) || 0,
         price: Number(data.price) || 0,
+        discount: Math.max(0, Number(data.discount) || 0),
+        discountType: data.discountType === 'percent' ? 'percent' : 'fixed',
+        discountValue: Math.max(0, Number(data.discountValue) || Number(data.discount) || 0),
         stock: Number(data.stock) || 0,
         img: data.img || '',
       });
@@ -265,6 +268,9 @@ export function subscribeToInventory(
           supplier: data.supplier || '',
           cost: Number(data.cost) || 0,
           price: Number(data.price) || 0,
+          discount: Math.max(0, Number(data.discount) || 0),
+          discountType: data.discountType === 'percent' ? 'percent' : 'fixed',
+          discountValue: Math.max(0, Number(data.discountValue) || Number(data.discount) || 0),
           stock: Number(data.stock) || 0,
           img: data.img || '',
         });
@@ -300,6 +306,9 @@ export async function saveProductToFirestore(product: Product, oldCode?: string)
       category: product.category || 'Otros',
       cost: Number(product.cost) || 0,
       price: Number(product.price) || 0,
+      discount: Math.max(0, Number(product.discount) || 0),
+      discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
+      discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
       stock: Math.max(0, Math.round(Number(product.stock) || 0)),
     };
 
@@ -381,6 +390,9 @@ export async function bulkSaveProductsToFirestore(
           category: (product.category || 'General').trim(),
           cost: Math.max(0, Number(product.cost) || 0),
           price: Math.max(0, Number(product.price) || 0),
+          discount: Math.max(0, Number(product.discount) || 0),
+          discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
+          discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
           stock: Math.max(0, Math.round(Number(product.stock) || 0)),
         };
 
@@ -831,6 +843,8 @@ export async function fetchSalesOnce(forceRefresh = false): Promise<SaleRecord[]
               name: it.name || '',
               category: it.category || '',
               size: it.size || '',
+              originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+              unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
               price: Number(it.price) || 0,
               cost: Number(it.cost) || 0,
               quantity: Number(it.quantity) || 1,
@@ -889,6 +903,8 @@ export function subscribeToSales(
                 name: it.name || '',
                 category: it.category || '',
                 size: it.size || '',
+                originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+                unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
                 price: Number(it.price) || 0,
                 cost: Number(it.cost) || 0,
                 quantity: Number(it.quantity) || 1,
@@ -961,6 +977,8 @@ export async function recordSaleInFirestore(
         name: it.name.trim(),
         category: (it.category || '').trim(),
         size: (it.size || '').trim(),
+        originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+        unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
         price: Number(it.price) || 0,
         cost: Number(it.cost) || 0,
         quantity: Number(it.quantity) || 1,

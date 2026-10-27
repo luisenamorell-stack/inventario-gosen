@@ -40,6 +40,7 @@ import {
   Barcode,
   Tag,
   ChevronLeft,
+  ChevronRight,
   Copy,
   MessageCircle,
   Share2,
@@ -234,6 +235,23 @@ export const SalesView: React.FC<SalesViewProps> = ({
     });
   }, [inventory, searchQuery, selectedCategory]);
 
+  // Fast O(1) Map for cart item counts to avoid O(N^2) scans during catalog render
+  const cartQtyMap = useMemo(() => new Map(cart.map((it) => [it.code, it.quantity])), [cart]);
+
+  // POS catalog display limit for silky smooth 60fps rendering with large inventories
+  const [posDisplayLimit, setPosDisplayLimit] = useState<number>(36);
+
+  useEffect(() => {
+    setPosDisplayLimit(36);
+  }, [selectedCategory]);
+
+  const displayedCatalog = useMemo(() => {
+    if (searchQuery.trim()) {
+      return filteredCatalog;
+    }
+    return filteredCatalog.slice(0, posDisplayLimit);
+  }, [filteredCatalog, searchQuery, posDisplayLimit]);
+
   // Handle direct Enter in search bar (Barcode scanner instant scan or fast name/code entry)
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -294,13 +312,20 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
   };
 
-  // Add product to cart with stock validation
+  // Add product to cart with stock validation & automatic per-article discount
   const addToCart = (product: Product) => {
     const availableStock = Number(product.stock) || 0;
     if (availableStock <= 0) {
       showToast(`El producto "${product.name}" está agotado (Stock 0)`, 'error');
       return;
     }
+
+    const basePrice = Number(product.price) || 0;
+    const assignedUnitDiscount = Math.min(
+      basePrice,
+      Math.max(0, Number(product.discount) || 0)
+    );
+    const effectiveUnitPrice = Math.max(0, basePrice - assignedUnitDiscount);
 
     setCart((prevCart) => {
       const existingIndex = prevCart.findIndex((it) => it.code === product.code);
@@ -330,10 +355,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
             name: product.name,
             category: product.category,
             size: product.size,
-            price: Number(product.price) || 0,
+            originalPrice: basePrice,
+            unitDiscount: assignedUnitDiscount,
+            price: effectiveUnitPrice,
             cost: Number(product.cost) || 0,
             quantity: 1,
-            subtotal: Number(product.price) || 0,
+            subtotal: effectiveUnitPrice,
           },
         ];
       }
@@ -372,6 +399,31 @@ export const SalesView: React.FC<SalesViewProps> = ({
     );
   };
 
+  // Update per-unit discount for a specific item in the cart
+  const updateCartItemDiscount = (code: string, rawDiscount: number) => {
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.code === code) {
+          const basePrice =
+            item.originalPrice !== undefined ? Number(item.originalPrice) : Number(item.price) || 0;
+          const clampedDiscount = Math.min(
+            basePrice,
+            Math.max(0, Number(rawDiscount) || 0)
+          );
+          const effectivePrice = Math.max(0, basePrice - clampedDiscount);
+          return {
+            ...item,
+            originalPrice: basePrice,
+            unitDiscount: clampedDiscount,
+            price: effectivePrice,
+            subtotal: effectivePrice * item.quantity,
+          };
+        }
+        return item;
+      })
+    );
+  };
+
   // Remove single item from cart
   const removeFromCart = (code: string) => {
     setCart((prev) => prev.filter((item) => item.code !== code));
@@ -390,6 +442,18 @@ export const SalesView: React.FC<SalesViewProps> = ({
   };
 
   // Calculations for current cart
+  const cartGrossSubtotal = useMemo(() => {
+    return cart.reduce(
+      (sum, it) =>
+        sum + (it.originalPrice !== undefined ? Number(it.originalPrice) : it.price) * it.quantity,
+      0
+    );
+  }, [cart]);
+
+  const cartItemsDiscountTotal = useMemo(() => {
+    return cart.reduce((sum, it) => sum + (Number(it.unitDiscount) || 0) * it.quantity, 0);
+  }, [cart]);
+
   const cartSubtotal = useMemo(() => {
     return cart.reduce((sum, it) => sum + it.subtotal, 0);
   }, [cart]);
@@ -598,17 +662,32 @@ export const SalesView: React.FC<SalesViewProps> = ({
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
     text += `🛍️ *PRODUCTOS:*\n`;
 
+    const itemsDiscountSum = sale.items.reduce(
+      (sum, it) => sum + (Number(it.unitDiscount) || 0) * it.quantity,
+      0
+    );
+
     sale.items.forEach((item) => {
       const sizeStr = item.size ? ` (Talla: ${item.size})` : '';
       const codeStr = item.code ? `Cód: ${item.code} • ` : '';
+      const unitDisc = Number(item.unitDiscount) || 0;
+      const origPrice =
+        item.originalPrice !== undefined ? Number(item.originalPrice) : item.price + unitDisc;
       text += `• *${item.quantity}x* ${item.name}${sizeStr}\n`;
-      text += `  ↳ ${codeStr}L. ${item.subtotal.toFixed(2)}  _(L. ${item.price.toFixed(2)} c/u)_\n`;
+      if (unitDisc > 0) {
+        text += `  ↳ ${codeStr}L. ${item.subtotal.toFixed(2)}  _(Antes L. ${origPrice.toFixed(2)} | Desc: -L. ${unitDisc.toFixed(2)} c/u → L. ${item.price.toFixed(2)} c/u)_\n`;
+      } else {
+        text += `  ↳ ${codeStr}L. ${item.subtotal.toFixed(2)}  _(L. ${item.price.toFixed(2)} c/u)_\n`;
+      }
     });
 
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    if (itemsDiscountSum > 0) {
+      text += `*Ahorro en artículos:* - L. ${itemsDiscountSum.toFixed(2)}\n`;
+    }
     text += `*Subtotal:* L. ${sale.subtotal.toFixed(2)}\n`;
     if (sale.discount > 0) {
-      text += `*Descuento:* - L. ${sale.discount.toFixed(2)}\n`;
+      text += `*Descuento adicional:* - L. ${sale.discount.toFixed(2)}\n`;
     }
     if (sale.tax > 0) {
       text += `*15% ISV:* L. ${sale.tax.toFixed(2)}\n`;
@@ -737,6 +816,20 @@ export const SalesView: React.FC<SalesViewProps> = ({
       return true;
     }).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   }, [sales, users, historySearch, historyDateFilter, historyStatusFilter, historyPaymentFilter, historySellerFilter]);
+
+  // Sales History Pagination State
+  const [historyPage, setHistoryPage] = useState<number>(1);
+  const HISTORY_PAGE_SIZE = 25;
+
+  useEffect(() => {
+    setHistoryPage(1);
+  }, [historySearch, historyDateFilter, historyStatusFilter, historyPaymentFilter, historySellerFilter]);
+
+  const totalHistoryPages = Math.max(1, Math.ceil(filteredSalesHistory.length / HISTORY_PAGE_SIZE));
+  const paginatedSalesHistory = useMemo(() => {
+    const start = (historyPage - 1) * HISTORY_PAGE_SIZE;
+    return filteredSalesHistory.slice(start, start + HISTORY_PAGE_SIZE);
+  }, [filteredSalesHistory, historyPage]);
 
   // Overall statistics for sales
   const salesMetrics = useMemo(() => {
@@ -1031,101 +1124,145 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3">
-                  {filteredCatalog.map((product) => {
-                    const stock = Number(product.stock) || 0;
-                    const isOutOfStock = stock <= 0;
-                    const inCartItem = cart.find((it) => it.code === product.code);
-                    const qtyInCart = inCartItem?.quantity || 0;
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3">
+                    {displayedCatalog.map((product) => {
+                      const stock = Number(product.stock) || 0;
+                      const isOutOfStock = stock <= 0;
+                      const qtyInCart = cartQtyMap.get(product.code) || 0;
+                      const basePrice = Number(product.price) || 0;
+                      const itemDiscount = Math.min(
+                        basePrice,
+                        Math.max(0, Number(product.discount) || 0)
+                      );
+                      const hasDiscount = itemDiscount > 0;
+                      const finalPrice = Math.max(0, basePrice - itemDiscount);
 
-                    return (
-                      <div
-                        key={product.code}
-                        onClick={() => !isOutOfStock && addToCart(product)}
-                        className={`group relative flex flex-col justify-between p-3 rounded-xl border bg-white transition-all text-left select-none ${
-                          isOutOfStock
-                            ? 'opacity-60 bg-slate-100/70 border-slate-200 cursor-not-allowed'
-                            : 'border-slate-200/90 hover:border-emerald-500 hover:shadow-md cursor-pointer hover:-translate-y-0.5'
-                        }`}
-                      >
-                        {/* Top indicators */}
-                        <div className="flex items-start justify-between gap-1.5 mb-2">
-                          <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                              isOutOfStock
-                                ? 'bg-rose-100 text-rose-700'
-                                : stock <= 3
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-emerald-100 text-emerald-800'
-                            }`}
-                          >
-                            {isOutOfStock ? 'Agotado' : `Stock: ${stock}`}
-                          </span>
-
-                          {qtyInCart > 0 && (
-                            <span className="text-[10px] font-bold bg-emerald-600 text-white px-1.5 py-0.5 rounded-full shadow-sm animate-pulse">
-                              {qtyInCart} en carrito
+                      return (
+                        <div
+                          key={product.code}
+                          onClick={() => !isOutOfStock && addToCart(product)}
+                          className={`group relative flex flex-col justify-between p-3 rounded-xl border bg-white transition-all text-left select-none ${
+                            isOutOfStock
+                              ? 'opacity-60 bg-slate-100/70 border-slate-200 cursor-not-allowed'
+                              : 'border-slate-200/90 hover:border-emerald-500 hover:shadow-md cursor-pointer hover:-translate-y-0.5'
+                          }`}
+                        >
+                          {/* Top indicators */}
+                          <div className="flex items-start justify-between gap-1 mb-2 flex-wrap">
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                isOutOfStock
+                                  ? 'bg-rose-100 text-rose-700'
+                                  : stock <= 3
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}
+                            >
+                              {isOutOfStock ? 'Agotado' : `Stock: ${stock}`}
                             </span>
-                          )}
-                        </div>
 
-                        {/* Product Image / Icon */}
-                        <div className="w-full h-24 mb-2 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden border border-slate-100">
-                          {product.img ? (
-                            <img
-                              src={product.img}
-                              alt={product.name}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                              loading="lazy"
-                            />
-                          ) : (
-                            <Package className="w-8 h-8 text-slate-300 group-hover:text-emerald-500 transition-colors" />
-                          )}
-                        </div>
+                            <div className="flex items-center gap-1 ml-auto">
+                              {hasDiscount && (
+                                <span className="text-[10px] font-extrabold bg-rose-500 text-white px-1.5 py-0.5 rounded-full shadow-2xs">
+                                  {product.discountType === 'percent' && product.discountValue
+                                    ? `-${product.discountValue}%`
+                                    : `-L.${itemDiscount.toFixed(0)}`}
+                                </span>
+                              )}
+                              {qtyInCart > 0 && (
+                                <span className="text-[10px] font-bold bg-emerald-600 text-white px-1.5 py-0.5 rounded-full shadow-sm animate-pulse">
+                                  {qtyInCart} en carrito
+                                </span>
+                              )}
+                            </div>
+                          </div>
 
-                        {/* Details */}
-                        <div className="space-y-1 mb-2">
-                          <h3
-                            className="font-semibold text-slate-900 text-xs sm:text-sm line-clamp-2 leading-snug group-hover:text-emerald-700 transition-colors"
-                            title={product.name}
-                          >
-                            {product.name}
-                          </h3>
-                          <div className="flex items-center justify-between text-[11px] text-slate-400">
-                            <span className="font-mono">{product.code}</span>
-                            {product.size && (
-                              <span className="bg-slate-100 px-1.5 py-0.2 rounded text-slate-600 font-medium">
-                                {product.size}
-                              </span>
+                          {/* Product Image / Icon */}
+                          <div className="w-full h-24 mb-2 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden border border-slate-100">
+                            {product.img ? (
+                              <img
+                                src={product.img}
+                                alt={product.name}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                loading="lazy"
+                                decoding="async"
+                              />
+                            ) : (
+                              <Package className="w-8 h-8 text-slate-300 group-hover:text-emerald-500 transition-colors" />
                             )}
                           </div>
-                        </div>
 
-                        {/* Price & Add Action */}
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 mt-auto">
-                          <div>
-                            <span className="text-[10px] text-slate-400 block -mb-0.5">Precio</span>
-                            <span className="font-bold text-slate-900 text-sm sm:text-base text-emerald-700">
-                              L. {(Number(product.price) || 0).toFixed(2)}
-                            </span>
+                          {/* Details */}
+                          <div className="space-y-1 mb-2">
+                            <h3
+                              className="font-semibold text-slate-900 text-xs sm:text-sm line-clamp-2 leading-snug group-hover:text-emerald-700 transition-colors"
+                              title={product.name}
+                            >
+                              {product.name}
+                            </h3>
+                            <div className="flex items-center justify-between text-[11px] text-slate-400">
+                              <span className="font-mono">{product.code}</span>
+                              {product.size && (
+                                <span className="bg-slate-100 px-1.5 py-0.2 rounded text-slate-600 font-medium">
+                                  {product.size}
+                                </span>
+                              )}
+                            </div>
                           </div>
 
-                          <button
-                            type="button"
-                            disabled={isOutOfStock}
-                            className={`p-1.5 rounded-lg transition-colors ${
-                              isOutOfStock
-                                ? 'bg-slate-200 text-slate-400'
-                                : 'bg-emerald-50 text-emerald-700 group-hover:bg-emerald-600 group-hover:text-white'
-                            }`}
-                            title={isOutOfStock ? 'Agotado' : 'Agregar al carrito'}
-                          >
-                            <Plus className="w-4 h-4" />
-                          </button>
+                          {/* Price & Add Action */}
+                          <div className="flex items-center justify-between pt-2 border-t border-slate-100 mt-auto">
+                            <div>
+                              <span className="text-[10px] text-slate-400 block -mb-0.5">
+                                {hasDiscount ? 'Precio c/Desc.' : 'Precio'}
+                              </span>
+                              {hasDiscount ? (
+                                <div className="flex flex-col leading-tight">
+                                  <span className="text-[10px] text-slate-400 line-through font-mono">
+                                    L. {basePrice.toFixed(2)}
+                                  </span>
+                                  <span className="font-extrabold text-sm sm:text-base text-emerald-700">
+                                    L. {finalPrice.toFixed(2)}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="font-bold text-slate-900 text-sm sm:text-base text-emerald-700">
+                                  L. {basePrice.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+
+                            <button
+                              type="button"
+                              disabled={isOutOfStock}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                isOutOfStock
+                                  ? 'bg-slate-200 text-slate-400'
+                                  : 'bg-emerald-50 text-emerald-700 group-hover:bg-emerald-600 group-hover:text-white'
+                              }`}
+                              title={isOutOfStock ? 'Agotado' : 'Agregar al carrito'}
+                            >
+                              <Plus className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
+
+                  {/* Load more products button for smooth initial browse */}
+                  {!searchQuery.trim() && filteredCatalog.length > posDisplayLimit && (
+                    <div className="text-center pt-2 pb-1">
+                      <button
+                        type="button"
+                        onClick={() => setPosDisplayLimit((prev) => prev + 36)}
+                        className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all cursor-pointer shadow-2xs"
+                      >
+                        Mostrar más productos ({filteredCatalog.length - posDisplayLimit} restantes)
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1216,6 +1353,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   cart.map((item) => {
                     const productInStore = inventory.find((p) => p.code === item.code);
                     const maxStock = productInStore ? Number(productInStore.stock) || 0 : 0;
+                    const basePrice =
+                      item.originalPrice !== undefined
+                        ? Number(item.originalPrice)
+                        : Number(item.price) || 0;
+                    const unitDisc = Number(item.unitDiscount) || 0;
 
                     return (
                       <div
@@ -1228,6 +1370,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             {item.name}
                           </div>
                           <div className="text-right shrink-0">
+                            {unitDisc > 0 && (
+                              <span className="text-[10px] text-slate-400 line-through font-mono block">
+                                L. {(basePrice * item.quantity).toFixed(2)}
+                              </span>
+                            )}
                             <span className="font-extrabold text-xs sm:text-sm text-emerald-700 block">
                               L. {item.subtotal.toFixed(2)}
                             </span>
@@ -1240,9 +1387,20 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             <span className="font-mono bg-white border border-slate-200 px-1.5 py-0.2 rounded text-[10px] text-slate-700">
                               {item.code}
                             </span>
-                            <span className="font-semibold text-slate-700">
-                              L. {item.price.toFixed(2)} c/u
-                            </span>
+                            {unitDisc > 0 ? (
+                              <span className="inline-flex items-center gap-1">
+                                <span className="text-[10px] text-slate-400 line-through">
+                                  L. {basePrice.toFixed(2)}
+                                </span>
+                                <span className="font-bold text-emerald-700">
+                                  L. {item.price.toFixed(2)} c/u
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="font-semibold text-slate-700">
+                                L. {item.price.toFixed(2)} c/u
+                              </span>
+                            )}
                             {item.size && (
                               <span className="bg-slate-200/80 px-1.5 py-0.2 rounded text-[10px] font-semibold text-slate-700">
                                 Talla: {item.size}
@@ -1290,6 +1448,41 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
+                          </div>
+                        </div>
+
+                        {/* Per-article Discount Row inside Cart */}
+                        <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-dashed border-slate-200/80 text-[11px]">
+                          <span className="text-slate-500 flex items-center gap-1 font-medium">
+                            <Tag className="w-3 h-3 text-rose-500 shrink-0" />
+                            <span>Desc. por unidad (L.):</span>
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <div className="relative w-24">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                                L.
+                              </span>
+                              <input
+                                type="number"
+                                min="0"
+                                max={basePrice}
+                                step="any"
+                                value={unitDisc > 0 ? unitDisc : ''}
+                                placeholder="0.00"
+                                onChange={(e) =>
+                                  updateCartItemDiscount(
+                                    item.code,
+                                    parseFloat(e.target.value) || 0
+                                  )
+                                }
+                                className="w-full pl-5 pr-2 py-0.5 bg-white border border-slate-200 rounded-md text-[11px] font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right"
+                              />
+                            </div>
+                            {unitDisc > 0 && (
+                              <span className="text-[10px] font-bold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">
+                                -L. {(unitDisc * item.quantity).toFixed(2)}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1453,6 +1646,20 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
                 {/* Discounts & Taxes */}
                 <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-200">
+                  {cartItemsDiscountTotal > 0 && (
+                    <>
+                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                        <span>Precio regular artículos:</span>
+                        <span className="line-through font-mono">
+                          L. {cartGrossSubtotal.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-rose-600 font-semibold">
+                        <span>Descuento en artículos:</span>
+                        <span>- L. {cartItemsDiscountTotal.toFixed(2)}</span>
+                      </div>
+                    </>
+                  )}
                   <div className="flex items-center justify-between">
                     <span>Subtotal:</span>
                     <span className="font-semibold text-slate-800">
@@ -1776,7 +1983,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
               <div>
                 {/* Mobile Card List (< sm) */}
                 <div className="sm:hidden p-2.5 space-y-2.5">
-                  {filteredSalesHistory.map((sale) => {
+                  {paginatedSalesHistory.map((sale) => {
                     const isCancelled = sale.status === 'cancelled';
                     const sellerInfo = getSaleSellerInfo(sale);
                     return (
@@ -1932,7 +2139,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {filteredSalesHistory.map((sale) => {
+                    {paginatedSalesHistory.map((sale) => {
                       const isCancelled = sale.status === 'cancelled';
                       const sellerInfo = getSaleSellerInfo(sale);
 
@@ -2055,6 +2262,49 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </tbody>
                 </table>
               </div>
+
+              {/* Sales History Pagination Controls Bar */}
+              {totalHistoryPages > 1 && (
+                <div className="p-3 sm:p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600 rounded-b-xl">
+                  <span>
+                    Mostrando{' '}
+                    <strong className="text-slate-900">
+                      {(historyPage - 1) * HISTORY_PAGE_SIZE + 1}
+                    </strong>{' '}
+                    -{' '}
+                    <strong className="text-slate-900">
+                      {Math.min(historyPage * HISTORY_PAGE_SIZE, filteredSalesHistory.length)}
+                    </strong>{' '}
+                    de <strong className="text-slate-900">{filteredSalesHistory.length}</strong> ventas
+                  </span>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={historyPage <= 1}
+                      onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer shadow-2xs"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span>Anterior</span>
+                    </button>
+
+                    <span className="px-2 font-bold text-slate-800">
+                      Página {historyPage} de {totalHistoryPages}
+                    </span>
+
+                    <button
+                      type="button"
+                      disabled={historyPage >= totalHistoryPages}
+                      onClick={() => setHistoryPage((p) => Math.min(totalHistoryPages, p + 1))}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer shadow-2xs"
+                    >
+                      <span>Siguiente</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           </div>
@@ -2162,32 +2412,56 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     <span>Cant / Producto</span>
                     <span>Subtotal</span>
                   </div>
-                  {completedSale.items.map((it, idx) => (
-                    <div key={idx} className="flex items-start justify-between gap-2 text-[11px]">
-                      <div className="flex-1 min-w-0 break-words leading-snug">
-                        <span className="font-bold text-slate-900">{it.quantity}x</span>{' '}
-                        <span className="font-medium text-slate-800">{it.name}</span>
-                        {it.size ? ` (Talla: ${it.size})` : ''}
-                        <div className="text-[10px] text-slate-500">
-                          Código: {it.code} • @ L. {it.price.toFixed(2)} c/u
+                  {completedSale.items.map((it, idx) => {
+                    const unitDisc = Number(it.unitDiscount) || 0;
+                    const origPrice =
+                      it.originalPrice !== undefined
+                        ? Number(it.originalPrice)
+                        : it.price + unitDisc;
+                    return (
+                      <div key={idx} className="flex items-start justify-between gap-2 text-[11px]">
+                        <div className="flex-1 min-w-0 break-words leading-snug">
+                          <span className="font-bold text-slate-900">{it.quantity}x</span>{' '}
+                          <span className="font-medium text-slate-800">{it.name}</span>
+                          {it.size ? ` (Talla: ${it.size})` : ''}
+                          <div className="text-[10px] text-slate-500">
+                            Código: {it.code} • @ L. {it.price.toFixed(2)} c/u
+                            {unitDisc > 0 && (
+                              <span className="text-rose-600 font-semibold block">
+                                (Antes L. {origPrice.toFixed(2)} | Desc: -L. {unitDisc.toFixed(2)} c/u)
+                              </span>
+                            )}
+                          </div>
                         </div>
+                        <span className="font-bold text-slate-900 shrink-0">
+                          L. {it.subtotal.toFixed(2)}
+                        </span>
                       </div>
-                      <span className="font-bold text-slate-900 shrink-0">
-                        L. {it.subtotal.toFixed(2)}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Financial Summary */}
                 <div className="space-y-1 text-[11px]">
+                  {(() => {
+                    const itemsSaved = completedSale.items.reduce(
+                      (sum, it) => sum + (Number(it.unitDiscount) || 0) * it.quantity,
+                      0
+                    );
+                    return itemsSaved > 0 ? (
+                      <div className="flex justify-between text-rose-600 font-semibold">
+                        <span>Ahorro en artículos:</span>
+                        <span>- L. {itemsSaved.toFixed(2)}</span>
+                      </div>
+                    ) : null;
+                  })()}
                   <div className="flex justify-between">
                     <span>Subtotal:</span>
                     <span>L. {completedSale.subtotal.toFixed(2)}</span>
                   </div>
                   {completedSale.discount > 0 && (
                     <div className="flex justify-between text-rose-600">
-                      <span>Descuento:</span>
+                      <span>Descuento adicional:</span>
                       <span>- L. {completedSale.discount.toFixed(2)}</span>
                     </div>
                   )}

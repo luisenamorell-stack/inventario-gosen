@@ -172,46 +172,69 @@ export const App: React.FC = () => {
   const [pingLatency, setPingLatency] = useState<number | null>(null);
   const [isPinging, setIsPinging] = useState<boolean>(false);
 
-  // Walking Shoe Splash Screen State on App Open
-  const [showSplash, setShowSplash] = useState<boolean>(true);
+  // Walking Shoe Splash Screen State on App Open — snappy cold boot with zero lag on warm visits
+  const [showSplash, setShowSplash] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && sessionStorage.getItem('stockmaster_visited')) {
+      return false;
+    }
+    return true;
+  });
   const [isSplashExiting, setIsSplashExiting] = useState<boolean>(false);
-  // Skeleton loader state for Firebase inventory data
-  const [isSkeletonTransition, setIsSkeletonTransition] = useState<boolean>(true);
+  // Skeleton loader state only active on first-ever load when no local cache exists
+  const [isSkeletonTransition, setIsSkeletonTransition] = useState<boolean>(() => {
+    const cached = getCachedInventory();
+    return !(cached && cached.length > 0);
+  });
+
+  const [splashWelcomeUser, setSplashWelcomeUser] = useState<string | null>(null);
+  const [splashWelcomeRole, setSplashWelcomeRole] = useState<'admin' | 'collaborator' | null>(null);
+  const splashTimersRef = useRef<{ exit?: ReturnType<typeof setTimeout>; hide?: ReturnType<typeof setTimeout> }>({});
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('stockmaster_visited', '1');
+    }
     const exitTimer = setTimeout(() => {
       setIsSplashExiting(true);
-    }, 1600);
+    }, 650);
     const hideTimer = setTimeout(() => {
       setShowSplash(false);
-    }, 2000);
-    // Keep skeleton loaders visible briefly after splash exits so Firebase card skeletons transition smoothly
-    const skeletonTimer = setTimeout(() => {
       setIsSkeletonTransition(false);
-    }, 2400);
+    }, 950);
     return () => {
       clearTimeout(exitTimer);
       clearTimeout(hideTimer);
-      clearTimeout(skeletonTimer);
     };
   }, []);
 
-  const triggerBriefSplash = (durationMs = 1500) => {
+  const triggerBriefSplash = (durationMs = 1150, welcomeSession?: UserSession) => {
+    if (splashTimersRef.current.exit) clearTimeout(splashTimersRef.current.exit);
+    if (splashTimersRef.current.hide) clearTimeout(splashTimersRef.current.hide);
+
+    if (welcomeSession) {
+      setSplashWelcomeUser(welcomeSession.userName);
+      setSplashWelcomeRole(welcomeSession.role);
+    } else {
+      setSplashWelcomeUser(null);
+      setSplashWelcomeRole(null);
+    }
+
     setIsSplashExiting(false);
     setShowSplash(true);
-    setIsSkeletonTransition(true);
-    setTimeout(() => {
+
+    splashTimersRef.current.exit = setTimeout(() => {
       setIsSplashExiting(true);
-    }, Math.max(400, durationMs - 450));
-    setTimeout(() => {
+    }, Math.max(300, durationMs - 300));
+
+    splashTimersRef.current.hide = setTimeout(() => {
       setShowSplash(false);
-    }, durationMs);
-    setTimeout(() => {
       setIsSkeletonTransition(false);
-    }, durationMs + 750);
+      setSplashWelcomeUser(null);
+      setSplashWelcomeRole(null);
+    }, durationMs);
   };
 
-  const isInventoryLoading = isConnecting || isSkeletonTransition || isPinging;
+  const isInventoryLoading = isConnecting || isSkeletonTransition;
 
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -238,9 +261,9 @@ export const App: React.FC = () => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Auth Handlers
+  // Auth Handlers — Fluid login animation over instant background workspace mount
   const handleLoginSuccess = (session: UserSession, remember: boolean) => {
-    triggerBriefSplash(1600);
+    triggerBriefSplash(1150, session);
     setUserSession(session);
     setIsAuthenticated(true);
 
@@ -1127,7 +1150,12 @@ export const App: React.FC = () => {
   return (
     <div className="fixed inset-0 w-full h-full flex flex-col md:flex-row overflow-hidden text-slate-800 bg-slate-50">
       {showSplash && (
-        <SplashScreen storeSettings={storeSettings} isExiting={isSplashExiting} />
+        <SplashScreen
+          storeSettings={storeSettings}
+          isExiting={isSplashExiting}
+          welcomeUser={splashWelcomeUser}
+          welcomeRole={splashWelcomeRole}
+        />
       )}
       {/* Toast notifications */}
       <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />

@@ -40,76 +40,75 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     setIsLoading(true);
 
-    setTimeout(() => {
-      if (loginMode === 'admin') {
-        const expectedPassword = (storeSettings?.accessPassword || 'GOSEN2026').trim();
-        if (
-          cleanInput === expectedPassword ||
-          cleanInput.toUpperCase() === expectedPassword.toUpperCase()
-        ) {
-          const adminSession: UserSession = {
-            userId: 'admin_master',
-            userName: 'Administrador',
-            username: 'admin',
-            role: 'admin',
-            allowedTabs: [
-              'dashboard',
-              'inventory',
-              'sales',
-              'purchases',
-              'audit',
-              'price-checker',
-              'suppliers',
-              'settings',
-              'catalog',
-              'users',
-              'activity',
-            ],
-          };
-          onLoginSuccess(adminSession, rememberMe);
-        } else {
-          setError('Contraseña de Administrador incorrecta.');
-          setIsLoading(false);
-        }
+    if (loginMode === 'admin') {
+      const expectedPassword = (storeSettings?.accessPassword || 'GOSEN2026').trim();
+      if (
+        cleanInput === expectedPassword ||
+        cleanInput.toUpperCase() === expectedPassword.toUpperCase()
+      ) {
+        const adminSession: UserSession = {
+          userId: 'admin_master',
+          userName: 'Administrador',
+          username: 'admin',
+          role: 'admin',
+          allowedTabs: [
+            'dashboard',
+            'inventory',
+            'sales',
+            'purchases',
+            'audit',
+            'price-checker',
+            'suppliers',
+            'settings',
+            'catalog',
+            'users',
+            'activity',
+          ],
+        };
+        onLoginSuccess(adminSession, rememberMe);
       } else {
-        // Collaborator Login Mode
-        if (!usernameInput.trim()) {
-          setError('Por favor ingresa tu nombre de usuario de colaborador.');
-          setIsLoading(false);
-          return;
-        }
+        setError('Contraseña de Administrador incorrecta.');
+        setIsLoading(false);
+      }
+    } else {
+      // Collaborator Login Mode
+      if (!usernameInput.trim()) {
+        setError('Por favor ingresa tu nombre de usuario de colaborador.');
+        setIsLoading(false);
+        return;
+      }
 
-        const cleanUser = usernameInput.trim().toLowerCase();
-        const foundUser = users.find(
-          (u) => u.username.toLowerCase() === cleanUser && u.isActive !== false
-        );
+      const cleanUser = usernameInput.trim().toLowerCase();
+      const foundUser = users.find(
+        (u) => u.username.toLowerCase() === cleanUser && u.isActive !== false
+      );
 
-        if (!foundUser) {
-          setError(`No se encontró un colaborador activo con el usuario "${cleanUser}".`);
-          setIsLoading(false);
-          return;
-        }
+      if (!foundUser) {
+        setError(`No se encontró un colaborador activo con el usuario "${cleanUser}".`);
+        setIsLoading(false);
+        return;
+      }
 
-        if (foundUser.password !== cleanInput) {
-          setError('Contraseña de colaborador incorrecta.');
-          setIsLoading(false);
-          return;
-        }
+      if (foundUser.password !== cleanInput) {
+        setError('Contraseña de colaborador incorrecta.');
+        setIsLoading(false);
+        return;
+      }
 
-        // Collaborator login success
-        const collabSession: UserSession = {
-          userId: foundUser.id,
-          userName: foundUser.name,
-          username: foundUser.username,
-          role: 'collaborator',
-          allowedTabs: foundUser.allowedTabs && foundUser.allowedTabs.length > 0
+      // Collaborator login success
+      const collabSession: UserSession = {
+        userId: foundUser.id,
+        userName: foundUser.name,
+        username: foundUser.username,
+        role: 'collaborator',
+        allowedTabs:
+          foundUser.allowedTabs && foundUser.allowedTabs.length > 0
             ? foundUser.allowedTabs
             : ['sales', 'inventory', 'price-checker', 'catalog'],
-        };
+      };
 
-        onLoginSuccess(collabSession, rememberMe);
-      }
-    }, 250);
+      onLoginSuccess(collabSession, rememberMe);
+    }
   };
 
   return (

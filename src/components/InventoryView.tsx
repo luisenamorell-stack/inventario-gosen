@@ -12,7 +12,12 @@ import {
   ArrowUpDown,
   ArrowDown,
   ArrowUp,
-  FileSpreadsheet
+  FileSpreadsheet,
+  ChevronLeft,
+  ChevronRight,
+  Tag,
+  Percent,
+  Check
 } from 'lucide-react';
 
 import { ConfirmDialog } from './ConfirmDialog';
@@ -80,6 +85,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // Deletion confirmation state
   const [itemToDelete, setItemToDelete] = useState<Product | null>(null);
 
+  // Quick Per-Article Discount Modal State
+  const [quickDiscountProduct, setQuickDiscountProduct] = useState<Product | null>(null);
+  const [quickDiscountType, setQuickDiscountType] = useState<'fixed' | 'percent'>('fixed');
+  const [quickDiscountValue, setQuickDiscountValue] = useState<string>('');
+
   // Form State
   const [formData, setFormData] = useState({
     code: '',
@@ -90,6 +100,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     supplier: '',
     cost: 0,
     price: 0,
+    discountType: 'fixed' as 'fixed' | 'percent',
+    discountValue: 0,
     img: '',
   });
   const [isCustomCategoryMode, setIsCustomCategoryMode] = useState<boolean>(false);
@@ -118,6 +130,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       supplier: suppliers.length > 0 ? suppliers[0].name : '',
       cost: 0,
       price: 0,
+      discountType: 'fixed',
+      discountValue: 0,
       img: '',
     });
     setIsCustomCategoryMode(false);
@@ -126,6 +140,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   const handleOpenEdit = (product: Product) => {
     setEditingProduct(product);
+    const savedType = product.discountType === 'percent' ? 'percent' : 'fixed';
+    const savedVal =
+      product.discountValue !== undefined
+        ? Number(product.discountValue) || 0
+        : Number(product.discount) || 0;
     setFormData({
       code: product.code,
       name: product.name,
@@ -135,10 +154,57 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       supplier: product.supplier || '',
       cost: product.cost,
       price: product.price,
+      discountType: savedType,
+      discountValue: savedVal,
       img: product.img || '',
     });
     setIsCustomCategoryMode(false);
     setIsModalOpen(true);
+  };
+
+  const handleOpenQuickDiscount = (product: Product) => {
+    setQuickDiscountProduct(product);
+    const savedType = product.discountType === 'percent' ? 'percent' : 'fixed';
+    const savedVal =
+      product.discountValue !== undefined && Number(product.discountValue) > 0
+        ? String(product.discountValue)
+        : Number(product.discount) > 0
+        ? String(product.discount)
+        : '';
+    setQuickDiscountType(savedType);
+    setQuickDiscountValue(savedVal);
+  };
+
+  const handleSaveQuickDiscount = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickDiscountProduct) return;
+
+    const basePrice = Math.max(0, Number(quickDiscountProduct.price) || 0);
+    const rawVal = Math.max(0, parseFloat(quickDiscountValue) || 0);
+    const computedDiscount =
+      quickDiscountType === 'percent'
+        ? Math.min(basePrice, (basePrice * Math.min(100, rawVal)) / 100)
+        : Math.min(basePrice, rawVal);
+
+    const updatedItem: Product = {
+      ...quickDiscountProduct,
+      discount: Number(computedDiscount.toFixed(2)),
+      discountType: quickDiscountType,
+      discountValue: Number(rawVal.toFixed(2)),
+    };
+
+    onSaveProduct(updatedItem, quickDiscountProduct.code);
+    if (showToast) {
+      if (computedDiscount > 0) {
+        showToast(
+          `Descuento de L. ${computedDiscount.toFixed(2)} asignado a "${quickDiscountProduct.name}"`,
+          'success'
+        );
+      } else {
+        showToast(`Se quitó el descuento de "${quickDiscountProduct.name}"`, 'info');
+      }
+    }
+    setQuickDiscountProduct(null);
   };
 
   const handleCloseModal = () => {
@@ -154,6 +220,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     setFormData((prev) => ({ ...prev, code: newCode }));
   };
 
+  const computedFormDiscount = React.useMemo(() => {
+    const basePrice = Math.max(0, Number(formData.price) || 0);
+    const rawVal = Math.max(0, Number(formData.discountValue) || 0);
+    if (rawVal <= 0 || basePrice <= 0) return 0;
+    if (formData.discountType === 'percent') {
+      return Math.min(basePrice, (basePrice * Math.min(100, rawVal)) / 100);
+    }
+    return Math.min(basePrice, rawVal);
+  }, [formData.price, formData.discountType, formData.discountValue]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name.trim() || !formData.code.trim()) return;
@@ -168,6 +244,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       supplier: formData.supplier,
       cost: Number(formData.cost) || 0,
       price: Number(formData.price) || 0,
+      discount: Number(computedFormDiscount.toFixed(2)),
+      discountType: formData.discountType,
+      discountValue: Math.max(0, Number(formData.discountValue) || 0),
       img: formData.img.trim(),
     };
 
@@ -175,9 +254,21 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     handleCloseModal();
   };
 
+  // Fast non-blocking search typing with useDeferredValue
+  const deferredSearch = React.useDeferredValue(searchText);
+
+  // Pagination State — limits DOM rendering to keep app fast and smooth
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(35);
+
+  // Reset page to 1 when filters or search change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [deferredSearch, selectedCategory, selectedSupplier, sortOption]);
+
   // Filter & Sort inventory items (Mayor a menor stock, precio, costo, etc.)
   const filteredInventory = React.useMemo(() => {
-    const query = searchText.toLowerCase().trim();
+    const query = deferredSearch.toLowerCase().trim();
     const filtered = inventory.filter((item) => {
       const matchesSearch =
         !query ||
@@ -221,7 +312,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           return 0;
       }
     });
-  }, [inventory, searchText, selectedCategory, selectedSupplier, sortOption]);
+  }, [inventory, deferredSearch, selectedCategory, selectedSupplier, sortOption]);
+
+  // Paginated subset to render only active page in DOM
+  const totalPages = pageSize === 'all' ? 1 : Math.max(1, Math.ceil(filteredInventory.length / pageSize));
+  const paginatedInventory = React.useMemo(() => {
+    if (pageSize === 'all') return filteredInventory;
+    const start = (currentPage - 1) * pageSize;
+    return filteredInventory.slice(start, start + pageSize);
+  }, [filteredInventory, currentPage, pageSize]);
 
   // Extract unique categories
   const categories = Array.from(
@@ -391,7 +490,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <p className="font-medium text-sm">No se encontraron artículos con los filtros aplicados.</p>
               </div>
             ) : (
-              filteredInventory.map((item) => {
+              paginatedInventory.map((item) => {
               const stockNumber = Number(item.stock) || 0;
               const stockColor =
                 stockNumber <= 0
@@ -411,6 +510,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         <img
                           src={item.img}
                           alt={item.name}
+                          loading="lazy"
+                          decoding="async"
                           className="w-full h-full object-cover"
                           onError={(e) => {
                             (e.target as HTMLElement).style.display = 'none';
@@ -446,9 +547,30 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
                     <div>
                       <span className="text-[10px] text-slate-400 block -mb-0.5">Precio</span>
-                      <span className="font-bold text-slate-900 text-sm text-emerald-700">
-                        L. {Number(item.price || 0).toFixed(2)}
-                      </span>
+                      {(Number(item.discount) || 0) > 0 ? (
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-sm text-emerald-700">
+                              L. {Math.max(0, Number(item.price || 0) - Number(item.discount || 0)).toFixed(2)}
+                            </span>
+                            <span className="text-[10px] line-through text-slate-400">
+                              L. {Number(item.price || 0).toFixed(2)}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenQuickDiscount(item)}
+                            className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded cursor-pointer hover:bg-rose-100"
+                          >
+                            <Tag className="w-2.5 h-2.5" />
+                            <span>Desc: -L. {Number(item.discount).toFixed(2)}</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="font-bold text-slate-900 text-sm text-emerald-700">
+                          L. {Number(item.price || 0).toFixed(2)}
+                        </span>
+                      )}
                     </div>
 
                     <div className="text-center">
@@ -461,6 +583,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenQuickDiscount(item)}
+                        className={`p-2 rounded-lg transition-colors cursor-pointer ${
+                          (Number(item.discount) || 0) > 0
+                            ? 'text-rose-700 bg-rose-100 hover:bg-rose-200'
+                            : 'text-slate-600 hover:text-amber-700 bg-slate-100 hover:bg-amber-50'
+                        }`}
+                        title="Asignar o cambiar descuento del artículo"
+                      >
+                        <Percent className="w-4 h-4" />
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleOpenEdit(item)}
@@ -587,7 +721,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredInventory.map((item) => {
+                paginatedInventory.map((item) => {
                   const stockNumber = Number(item.stock) || 0;
                   const stockColor =
                     stockNumber <= 0
@@ -605,6 +739,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                               <img
                                 src={item.img}
                                 alt={item.name}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-full h-full object-cover"
                                 onError={(e) => {
                                   // Fallback icon on image load error
@@ -640,9 +776,43 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         <p className="text-xs text-slate-400">
                           C: L {Number(item.cost || 0).toFixed(2)}
                         </p>
-                        <p className="font-semibold text-slate-800">
-                          V: L {Number(item.price || 0).toFixed(2)}
-                        </p>
+                        {(Number(item.discount) || 0) > 0 ? (
+                          <div className="flex flex-col items-end">
+                            <span className="text-xs line-through text-slate-400">
+                              V: L {Number(item.price || 0).toFixed(2)}
+                            </span>
+                            <span className="font-bold text-emerald-700">
+                              Final: L {Math.max(0, Number(item.price || 0) - Number(item.discount || 0)).toFixed(2)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenQuickDiscount(item)}
+                              className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded cursor-pointer hover:bg-rose-100"
+                              title="Clic para modificar descuento asignado"
+                            >
+                              <Tag className="w-2.5 h-2.5" />
+                              <span>
+                                Desc: -L {Number(item.discount).toFixed(2)}
+                                {item.discountType === 'percent' && item.discountValue
+                                  ? ` (${item.discountValue}%)`
+                                  : ''}
+                              </span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div>
+                            <p className="font-semibold text-slate-800">
+                              V: L {Number(item.price || 0).toFixed(2)}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenQuickDiscount(item)}
+                              className="text-[10px] text-slate-400 hover:text-emerald-600 hover:underline cursor-pointer"
+                            >
+                              + Asignar desc.
+                            </button>
+                          </div>
+                        )}
                       </td>
                       <td className="p-4 border-b border-slate-100 text-center">
                         <span
@@ -654,8 +824,20 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       <td className="p-4 border-b border-slate-100 text-center">
                         <div className="flex items-center justify-center gap-1">
                           <button
+                            type="button"
+                            onClick={() => handleOpenQuickDiscount(item)}
+                            className={`transition-colors p-2 rounded-lg cursor-pointer ${
+                              (Number(item.discount) || 0) > 0
+                                ? 'text-rose-600 bg-rose-50 hover:bg-rose-100'
+                                : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
+                            }`}
+                            title="Establecer descuento al artículo"
+                          >
+                            <Percent className="w-4 h-4" />
+                          </button>
+                          <button
                             onClick={() => handleOpenEdit(item)}
-                            className="text-slate-400 hover:text-blue-600 transition-colors p-2 rounded-lg hover:bg-blue-50"
+                            className="text-slate-400 hover:text-blue-600 transition-colors p-2 rounded-lg hover:bg-blue-50 cursor-pointer"
                             title="Editar Artículo"
                           >
                             <Pencil className="w-4 h-4" />
@@ -677,6 +859,92 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Controls Bar */}
+        {filteredInventory.length > 0 && (
+          <div className="p-3 sm:p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600 rounded-b-2xl">
+            <div className="flex items-center gap-2">
+              <span>
+                Mostrando{' '}
+                <strong className="text-slate-900">
+                  {pageSize === 'all'
+                    ? 1
+                    : (currentPage - 1) * pageSize + 1}
+                </strong>{' '}
+                -{' '}
+                <strong className="text-slate-900">
+                  {pageSize === 'all'
+                    ? filteredInventory.length
+                    : Math.min(currentPage * pageSize, filteredInventory.length)}
+                </strong>{' '}
+                de <strong className="text-slate-900">{filteredInventory.length}</strong> artículos
+              </span>
+
+              <div className="hidden sm:flex items-center gap-1 ml-3 border-l border-slate-300 pl-3">
+                <span className="text-slate-400">Ver:</span>
+                {[35, 70, 100].map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    onClick={() => {
+                      setPageSize(size);
+                      setCurrentPage(1);
+                    }}
+                    className={`px-2 py-0.5 rounded font-bold transition-all cursor-pointer ${
+                      pageSize === size
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {size}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPageSize('all');
+                    setCurrentPage(1);
+                  }}
+                  className={`px-2 py-0.5 rounded font-bold transition-all cursor-pointer ${
+                    pageSize === 'all'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Todos
+                </button>
+              </div>
+            </div>
+
+            {pageSize !== 'all' && totalPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer shadow-2xs"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Anterior</span>
+                </button>
+
+                <span className="px-2 font-bold text-slate-800">
+                  Página {currentPage} de {totalPages}
+                </span>
+
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer shadow-2xs"
+                >
+                  <span>Siguiente</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Modal Agregar / Editar Producto */}
@@ -901,6 +1169,114 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       </div>
                     </div>
 
+                    {/* Per-Article Discount Section */}
+                    <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                          <Tag className="w-3.5 h-3.5 text-rose-500" />
+                          <span>Descuento Asignado al Artículo</span>
+                        </label>
+                        <div className="flex items-center bg-white p-0.5 rounded-lg border border-slate-300">
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, discountType: 'fixed' })}
+                            className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                              formData.discountType === 'fixed'
+                                ? 'bg-slate-800 text-white'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            L. Fijo
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, discountType: 'percent' })}
+                            className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                              formData.discountType === 'percent'
+                                ? 'bg-slate-800 text-white'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            % Porcentaje
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                            {formData.discountType === 'fixed' ? 'L.' : '%'}
+                          </span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max={formData.discountType === 'percent' ? 100 : formData.price || undefined}
+                            value={formData.discountValue || ''}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                discountValue: Math.max(0, parseFloat(e.target.value) || 0),
+                              })
+                            }
+                            placeholder="0.00 (Sin descuento)"
+                            className="w-full pl-8 pr-8 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-slate-800"
+                          />
+                          {formData.discountValue > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setFormData({ ...formData, discountValue: 0 })}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-rose-600 cursor-pointer"
+                              title="Quitar descuento"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Quick Percentage Presets */}
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span className="text-slate-400 font-medium">Rápido:</span>
+                        {[5, 10, 15, 20, 30, 50].map((pct) => (
+                          <button
+                            key={pct}
+                            type="button"
+                            onClick={() =>
+                              setFormData({
+                                ...formData,
+                                discountType: 'percent',
+                                discountValue: pct,
+                              })
+                            }
+                            className={`px-2 py-0.5 rounded border font-bold transition-all cursor-pointer ${
+                              formData.discountType === 'percent' && formData.discountValue === pct
+                                ? 'bg-rose-600 text-white border-rose-600'
+                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {pct}%
+                          </button>
+                        ))}
+                      </div>
+
+                      {computedFormDiscount > 0 && (
+                        <div className="p-2.5 bg-emerald-50/90 border border-emerald-200 rounded-lg flex items-center justify-between text-xs">
+                          <div>
+                            <span className="text-slate-500 block">
+                              Descuento: <strong className="text-rose-600">- L. {computedFormDiscount.toFixed(2)}</strong>
+                            </span>
+                            <span className="text-emerald-900 font-bold">
+                              Precio Final c/Descuento:
+                            </span>
+                          </div>
+                          <span className="text-base font-black text-emerald-700">
+                            L. {Math.max(0, (Number(formData.price) || 0) - computedFormDiscount).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
                     <div>
                       <ImageUploader
                         value={formData.img}
@@ -948,6 +1324,180 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 </div>
               </form>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Modal: Establecer Descuento al Artículo */}
+      {quickDiscountProduct && (
+        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                  <Percent className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 leading-tight">
+                    Descuento del Artículo
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate max-w-[240px]">
+                    {quickDiscountProduct.name} ({quickDiscountProduct.code})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuickDiscountProduct(null)}
+                className="text-slate-400 hover:text-slate-600 w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-200 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveQuickDiscount} className="p-5 space-y-4">
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                <span className="text-slate-500 font-medium">Precio de Venta Normal:</span>
+                <span className="text-sm font-bold text-slate-900">
+                  L. {Number(quickDiscountProduct.price || 0).toFixed(2)}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Establecer Descuento
+                  </label>
+                  <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setQuickDiscountType('fixed')}
+                      className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                        quickDiscountType === 'fixed'
+                          ? 'bg-slate-900 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Lempiras (L.)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQuickDiscountType('percent')}
+                      className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                        quickDiscountType === 'percent'
+                          ? 'bg-slate-900 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Porcentaje (%)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">
+                    {quickDiscountType === 'fixed' ? 'L.' : '%'}
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max={
+                      quickDiscountType === 'percent'
+                        ? 100
+                        : Number(quickDiscountProduct.price) || undefined
+                    }
+                    value={quickDiscountValue}
+                    onChange={(e) => setQuickDiscountValue(e.target.value)}
+                    placeholder="0.00"
+                    autoFocus
+                    className="w-full pl-10 pr-9 py-2.5 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-base font-bold text-slate-900"
+                  />
+                  {quickDiscountValue && (
+                    <button
+                      type="button"
+                      onClick={() => setQuickDiscountValue('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-rose-600 cursor-pointer"
+                      title="Limpiar"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[11px] text-slate-400 font-medium mr-1">Opciones rápidas:</span>
+                  {[5, 10, 15, 20, 25, 50].map((pct) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => {
+                        setQuickDiscountType('percent');
+                        setQuickDiscountValue(String(pct));
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                        quickDiscountType === 'percent' && Number(quickDiscountValue) === pct
+                          ? 'bg-rose-600 text-white border-rose-600'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {pct}%
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setQuickDiscountValue('0')}
+                    className="px-2.5 py-1 rounded-lg text-xs font-bold border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 cursor-pointer"
+                  >
+                    Sin desc.
+                  </button>
+                </div>
+              </div>
+
+              {(() => {
+                const baseP = Math.max(0, Number(quickDiscountProduct.price) || 0);
+                const rawV = Math.max(0, parseFloat(quickDiscountValue) || 0);
+                const discAmt =
+                  quickDiscountType === 'percent'
+                    ? Math.min(baseP, (baseP * Math.min(100, rawV)) / 100)
+                    : Math.min(baseP, rawV);
+                const finalP = Math.max(0, baseP - discAmt);
+
+                return (
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl space-y-1.5 text-xs">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Descuento por unidad:</span>
+                      <span className="font-bold text-rose-600">- L. {discAmt.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-1.5 border-t border-emerald-200/70">
+                      <span className="font-bold text-emerald-950 text-sm">
+                        Precio Final con Descuento:
+                      </span>
+                      <span className="text-lg font-black text-emerald-700">
+                        L. {finalP.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setQuickDiscountProduct(null)}
+                  className="px-4 py-2 text-slate-600 font-semibold hover:bg-slate-100 rounded-xl text-sm cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm shadow-sm flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Guardar Descuento</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
