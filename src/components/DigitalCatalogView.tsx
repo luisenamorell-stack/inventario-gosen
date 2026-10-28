@@ -50,9 +50,16 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Generate public catalog link based on current domain origin
+  // Generate public catalog link based on current domain origin & company tenant
   const baseUrl = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
-  const shareableUrl = `${baseUrl}?catalogo=1`;
+  const activeCompanySlug = (storeSettings.companyId || 'gosen').toLowerCase().trim();
+  const shareableUrl =
+    activeCompanySlug && activeCompanySlug !== 'gosen'
+      ? `${baseUrl}?empresa=${encodeURIComponent(activeCompanySlug)}&catalogo=1`
+      : `${baseUrl}?catalogo=1`;
+
+  const isGosen = activeCompanySlug === 'gosen';
+  const showDvolada = storeSettings.enableDeliveryDvolada ?? isGosen;
 
   // Available in-stock products count
   const availableCount = inventory.filter((p) => (Number(p.stock) || 0) > 0).length;
@@ -87,7 +94,7 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
 
   // Share via WhatsApp broadcast/contact
   const handleShareWhatsAppLink = () => {
-    const sName = storeSettings.storeName || 'Tienda Gosén';
+    const sName = storeSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda');
     const text = `🛍️ *CATÁLOGO DIGITAL DE ${sName.toUpperCase()}*\n\n` +
       `¡Hola! Te invitamos a conocer nuestro catálogo de productos disponibles en línea. ` +
       `Puedes elegir lo que te guste y hacernos tu pedido directamente por WhatsApp aquí:\n\n` +
@@ -342,34 +349,36 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
             </button>
           </div>
 
-          {/* Integrated Delivery Partner Card - D'VOLADA */}
-          <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-orange-950 text-white p-5 rounded-2xl border border-orange-500/40 shadow-md space-y-3">
-            <div className="flex items-center gap-2.5 pb-2 border-b border-slate-800">
-              <div className="w-8 h-8 rounded-xl bg-orange-500/20 text-orange-400 flex items-center justify-center font-bold border border-orange-500/30">
-                <Truck className="w-4 h-4" />
+          {/* Integrated Delivery Partner Card - D'VOLADA (Only if enabled by SaaS Admin) */}
+          {showDvolada && (
+            <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-orange-950 text-white p-5 rounded-2xl border border-orange-500/40 shadow-md space-y-3">
+              <div className="flex items-center gap-2.5 pb-2 border-b border-slate-800">
+                <div className="w-8 h-8 rounded-xl bg-orange-500/20 text-orange-400 flex items-center justify-center font-bold border border-orange-500/30">
+                  <Truck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-white text-sm">Delivery Integrado</h3>
+                  <p className="text-[11px] text-orange-300 font-semibold">Aliado oficial de envíos</p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-extrabold text-white text-sm">Delivery Integrado</h3>
-                <p className="text-[11px] text-orange-300 font-semibold">Aliado oficial de envíos</p>
+
+              <div className="bg-white/95 p-2 rounded-xl border border-orange-200/80 flex items-center justify-center shadow-inner">
+                <img
+                  src="/dvolada-delivery.jpg"
+                  alt="D'VOLADA Servicios de Delivery"
+                  className="h-14 sm:h-16 object-contain rounded-lg"
+                />
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed font-medium">
+                Los pedidos realizados desde tu catálogo online están vinculados automáticamente con el servicio de entrega a domicilio de <strong>D'VOLADA</strong>.
+              </p>
+
+              <div className="pt-1 text-[11px] font-bold text-orange-300 flex items-center gap-1">
+                <span>✓ Incluye dirección de envío en mensaje de WhatsApp</span>
               </div>
             </div>
-
-            <div className="bg-white/95 p-2 rounded-xl border border-orange-200/80 flex items-center justify-center shadow-inner">
-              <img
-                src="/dvolada-delivery.jpg"
-                alt="D'VOLADA Servicios de Delivery"
-                className="h-14 sm:h-16 object-contain rounded-lg"
-              />
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed font-medium">
-              Los pedidos realizados desde tu catálogo online están vinculados automáticamente con el servicio de entrega a domicilio de <strong>D'VOLADA</strong>.
-            </p>
-
-            <div className="pt-1 text-[11px] font-bold text-orange-300 flex items-center gap-1">
-              <span>✓ Incluye dirección de envío en mensaje de WhatsApp</span>
-            </div>
-          </div>
+          )}
 
           {/* Quick Info Tip Box */}
           <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-xs text-emerald-950 space-y-2">
@@ -379,9 +388,11 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
             </div>
             <ul className="space-y-1.5 text-emerald-900/90 list-disc pl-4 leading-relaxed">
               <li>Muestra todos tus productos sincronizados en tiempo real.</li>
-              <li>Sincronizado en tiempo real con tu inventario de Tienda Gosén.</li>
+              <li>Sincronizado en tiempo real con el inventario de {storeSettings.storeName || (isGosen ? 'Tienda Gosén' : 'tu tienda')}.</li>
               <li>Tus clientes no necesitan registrarse ni descargar ninguna aplicación.</li>
-              <li>Recibes el detalle exacto de los productos, método de entrega <strong>D'VOLADA</strong> y dirección listos en tu WhatsApp.</li>
+              <li>
+                Recibes el detalle exacto de los productos, método de entrega{showDvolada ? <> <strong>D'VOLADA</strong></> : ' (a domicilio o retiro en tienda)'} y dirección listos en tu WhatsApp.
+              </li>
             </ul>
           </div>
         </div>

@@ -31,6 +31,8 @@ import {
 interface UserManagementViewProps {
   users: UserAccount[];
   storeSettings: StoreSettings;
+  companyAllowedModules?: ActiveTab[];
+  maxUsers?: number;
   onSaveUser: (user: UserAccount) => Promise<void>;
   onDeleteUser: (userId: string) => Promise<void>;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -96,10 +98,19 @@ const TAB_MODULES: { id: ActiveTab; label: string; description: string; icon: Re
 export const UserManagementView: React.FC<UserManagementViewProps> = ({
   users,
   storeSettings,
+  companyAllowedModules,
+  maxUsers = 0,
   onSaveUser,
   onDeleteUser,
   showToast,
 }) => {
+  const isGosen = (storeSettings.companyId || 'gosen') === 'gosen';
+  const effectiveCompanyModules = companyAllowedModules || storeSettings.allowedModules;
+  const availableTabModules =
+    effectiveCompanyModules && effectiveCompanyModules.length > 0
+      ? TAB_MODULES.filter((tm) => effectiveCompanyModules.includes(tm.id))
+      : TAB_MODULES;
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserAccount | null>(null);
 
@@ -120,13 +131,24 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [userToDelete, setUserToDelete] = useState<UserAccount | null>(null);
 
   const handleOpenNewUser = () => {
+    const effectiveMax = maxUsers || storeSettings.maxUsers || 0;
+    if (effectiveMax > 0 && users.length >= effectiveMax) {
+      showToast(
+        `Has alcanzado el límite de tu plan (${users.length}/${effectiveMax} colaboradores). Contacta al Administrador SaaS para ampliar tu plan.`,
+        'warning'
+      );
+      return;
+    }
     setEditingUser(null);
     setName('');
     setUsername('');
     setPassword('');
     setRole('collaborator');
     setIsActive(true);
-    setAllowedTabs(['sales', 'inventory', 'price-checker', 'catalog']);
+    const defaultCollabTabs = (['sales', 'inventory', 'price-checker', 'catalog'] as ActiveTab[]).filter(
+      (t) => !effectiveCompanyModules || effectiveCompanyModules.includes(t)
+    );
+    setAllowedTabs(defaultCollabTabs.length > 0 ? defaultCollabTabs : availableTabModules.map((t) => t.id));
     setIsModalOpen(true);
   };
 
@@ -150,11 +172,14 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   };
 
   const handleSelectAllTabs = () => {
-    setAllowedTabs(TAB_MODULES.map((t) => t.id));
+    setAllowedTabs(availableTabModules.map((t) => t.id));
   };
 
   const handleDeselectAllTabs = () => {
-    setAllowedTabs(['sales', 'price-checker']);
+    const basic = (['sales', 'price-checker'] as ActiveTab[]).filter(
+      (t) => !effectiveCompanyModules || effectiveCompanyModules.includes(t)
+    );
+    setAllowedTabs(basic.length > 0 ? basic : availableTabModules.slice(0, 1).map((t) => t.id));
   };
 
   const handleSubmitUser = async (e: React.FormEvent) => {
@@ -195,7 +220,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         password: password.trim(),
         role,
         isActive,
-        allowedTabs: role === 'admin' ? TAB_MODULES.map((t) => t.id) : allowedTabs,
+        allowedTabs: role === 'admin' ? availableTabModules.map((t) => t.id) : allowedTabs,
         createdAt: editingUser ? editingUser.createdAt : Date.now(),
       };
 
@@ -234,9 +259,22 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             <Users className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
-              Gestión de Usuarios y Colaboradores
-            </h1>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
+                Gestión de Usuarios y Colaboradores
+              </h1>
+              {(maxUsers || storeSettings.maxUsers || 0) > 0 && (
+                <span
+                  className={`px-2.5 py-0.5 rounded-lg text-xs font-extrabold border ${
+                    users.length >= (maxUsers || storeSettings.maxUsers || 0)
+                      ? 'bg-amber-50 text-amber-800 border-amber-300'
+                      : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                  }`}
+                >
+                  Plan: {users.length} / {maxUsers || storeSettings.maxUsers} colaboradores
+                </span>
+              )}
+            </div>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
               Crea perfiles para tus empleados, asigna contraseñas y limita el acceso únicamente a los módulos autorizados.
             </p>
@@ -267,7 +305,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               Acceso Máximo al Sistema
             </div>
             <div className="text-xs text-slate-300 font-mono mt-0.5">
-              Contraseña Master Configurada: <span className="font-black text-amber-300 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">{storeSettings.accessPassword || 'GOSEN2026'}</span>
+              Contraseña Master Configurada: <span className="font-black text-amber-300 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">{storeSettings.accessPassword || (isGosen ? 'GOSEN2026' : 'ADMIN2026')}</span>
             </div>
           </div>
         </div>
@@ -556,7 +594,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                    {TAB_MODULES.map((mod) => {
+                    {availableTabModules.map((mod) => {
                       const Icon = mod.icon;
                       const isChecked = allowedTabs.includes(mod.id);
 

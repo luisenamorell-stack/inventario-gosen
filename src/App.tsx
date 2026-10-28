@@ -10,7 +10,12 @@ import {
   PurchaseInvoice,
   UserAccount,
   ActivityLogRecord,
-  UserSession
+  UserSession,
+  CompanyTenant,
+  ALL_COMPANY_MODULES,
+  SaaSGlobalConfig,
+  POSFinanceStoreData,
+  CreditPaymentAbone
 } from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
@@ -19,16 +24,20 @@ import { InventoryView } from './components/InventoryView';
 import { AuditView } from './components/AuditView';
 import { PriceCheckerTab } from './components/PriceCheckerTab';
 import { SuppliersView } from './components/SuppliersView';
-import { SalesView } from './components/SalesView';
+import { SalesView, SalesSubTab, WhatsAppIcon } from './components/SalesView';
 import { PurchasesView } from './components/PurchasesView';
 import { StoreSettingsView } from './components/StoreSettingsView';
 import { DigitalCatalogView } from './components/DigitalCatalogView';
 import { PublicCatalogView } from './components/PublicCatalogView';
 import { UserManagementView } from './components/UserManagementView';
 import { ActivityLogView } from './components/ActivityLogView';
+import { CompaniesSaaSView, getDaysUntilBilling, formatShortDateEs } from './components/CompaniesSaaSView';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
 import {
+  getActiveCompanyId,
+  setActiveCompanyId,
+  normalizeCompanySlug,
   getCachedInventory,
   setCachedInventory,
   getCachedSuppliers,
@@ -41,6 +50,19 @@ import {
   setCachedAuditHistory,
   getCachedUsers,
   setCachedUsers,
+  getCachedStoreSettings,
+  setCachedStoreSettings,
+  getCachedCompanies,
+  setCachedCompanies,
+  DEFAULT_GOSEN_COMPANY,
+  fetchCompaniesOnce,
+  subscribeToCompaniesRealtime,
+  saveCompanyToFirestore,
+  deleteCompanyFromFirestore,
+  getCachedSaaSGlobalConfig,
+  fetchSaaSGlobalConfigOnce,
+  subscribeToSaaSGlobalConfig,
+  saveSaaSGlobalConfigToFirestore,
   fetchInventorySmart,
   fetchStoreSettingsOnce,
   fetchSuppliersOnce,
@@ -58,12 +80,16 @@ import {
   deleteSupplierFromFirestore,
   applyAuditChangesToFirestore,
   recordSaleInFirestore,
+  recordCreditPaymentInFirestore,
   cancelSaleInFirestore,
   recordPurchaseInFirestore,
   cancelPurchaseInFirestore,
   saveUserToFirestore,
   deleteUserFromFirestore,
   logActivityInFirestore,
+  getCachedPOSFinanceData,
+  fetchPOSFinanceDataOnce,
+  savePOSFinanceDataToFirestore,
   seedInitialDataIfEmpty,
   pingFirestore
 } from './firebase/firestoreService';
@@ -94,13 +120,38 @@ import {
   ClipboardCheck,
   Truck,
   LayoutGrid,
-  Package
+  Package,
+  Building2,
+  Lock,
+  AlertTriangle,
+  ArrowLeft,
+  Megaphone,
+  X
 } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 import { SplashScreen } from './components/SplashScreen';
 
 export const App: React.FC = () => {
+  // Active Multi-Tenant Company Slug (defaults to 'gosen' or ?empresa= URL param)
+  const [activeCompanyId, setActiveCompanyIdState] = useState<string>(() => getActiveCompanyId());
+  const [companies, setCompanies] = useState<CompanyTenant[]>(() => {
+    const cached = getCachedCompanies();
+    return cached && cached.length > 0 ? cached : [DEFAULT_GOSEN_COMPANY];
+  });
+  const [saasGlobalConfig, setSaasGlobalConfig] = useState<SaaSGlobalConfig>(() =>
+    getCachedSaaSGlobalConfig()
+  );
+  const [dismissedAnnouncements, setDismissedAnnouncements] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('stockmaster_dismissed_saas_announcements');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [expiryBannerDismissedToday, setExpiryBannerDismissedToday] = useState<boolean>(false);
+
   // Public Customer Catalog Mode Detection (?catalogo=1)
   const [isPublicCatalogMode, setIsPublicCatalogMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -117,21 +168,31 @@ export const App: React.FC = () => {
 
   // Application Data State — Initialized immediately from localStorage cache (0 reads on paint)
   const [inventory, setInventory] = useState<Product[]>(() => {
-    const cached = getCachedInventory();
-    return cached && cached.length > 0 ? cached : INITIAL_INVENTORY;
+    const slug = getActiveCompanyId();
+    const cached = getCachedInventory(slug);
+    if (cached && cached.length > 0) return cached;
+    return slug === 'gosen' ? INITIAL_INVENTORY : [];
   });
   const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
-    const cached = getCachedSuppliers();
-    return cached && cached.length > 0 ? cached : INITIAL_SUPPLIERS;
+    const slug = getActiveCompanyId();
+    const cached = getCachedSuppliers(slug);
+    if (cached && cached.length > 0) return cached;
+    return slug === 'gosen' ? INITIAL_SUPPLIERS : [];
   });
   const [auditHistory, setAuditHistory] = useState<AuditHistoryRecord[]>(() => {
-    const cached = getCachedAuditHistory();
-    return cached && cached.length > 0 ? cached : INITIAL_AUDIT_HISTORY;
+    const slug = getActiveCompanyId();
+    const cached = getCachedAuditHistory(slug);
+    if (cached && cached.length > 0) return cached;
+    return slug === 'gosen' ? INITIAL_AUDIT_HISTORY : [];
   });
-  const [sales, setSales] = useState<SaleRecord[]>(() => getCachedSales() || []);
-  const [purchases, setPurchases] = useState<PurchaseInvoice[]>(() => getCachedPurchases() || []);
-  const [users, setUsers] = useState<UserAccount[]>(() => getCachedUsers() || []);
+  const [sales, setSales] = useState<SaleRecord[]>(() => getCachedSales(getActiveCompanyId()) || []);
+  const [purchases, setPurchases] = useState<PurchaseInvoice[]>(() => getCachedPurchases(getActiveCompanyId()) || []);
+  const [users, setUsers] = useState<UserAccount[]>(() => getCachedUsers(getActiveCompanyId()) || []);
   const [activityLogs, setActivityLogs] = useState<ActivityLogRecord[]>([]);
+  const [posFinanceData, setPosFinanceData] = useState<POSFinanceStoreData>(() =>
+    getCachedPOSFinanceData(getActiveCompanyId())
+  );
+  const [salesSubTab, setSalesSubTab] = useState<SalesSubTab>('pos');
 
   // Track which secondary collections have been synced during this browser session
   const loadedModulesRef = useRef<Record<string, boolean>>({});
@@ -139,11 +200,22 @@ export const App: React.FC = () => {
 
   // Store Branding & Profile State
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(() => {
-    try {
-      const cached = localStorage.getItem('stockmaster_store_settings');
-      if (cached) return JSON.parse(cached);
-    } catch {}
-    return DEFAULT_STORE_SETTINGS;
+    const slug = getActiveCompanyId();
+    const cached = getCachedStoreSettings(slug);
+    if (cached) return cached;
+    return slug === 'gosen'
+      ? DEFAULT_STORE_SETTINGS
+      : {
+          companyId: slug,
+          storeName: slug.toUpperCase(),
+          tagline: 'Control de Inventario y Ventas',
+          logoUrl: '',
+          phone: '',
+          address: '',
+          accessPassword: 'ADMIN2026',
+          allowedModules: [...ALL_COMPANY_MODULES],
+          enableDeliveryDvolada: false,
+        };
   });
 
   // User Session & Authentication State
@@ -151,8 +223,17 @@ export const App: React.FC = () => {
     try {
       const localSess = localStorage.getItem('stockmaster_user_session');
       const sessionSess = sessionStorage.getItem('stockmaster_user_session');
-      if (localSess) return JSON.parse(localSess);
-      if (sessionSess) return JSON.parse(sessionSess);
+      const raw = localSess || sessionSess;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (!parsed.companyId) parsed.companyId = 'gosen';
+        const isOwnerUnlocked =
+          localStorage.getItem('stockmaster_saas_owner_unlocked') === 'true';
+        parsed.isSuperAdmin = Boolean(
+          parsed.role === 'admin' && parsed.isSuperAdmin === true && isOwnerUnlocked
+        );
+        return parsed;
+      }
     } catch {}
     return null;
   });
@@ -164,7 +245,7 @@ export const App: React.FC = () => {
   // Connection & Sync State
   const [isFirebaseConnected, setIsFirebaseConnected] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(() => {
-    const cached = getCachedInventory();
+    const cached = getCachedInventory(getActiveCompanyId());
     return !(cached && cached.length > 0);
   });
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -180,9 +261,8 @@ export const App: React.FC = () => {
     return true;
   });
   const [isSplashExiting, setIsSplashExiting] = useState<boolean>(false);
-  // Skeleton loader state only active on first-ever load when no local cache exists
   const [isSkeletonTransition, setIsSkeletonTransition] = useState<boolean>(() => {
-    const cached = getCachedInventory();
+    const cached = getCachedInventory(getActiveCompanyId());
     return !(cached && cached.length > 0);
   });
 
@@ -261,8 +341,53 @@ export const App: React.FC = () => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  // Switch active company context (from LoginView or from Super Admin panel)
+  const handleSelectCompanyContext = useCallback((companySlug: string) => {
+    const cleanSlug = setActiveCompanyId(companySlug);
+    setActiveCompanyIdState(cleanSlug);
+    loadedModulesRef.current = {};
+
+    // Hydrate immediate local cache for the selected company
+    const cachedSettings = getCachedStoreSettings(cleanSlug);
+    if (cachedSettings) {
+      setStoreSettings(cachedSettings);
+    } else {
+      const compObj = companies.find((c) => c.slug === cleanSlug);
+      setStoreSettings(
+        cleanSlug === 'gosen'
+          ? DEFAULT_STORE_SETTINGS
+          : {
+              companyId: cleanSlug,
+              storeName: compObj?.name || cleanSlug.toUpperCase(),
+              tagline: compObj?.tagline || 'Control de Inventario y Ventas',
+              logoUrl: compObj?.logoUrl || '',
+              phone: compObj?.phone || '',
+              address: compObj?.address || '',
+              accessPassword: compObj?.adminPassword || 'ADMIN2026',
+              allowedModules: compObj?.allowedModules || [...ALL_COMPANY_MODULES],
+              enableDeliveryDvolada: compObj?.enableDeliveryDvolada ?? false,
+            }
+      );
+    }
+
+    const cachedInv = getCachedInventory(cleanSlug);
+    setInventory(cachedInv || (cleanSlug === 'gosen' ? INITIAL_INVENTORY : []));
+    setSuppliers(getCachedSuppliers(cleanSlug) || (cleanSlug === 'gosen' ? INITIAL_SUPPLIERS : []));
+    setSales(getCachedSales(cleanSlug) || []);
+    setPurchases(getCachedPurchases(cleanSlug) || []);
+    setAuditHistory(getCachedAuditHistory(cleanSlug) || []);
+    setUsers(getCachedUsers(cleanSlug) || []);
+    setPosFinanceData(getCachedPOSFinanceData(cleanSlug));
+    setActivityLogs([]);
+  }, [companies]);
+
   // Auth Handlers — Fluid login animation over instant background workspace mount
   const handleLoginSuccess = (session: UserSession, remember: boolean) => {
+    const sessionCompany = normalizeCompanySlug(session.companyId || activeCompanyId || 'gosen');
+    if (sessionCompany !== activeCompanyId) {
+      handleSelectCompanyContext(sessionCompany);
+    }
+
     triggerBriefSplash(1150, session);
     setUserSession(session);
     setIsAuthenticated(true);
@@ -275,32 +400,120 @@ export const App: React.FC = () => {
       }
     } catch {}
 
-    // Default activeTab to first allowed tab for collaborator
+    const compObj = companies.find((c) => normalizeCompanySlug(c.slug) === sessionCompany);
+    const compAllowed =
+      compObj?.allowedModules && compObj.allowedModules.length > 0
+        ? compObj.allowedModules
+        : ALL_COMPANY_MODULES;
+
     if (session.role !== 'admin') {
-      const firstAllowed = session.allowedTabs && session.allowedTabs.length > 0 ? session.allowedTabs[0] : 'sales';
+      const validCollabTabs = (session.allowedTabs || ['sales', 'inventory', 'price-checker']).filter(
+        (t) => compAllowed.includes(t)
+      );
+      const firstAllowed = validCollabTabs.length > 0 ? validCollabTabs[0] : compAllowed[0] || 'sales';
       setActiveTab(firstAllowed);
+    } else if (session.isSuperAdmin) {
+      setActiveTab('companies');
     } else {
-      setActiveTab('dashboard');
+      const firstAdminTab = compAllowed.includes('dashboard') ? 'dashboard' : compAllowed[0] || 'sales';
+      setActiveTab(firstAdminTab);
     }
 
-    logActivityInFirestore({
-      userName: session.userName,
-      userRole: session.role,
-      action: `Inició sesión en la plataforma (${session.role === 'admin' ? 'Administrador' : 'Colaborador'})`,
-      module: 'users',
-    });
+    logActivityInFirestore(
+      {
+        companyId: sessionCompany,
+        userName: session.userName,
+        userRole: session.role,
+        action: `Inició sesión en la plataforma (${session.role === 'admin' ? 'Administrador' : 'Colaborador'})`,
+        module: 'users',
+      },
+      sessionCompany
+    );
 
     showToast(`¡Bienvenido ${session.userName}!`, 'success');
   };
 
+  const handleUnlockSuperAdmin = (masterKeyInput: string): boolean => {
+    const expectedMasterKey = (
+      localStorage.getItem('stockmaster_saas_master_key') || 'SAASMASTER2026'
+    ).trim();
+
+    if (masterKeyInput.trim().toUpperCase() !== expectedMasterKey.toUpperCase()) {
+      return false;
+    }
+
+    try {
+      localStorage.setItem('stockmaster_saas_owner_unlocked', 'true');
+    } catch {}
+
+    setUserSession((prev) => {
+      if (!prev) return prev;
+      const updated: UserSession = {
+        ...prev,
+        isSuperAdmin: true,
+        isStandaloneSaaS: true,
+        userName: 'Administrador SaaS',
+        allowedTabs: Array.from(new Set([...(prev.allowedTabs || []), 'companies'])) as ActiveTab[],
+      };
+      try {
+        if (localStorage.getItem('stockmaster_user_session')) {
+          localStorage.setItem('stockmaster_user_session', JSON.stringify(updated));
+        } else {
+          sessionStorage.setItem('stockmaster_user_session', JSON.stringify(updated));
+        }
+      } catch {}
+      return updated;
+    });
+
+    setActiveTab('companies');
+    showToast('Consola Central SaaS abierta', 'success');
+    return true;
+  };
+
+  const handleLockSuperAdmin = () => {
+    try {
+      localStorage.removeItem('stockmaster_saas_owner_unlocked');
+    } catch {}
+
+    setUserSession((prev) => {
+      if (!prev) return prev;
+      const updated: UserSession = {
+        ...prev,
+        isSuperAdmin: false,
+        userName:
+          activeCompanyId === 'gosen'
+            ? 'Administrador'
+            : `Admin ${storeSettings.storeName || activeCompanyId}`,
+        allowedTabs: (prev.allowedTabs || []).filter((t) => t !== 'companies'),
+      };
+      try {
+        if (localStorage.getItem('stockmaster_user_session')) {
+          localStorage.setItem('stockmaster_user_session', JSON.stringify(updated));
+        } else {
+          sessionStorage.setItem('stockmaster_user_session', JSON.stringify(updated));
+        }
+      } catch {}
+      return updated;
+    });
+
+    if (activeTab === 'companies') {
+      setActiveTab('dashboard');
+    }
+    showToast('Panel SaaS ocultado. Ahora estás en vista normal de tienda.', 'info');
+  };
+
   const handleLogout = () => {
     if (userSession) {
-      logActivityInFirestore({
-        userName: userSession.userName,
-        userRole: userSession.role,
-        action: 'Cerró sesión del sistema',
-        module: 'users',
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: userSession.userName,
+          userRole: userSession.role,
+          action: 'Cerró sesión del sistema',
+          module: 'users',
+        },
+        activeCompanyId
+      );
     }
 
     setUserSession(null);
@@ -308,13 +521,32 @@ export const App: React.FC = () => {
     try {
       localStorage.removeItem('stockmaster_user_session');
       sessionStorage.removeItem('stockmaster_user_session');
+      localStorage.removeItem('stockmaster_saas_owner_unlocked');
     } catch {}
     showToast('Sesión cerrada correctamente', 'info');
   };
 
-  // Safe Navigation Handler enforcing RBAC permissions
+  // Safe Navigation Handler enforcing SaaS company permissions + RBAC permissions
   const handleTabChange = (targetTab: ActiveTab) => {
     if (!userSession) return;
+
+    const isSuper = Boolean(userSession.role === 'admin' && userSession.isSuperAdmin === true);
+    if (!isSuper && targetTab !== 'companies') {
+      const activeComp = companies.find(
+        (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
+      );
+      const compModules =
+        activeComp?.allowedModules && activeComp.allowedModules.length > 0
+          ? activeComp.allowedModules
+          : storeSettings.allowedModules && storeSettings.allowedModules.length > 0
+          ? storeSettings.allowedModules
+          : ALL_COMPANY_MODULES;
+
+      if (!compModules.includes(targetTab)) {
+        showToast('Esta función no está incluida o habilitada en el plan de tu tienda.', 'warning');
+        return;
+      }
+    }
 
     if (userSession.role !== 'admin') {
       const allowed = userSession.allowedTabs || ['sales', 'inventory', 'price-checker'];
@@ -385,26 +617,29 @@ export const App: React.FC = () => {
     };
   }, [isAuthenticated, activeTab]);
 
-  // 1. Smart Initial Load: Store Settings + 1-Read Inventory Sync Check
+  // 1. Smart Initial Load: Store Settings + 1-Read Inventory Sync Check + Companies Directory
   useEffect(() => {
     let isMounted = true;
 
     const initCoreData = async () => {
       setIsSyncing(true);
       try {
-        // Seed check only runs if localStorage has never seen data (max 1 read)
-        if (!isPublicCatalogMode) {
-          await seedInitialDataIfEmpty();
+        if (!isPublicCatalogMode && activeCompanyId === 'gosen') {
+          await seedInitialDataIfEmpty('gosen');
         }
 
-        const [settings, invResult] = await Promise.all([
-          fetchStoreSettingsOnce(),
-          fetchInventorySmart(false),
+        const [settings, invResult, companiesList, globalCfg] = await Promise.all([
+          fetchStoreSettingsOnce(activeCompanyId),
+          fetchInventorySmart(false, activeCompanyId),
+          fetchCompaniesOnce(false),
+          fetchSaaSGlobalConfigOnce(),
         ]);
 
         if (!isMounted) return;
         setStoreSettings(settings);
         setInventory(invResult.items);
+        setCompanies(companiesList);
+        setSaasGlobalConfig(globalCfg);
         setIsFirebaseConnected(true);
         setIsConnecting(false);
         setLastSyncTime(new Date());
@@ -426,76 +661,128 @@ export const App: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [isPublicCatalogMode]);
+  }, [isPublicCatalogMode, activeCompanyId]);
+
+  // 1b. Real-Time Subscription to Companies Directory & SaaS Global Config
+  useEffect(() => {
+    const unsubscribeComps = subscribeToCompaniesRealtime((liveCompanies) => {
+      setCompanies(liveCompanies);
+      const myTenant = liveCompanies.find(
+        (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
+      );
+      if (myTenant) {
+        setStoreSettings((prev) => {
+          const updated: StoreSettings = {
+            ...prev,
+            allowedModules:
+              myTenant.allowedModules && myTenant.allowedModules.length > 0
+                ? myTenant.allowedModules
+                : prev.allowedModules || [...ALL_COMPANY_MODULES],
+            enableDeliveryDvolada:
+              myTenant.enableDeliveryDvolada !== undefined
+                ? myTenant.enableDeliveryDvolada
+                : prev.enableDeliveryDvolada ?? activeCompanyId === 'gosen',
+            maxProducts: myTenant.maxProducts ?? prev.maxProducts ?? 0,
+            maxUsers: myTenant.maxUsers ?? prev.maxUsers ?? 0,
+          };
+          setCachedStoreSettings(updated, activeCompanyId);
+          return updated;
+        });
+      }
+    });
+
+    const unsubscribeGlobal = subscribeToSaaSGlobalConfig((liveCfg) => {
+      setSaasGlobalConfig(liveCfg);
+    });
+
+    return () => {
+      unsubscribeComps();
+      unsubscribeGlobal();
+    };
+  }, [activeCompanyId]);
 
   // 2. Load Users on Login Screen (only if not in Public Catalog Mode)
   useEffect(() => {
     if (isPublicCatalogMode) return;
-    if (!isAuthenticated && !loadedModulesRef.current['users']) {
-      loadedModulesRef.current['users'] = true;
-      fetchUsersOnce(false)
+    if (!isAuthenticated && !loadedModulesRef.current[`users_${activeCompanyId}`]) {
+      loadedModulesRef.current[`users_${activeCompanyId}`] = true;
+      fetchUsersOnce(false, activeCompanyId)
         .then((list) => setUsers(list))
         .catch((err) => console.warn('Users load warning:', err));
     }
-  }, [isPublicCatalogMode, isAuthenticated]);
+  }, [isPublicCatalogMode, isAuthenticated, activeCompanyId]);
 
-  // 3. Lazy-Load Secondary Collections Based on Active Tab (Saves 90%+ unnecessary reads)
+  // 3. Lazy-Load Secondary Collections Based on Active Tab & Active Company
   useEffect(() => {
     if (isPublicCatalogMode || !isAuthenticated) return;
 
     const loadTabDependencies = async () => {
       try {
+        const keySuffix = `_${activeCompanyId}`;
         if (activeTab === 'dashboard') {
-          if (!loadedModulesRef.current['sales']) {
-            loadedModulesRef.current['sales'] = true;
-            fetchSalesOnce(false).then(setSales).catch(console.warn);
+          if (!loadedModulesRef.current[`sales${keySuffix}`]) {
+            loadedModulesRef.current[`sales${keySuffix}`] = true;
+            fetchSalesOnce(false, activeCompanyId).then(setSales).catch(console.warn);
           }
-          if (!loadedModulesRef.current['audit']) {
-            loadedModulesRef.current['audit'] = true;
-            fetchAuditHistoryOnce(false).then(setAuditHistory).catch(console.warn);
+          if (!loadedModulesRef.current[`posfinance${keySuffix}`]) {
+            loadedModulesRef.current[`posfinance${keySuffix}`] = true;
+            fetchPOSFinanceDataOnce(activeCompanyId).then(setPosFinanceData).catch(console.warn);
+          }
+          if (!loadedModulesRef.current[`audit${keySuffix}`]) {
+            loadedModulesRef.current[`audit${keySuffix}`] = true;
+            fetchAuditHistoryOnce(false, activeCompanyId).then(setAuditHistory).catch(console.warn);
           }
         } else if (activeTab === 'sales') {
-          if (!loadedModulesRef.current['sales']) {
-            loadedModulesRef.current['sales'] = true;
-            fetchSalesOnce(false).then(setSales).catch(console.warn);
+          if (!loadedModulesRef.current[`sales${keySuffix}`]) {
+            loadedModulesRef.current[`sales${keySuffix}`] = true;
+            fetchSalesOnce(false, activeCompanyId).then(setSales).catch(console.warn);
+          }
+          if (!loadedModulesRef.current[`posfinance${keySuffix}`]) {
+            loadedModulesRef.current[`posfinance${keySuffix}`] = true;
+            fetchPOSFinanceDataOnce(activeCompanyId).then(setPosFinanceData).catch(console.warn);
           }
         } else if (activeTab === 'inventory') {
-          if (!loadedModulesRef.current['suppliers']) {
-            loadedModulesRef.current['suppliers'] = true;
-            fetchSuppliersOnce(false).then(setSuppliers).catch(console.warn);
+          if (!loadedModulesRef.current[`suppliers${keySuffix}`]) {
+            loadedModulesRef.current[`suppliers${keySuffix}`] = true;
+            fetchSuppliersOnce(false, activeCompanyId).then(setSuppliers).catch(console.warn);
           }
         } else if (activeTab === 'purchases') {
-          if (!loadedModulesRef.current['purchases']) {
-            loadedModulesRef.current['purchases'] = true;
-            fetchPurchasesOnce(false).then(setPurchases).catch(console.warn);
+          if (!loadedModulesRef.current[`purchases${keySuffix}`]) {
+            loadedModulesRef.current[`purchases${keySuffix}`] = true;
+            fetchPurchasesOnce(false, activeCompanyId).then(setPurchases).catch(console.warn);
           }
-          if (!loadedModulesRef.current['suppliers']) {
-            loadedModulesRef.current['suppliers'] = true;
-            fetchSuppliersOnce(false).then(setSuppliers).catch(console.warn);
+          if (!loadedModulesRef.current[`suppliers${keySuffix}`]) {
+            loadedModulesRef.current[`suppliers${keySuffix}`] = true;
+            fetchSuppliersOnce(false, activeCompanyId).then(setSuppliers).catch(console.warn);
           }
         } else if (activeTab === 'audit') {
-          if (!loadedModulesRef.current['suppliers']) {
-            loadedModulesRef.current['suppliers'] = true;
-            fetchSuppliersOnce(false).then(setSuppliers).catch(console.warn);
+          if (!loadedModulesRef.current[`suppliers${keySuffix}`]) {
+            loadedModulesRef.current[`suppliers${keySuffix}`] = true;
+            fetchSuppliersOnce(false, activeCompanyId).then(setSuppliers).catch(console.warn);
           }
-          if (!loadedModulesRef.current['audit']) {
-            loadedModulesRef.current['audit'] = true;
-            fetchAuditHistoryOnce(false).then(setAuditHistory).catch(console.warn);
+          if (!loadedModulesRef.current[`audit${keySuffix}`]) {
+            loadedModulesRef.current[`audit${keySuffix}`] = true;
+            fetchAuditHistoryOnce(false, activeCompanyId).then(setAuditHistory).catch(console.warn);
           }
         } else if (activeTab === 'suppliers') {
-          if (!loadedModulesRef.current['suppliers']) {
-            loadedModulesRef.current['suppliers'] = true;
-            fetchSuppliersOnce(false).then(setSuppliers).catch(console.warn);
+          if (!loadedModulesRef.current[`suppliers${keySuffix}`]) {
+            loadedModulesRef.current[`suppliers${keySuffix}`] = true;
+            fetchSuppliersOnce(false, activeCompanyId).then(setSuppliers).catch(console.warn);
           }
         } else if (activeTab === 'users') {
-          if (!loadedModulesRef.current['users']) {
-            loadedModulesRef.current['users'] = true;
-            fetchUsersOnce(false).then(setUsers).catch(console.warn);
+          if (!loadedModulesRef.current[`users${keySuffix}`]) {
+            loadedModulesRef.current[`users${keySuffix}`] = true;
+            fetchUsersOnce(false, activeCompanyId).then(setUsers).catch(console.warn);
           }
         } else if (activeTab === 'activity') {
-          if (!loadedModulesRef.current['activity']) {
-            loadedModulesRef.current['activity'] = true;
-            fetchActivityLogsOnce().then(setActivityLogs).catch(console.warn);
+          if (!loadedModulesRef.current[`activity${keySuffix}`]) {
+            loadedModulesRef.current[`activity${keySuffix}`] = true;
+            fetchActivityLogsOnce(activeCompanyId).then(setActivityLogs).catch(console.warn);
+          }
+        } else if (activeTab === 'companies') {
+          if (!loadedModulesRef.current['companies_all']) {
+            loadedModulesRef.current['companies_all'] = true;
+            fetchCompaniesOnce(true).then(setCompanies).catch(console.warn);
           }
         }
       } catch (err) {
@@ -504,7 +791,7 @@ export const App: React.FC = () => {
     };
 
     loadTabDependencies();
-  }, [activeTab, isAuthenticated, isPublicCatalogMode]);
+  }, [activeTab, isAuthenticated, isPublicCatalogMode, activeCompanyId]);
 
   // 4. Lightweight 1-Read Sync Check When Returning to Tab After > 5 Minutes
   useEffect(() => {
@@ -513,7 +800,7 @@ export const App: React.FC = () => {
         const elapsed = Date.now() - lastVisibilityCheckRef.current;
         if (elapsed > 5 * 60 * 1000) {
           lastVisibilityCheckRef.current = Date.now();
-          fetchInventorySmart(false)
+          fetchInventorySmart(false, activeCompanyId)
             .then((res) => {
               if (!res.fromCache) {
                 setInventory(res.items);
@@ -526,7 +813,7 @@ export const App: React.FC = () => {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+  }, [activeCompanyId]);
 
   // Manual Cloud Sync Button Handler
   const handleManualSync = useCallback(async () => {
@@ -534,35 +821,41 @@ export const App: React.FC = () => {
     setIsSyncing(true);
     try {
       const [invResult, settings] = await Promise.all([
-        fetchInventorySmart(true),
-        fetchStoreSettingsOnce(),
+        fetchInventorySmart(true, activeCompanyId),
+        fetchStoreSettingsOnce(activeCompanyId),
       ]);
       setInventory(invResult.items);
       setStoreSettings(settings);
 
-      // Also refresh current active tab's secondary data if applicable
       if (activeTab === 'sales' || activeTab === 'dashboard') {
-        const freshSales = await fetchSalesOnce(true);
+        const [freshSales, freshPosFinance] = await Promise.all([
+          fetchSalesOnce(true, activeCompanyId),
+          fetchPOSFinanceDataOnce(activeCompanyId),
+        ]);
         setSales(freshSales);
+        setPosFinanceData(freshPosFinance);
       } else if (activeTab === 'purchases') {
         const [freshPurchases, freshSuppliers] = await Promise.all([
-          fetchPurchasesOnce(true),
-          fetchSuppliersOnce(true),
+          fetchPurchasesOnce(true, activeCompanyId),
+          fetchSuppliersOnce(true, activeCompanyId),
         ]);
         setPurchases(freshPurchases);
         setSuppliers(freshSuppliers);
       } else if (activeTab === 'suppliers' || activeTab === 'inventory') {
-        const freshSuppliers = await fetchSuppliersOnce(true);
+        const freshSuppliers = await fetchSuppliersOnce(true, activeCompanyId);
         setSuppliers(freshSuppliers);
       } else if (activeTab === 'audit') {
-        const freshAudit = await fetchAuditHistoryOnce(true);
+        const freshAudit = await fetchAuditHistoryOnce(true, activeCompanyId);
         setAuditHistory(freshAudit);
       } else if (activeTab === 'users') {
-        const freshUsers = await fetchUsersOnce(true);
+        const freshUsers = await fetchUsersOnce(true, activeCompanyId);
         setUsers(freshUsers);
       } else if (activeTab === 'activity') {
-        const freshLogs = await fetchActivityLogsOnce();
+        const freshLogs = await fetchActivityLogsOnce(activeCompanyId);
         setActivityLogs(freshLogs);
+      } else if (activeTab === 'companies') {
+        const freshCompanies = await fetchCompaniesOnce(true);
+        setCompanies(freshCompanies);
       }
 
       setIsFirebaseConnected(true);
@@ -574,29 +867,175 @@ export const App: React.FC = () => {
     } finally {
       setTimeout(() => setIsSyncing(false), 400);
     }
-  }, [activeTab, isSyncing]);
+  }, [activeTab, isSyncing, activeCompanyId]);
 
   // Save Store Settings
   const handleSaveStoreSettings = async (newSettings: StoreSettings) => {
     setIsSyncing(true);
-    setStoreSettings(newSettings);
-    try {
-      localStorage.setItem('stockmaster_store_settings', JSON.stringify(newSettings));
-    } catch {}
+    const enrichedSettings: StoreSettings = { ...newSettings, companyId: activeCompanyId };
+    setStoreSettings(enrichedSettings);
+    setCachedStoreSettings(enrichedSettings, activeCompanyId);
 
     try {
-      await saveStoreSettingsToFirestore(newSettings);
+      await saveStoreSettingsToFirestore(enrichedSettings, activeCompanyId);
+      setCompanies((prev) => {
+        const next = prev.map((c) =>
+          c.slug === activeCompanyId
+            ? {
+                ...c,
+                name: enrichedSettings.storeName || c.name,
+                adminPassword: enrichedSettings.accessPassword || c.adminPassword,
+                logoUrl: enrichedSettings.logoUrl,
+                phone: enrichedSettings.phone || c.phone,
+                tagline: enrichedSettings.tagline || c.tagline,
+                address: enrichedSettings.address || c.address,
+              }
+            : c
+        );
+        setCachedCompanies(next);
+        return next;
+      });
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Administrador',
-        userRole: userSession?.role || 'admin',
-        action: 'Actualizó la configuración general de la tienda',
-        module: 'settings',
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: userSession?.userName || 'Administrador',
+          userRole: userSession?.role || 'admin',
+          action: 'Actualizó la configuración general de la tienda',
+          module: 'settings',
+        },
+        activeCompanyId
+      );
     } finally {
       setIsSyncing(false);
     }
+  };
+
+  // Multi-Company SaaS Handlers (Create/Update/Delete/Switch Client Company)
+  const handleSaveCompany = async (companyPayload: CompanyTenant) => {
+    setIsSyncing(true);
+    try {
+      const saved = await saveCompanyToFirestore(companyPayload);
+      setCompanies((prev) => {
+        const idx = prev.findIndex((c) => c.slug === saved.slug);
+        const next = idx >= 0 ? prev.map((c, i) => (i === idx ? saved : c)) : [saved, ...prev];
+        setCachedCompanies(next);
+        return next;
+      });
+
+      if (saved.slug === activeCompanyId) {
+        setStoreSettings((prev) => ({
+          ...prev,
+          companyId: saved.slug,
+          storeName: saved.name,
+          tagline: saved.tagline || prev.tagline,
+          logoUrl: saved.logoUrl ?? prev.logoUrl,
+          phone: saved.phone || prev.phone,
+          address: saved.address || prev.address,
+          accessPassword: saved.adminPassword || prev.accessPassword,
+          allowedModules: saved.allowedModules || prev.allowedModules || [...ALL_COMPANY_MODULES],
+          enableDeliveryDvolada:
+            saved.enableDeliveryDvolada !== undefined
+              ? saved.enableDeliveryDvolada
+              : prev.enableDeliveryDvolada ?? saved.slug === 'gosen',
+          maxProducts: saved.maxProducts ?? prev.maxProducts ?? 0,
+          maxUsers: saved.maxUsers ?? prev.maxUsers ?? 0,
+        }));
+      }
+      setLastSyncTime(new Date());
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSaveSaaSGlobalConfig = async (cfg: SaaSGlobalConfig) => {
+    setIsSyncing(true);
+    try {
+      const saved = await saveSaaSGlobalConfigToFirestore(cfg);
+      setSaasGlobalConfig(saved);
+      setLastSyncTime(new Date());
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleDismissAnnouncement = (annId: string) => {
+    setDismissedAnnouncements((prev) => {
+      const next = Array.from(new Set([...prev, annId]));
+      try {
+        localStorage.setItem('stockmaster_dismissed_saas_announcements', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const handleDeleteCompany = async (slugToDelete: string) => {
+    setIsSyncing(true);
+    try {
+      await deleteCompanyFromFirestore(slugToDelete);
+      setCompanies((prev) => {
+        const next = prev.filter((c) => c.slug !== slugToDelete);
+        setCachedCompanies(next);
+        return next;
+      });
+      if (activeCompanyId === slugToDelete) {
+        handleSelectCompanyContext('gosen');
+      }
+      showToast(`Cliente "${slugToDelete}" eliminado`, 'info');
+    } catch (err: any) {
+      showToast(err?.message || 'Error al eliminar cliente', 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSwitchCompanyWorkspace = (targetSlug: string) => {
+    const clean = normalizeCompanySlug(targetSlug);
+    handleSelectCompanyContext(clean);
+    const targetObj = companies.find((c) => c.slug === clean);
+    setUserSession((prev) => {
+      if (!prev) return prev;
+      const updated: UserSession = {
+        ...prev,
+        companyId: clean,
+        companyName: targetObj?.name || clean.toUpperCase(),
+        isStandaloneSaaS: false,
+      };
+      try {
+        if (localStorage.getItem('stockmaster_user_session')) {
+          localStorage.setItem('stockmaster_user_session', JSON.stringify(updated));
+        } else {
+          sessionStorage.setItem('stockmaster_user_session', JSON.stringify(updated));
+        }
+      } catch {}
+      return updated;
+    });
+    setActiveTab('dashboard');
+    showToast(
+      `Inspeccionando tienda: ${targetObj?.name || clean.toUpperCase()}`,
+      'success'
+    );
+  };
+
+  const handleReturnToSaaSPortal = () => {
+    setUserSession((prev) => {
+      if (!prev) return prev;
+      const updated: UserSession = {
+        ...prev,
+        isSuperAdmin: true,
+        isStandaloneSaaS: true,
+      };
+      try {
+        if (localStorage.getItem('stockmaster_user_session')) {
+          localStorage.setItem('stockmaster_user_session', JSON.stringify(updated));
+        } else {
+          sessionStorage.setItem('stockmaster_user_session', JSON.stringify(updated));
+        }
+      } catch {}
+      return updated;
+    });
+    setActiveTab('companies');
   };
 
   // Test Firestore Connection
@@ -623,6 +1062,21 @@ export const App: React.FC = () => {
 
   // Inventory Handlers (Optimistic local + cache update, 0 collection re-reads)
   const handleSaveProduct = async (product: Product, oldCode?: string) => {
+    const isExisting = inventory.some(
+      (p) => p.code.toLowerCase() === (oldCode || product.code).toLowerCase()
+    );
+    const activeComp = companies.find(
+      (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
+    );
+    const effectiveMaxProducts = activeComp?.maxProducts || storeSettings.maxProducts || 0;
+    if (!isExisting && effectiveMaxProducts > 0 && inventory.length >= effectiveMaxProducts) {
+      showToast(
+        `Límite de tu plan alcanzado (${inventory.length}/${effectiveMaxProducts} productos). Contacta al Administrador SaaS para ampliar tu plan.`,
+        'warning'
+      );
+      return;
+    }
+
     setIsSyncing(true);
     try {
       setInventory((prev) => {
@@ -663,6 +1117,18 @@ export const App: React.FC = () => {
     newSuppliers: Supplier[],
     summary: { createdCount: number; updatedCount: number; totalUnitsProcessed: number; mode: 'add' | 'replace' }
   ) => {
+    const activeComp = companies.find(
+      (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
+    );
+    const effectiveMaxProducts = activeComp?.maxProducts || storeSettings.maxProducts || 0;
+    if (effectiveMaxProducts > 0 && inventory.length + summary.createdCount > effectiveMaxProducts) {
+      showToast(
+        `Esta carga supera el límite de tu plan (${effectiveMaxProducts} productos máx). Tienes ${inventory.length} registrados e intentas crear ${summary.createdCount} nuevos.`,
+        'warning'
+      );
+      throw new Error('Límite de plan excedido');
+    }
+
     setIsSyncing(true);
     try {
       // Optimistic local state & cache update
@@ -946,6 +1412,40 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleSavePOSFinanceData = async (nextData: POSFinanceStoreData) => {
+    setIsSyncing(true);
+    try {
+      const saved = await savePOSFinanceDataToFirestore(nextData, activeCompanyId);
+      setPosFinanceData(saved);
+      setLastSyncTime(new Date());
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleRecordCreditPayment = async (sale: SaleRecord, abone: CreditPaymentAbone) => {
+    setIsSyncing(true);
+    try {
+      const updatedSale = await recordCreditPaymentInFirestore(sale, abone, activeCompanyId);
+      setSales((prev) => {
+        const nextSales = prev.map((s) => (s.id === sale.id ? updatedSale : s));
+        setCachedSales(nextSales, activeCompanyId);
+        return nextSales;
+      });
+      setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: userSession?.userName || abone.receivedBy || 'Usuario',
+        userRole: userSession?.role || 'collaborator',
+        action: `Registró abono a Venta N° ${sale.saleNumber} (${sale.customerName || 'Cliente'})`,
+        module: 'sales',
+        details: `Abono: L. ${abone.amount.toFixed(2)} (${abone.paymentMethod.toUpperCase()}) - Restante: L. ${(updatedSale.balanceDue || 0).toFixed(2)}`,
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   // Supplier Purchases Handlers (Direct local stock addition + cache update)
   const handleRecordPurchase = async (purchaseData: Omit<PurchaseInvoice, 'id'>) => {
     setIsSyncing(true);
@@ -1112,7 +1612,11 @@ export const App: React.FC = () => {
     return (
       <div className="fixed inset-0 w-full h-full overflow-y-auto bg-slate-50 scroll-smooth">
         {showSplash && (
-          <SplashScreen storeSettings={storeSettings} isExiting={isSplashExiting} />
+          <SplashScreen
+            storeSettings={storeSettings}
+            companyId={activeCompanyId}
+            isExiting={isSplashExiting}
+          />
         )}
         <PublicCatalogView
           inventory={inventory}
@@ -1130,28 +1634,192 @@ export const App: React.FC = () => {
     return (
       <div className="fixed inset-0 w-full h-full overflow-y-auto bg-slate-950 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]">
         {showSplash && (
-          <SplashScreen storeSettings={storeSettings} isExiting={isSplashExiting} />
+          <SplashScreen
+            storeSettings={storeSettings}
+            companyId={activeCompanyId}
+            isExiting={isSplashExiting}
+          />
         )}
         <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
         <LoginView
           storeSettings={storeSettings}
           users={users}
+          companies={companies}
+          activeCompanyId={activeCompanyId}
+          onSelectCompany={handleSelectCompanyContext}
           onLoginSuccess={handleLoginSuccess}
         />
       </div>
     );
   }
 
-  // Filter bottom nav items based on collaborator allowedTabs
-  const allowedTabsList = userSession.role === 'admin'
-    ? ['dashboard', 'sales', 'inventory', 'price-checker', 'catalog', 'purchases', 'audit', 'suppliers', 'users', 'activity', 'settings']
-    : (userSession.allowedTabs || ['sales', 'inventory', 'price-checker']);
+  const isSuperAdminSession = Boolean(
+    userSession.role === 'admin' && userSession.isSuperAdmin === true
+  );
+
+  const activeCompanyTenant = companies.find(
+    (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
+  );
+
+  // REAL-TIME MORA LOCK SCREEN: If a client is in arrears ('suspended') and is NOT the SaaS Super-Admin, block the app immediately!
+  if (!isSuperAdminSession && activeCompanyTenant?.status === 'suspended') {
+    return (
+      <div className="fixed inset-0 w-full h-full bg-slate-950 text-white flex flex-col items-center justify-center p-6 select-none z-[999]">
+        <div className="w-full max-w-md bg-slate-900 border border-rose-500/40 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-5">
+          <div className="w-16 h-16 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 mx-auto">
+            <Lock className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 border border-rose-500/30 text-rose-300 text-[11px] font-black uppercase tracking-wider">
+              <AlertTriangle className="w-3.5 h-3.5" /> Cuenta en Mora • Acceso Deshabilitado
+            </span>
+            <h1 className="text-xl sm:text-2xl font-black text-white">
+              {activeCompanyTenant.name}
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+              El servicio de tu aplicación se encuentra temporalmente <strong>suspendido por mora o pago pendiente de renovación</strong>.
+            </p>
+            {activeCompanyTenant.moraReason && (
+              <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-500/30 text-xs text-rose-200 font-semibold">
+                Motivo: {activeCompanyTenant.moraReason}
+              </div>
+            )}
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 space-y-1 text-left">
+            <p className="font-bold text-slate-200">✅ Tu información está 100% segura</p>
+            <p>
+              Todo tu inventario, ventas y configuraciones están resguardados. Comunícate con el Administrador del sistema para realizar tu pago y reactivar tu cuenta al instante.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>Volver al Inicio de Sesión</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // STANDALONE SAAS SUPER-ADMIN PORTAL (Completely separate from Tienda Gosén and other stores)
+  if (isSuperAdminSession && userSession.isStandaloneSaaS !== false) {
+    return (
+      <div className="fixed inset-0 w-full h-full flex flex-col overflow-hidden bg-slate-100 text-slate-800">
+        {showSplash && (
+          <SplashScreen
+            storeSettings={storeSettings}
+            companyId={activeCompanyId}
+            isSaaSAdmin={true}
+            isExiting={isSplashExiting}
+            welcomeUser={splashWelcomeUser}
+            welcomeRole={splashWelcomeRole}
+          />
+        )}
+        <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
+        <CompaniesSaaSView
+          companies={companies}
+          activeCompanyId={activeCompanyId}
+          saasGlobalConfig={saasGlobalConfig}
+          onSaveCompany={handleSaveCompany}
+          onDeleteCompany={handleDeleteCompany}
+          onSwitchCompany={handleSwitchCompanyWorkspace}
+          onSaveSaaSGlobalConfig={handleSaveSaaSGlobalConfig}
+          onLogout={handleLogout}
+          onRefreshCompanies={async () => {
+            const fresh = await fetchCompaniesOnce(true);
+            setCompanies(fresh);
+            showToast('Lista de clientes sincronizada desde la nube', 'success');
+          }}
+          isStandalonePortal={true}
+          showToast={showToast}
+        />
+      </div>
+    );
+  }
+
+  // Compute SaaS-level allowed modules and plan limits for the active client company
+  const companyAllowedModules: ActiveTab[] =
+    activeCompanyTenant?.allowedModules && activeCompanyTenant.allowedModules.length > 0
+      ? activeCompanyTenant.allowedModules
+      : storeSettings.allowedModules && storeSettings.allowedModules.length > 0
+      ? storeSettings.allowedModules
+      : ALL_COMPANY_MODULES;
+
+  const companyMaxProducts: number =
+    activeCompanyTenant?.maxProducts ?? storeSettings.maxProducts ?? 0;
+  const companyMaxUsers: number =
+    activeCompanyTenant?.maxUsers ?? storeSettings.maxUsers ?? 0;
+
+  // Compute Upcoming Subscription Expiry Warning for this Store
+  const daysUntilBilling = getDaysUntilBilling(activeCompanyTenant?.nextBillingDate);
+  const warningDaysThreshold = saasGlobalConfig.expiryWarningDays || 5;
+  const showExpiryWarningBanner =
+    !expiryBannerDismissedToday &&
+    activeCompanyTenant &&
+    activeCompanyTenant.plan !== 'vitalicio' &&
+    daysUntilBilling !== null &&
+    daysUntilBilling <= warningDaysThreshold;
+
+  // Compute Active SaaS Announcements targeting 'all' or this specific store
+  const visibleAnnouncements = (saasGlobalConfig.announcements || []).filter(
+    (ann) =>
+      ann.isActive &&
+      (ann.targetCompanySlug === 'all' ||
+        normalizeCompanySlug(ann.targetCompanySlug) === normalizeCompanySlug(activeCompanyId)) &&
+      !dismissedAnnouncements.includes(ann.id)
+  );
+
+  const handleSendPaymentVoucherToSaaSAdmin = () => {
+    const storeTitle = storeSettings.storeName || activeCompanyTenant?.name || activeCompanyId;
+    const amountStr = Number(activeCompanyTenant?.price || 0).toLocaleString('es-HN', {
+      minimumFractionDigits: 2,
+    });
+    const dueStr = formatShortDateEs(activeCompanyTenant?.nextBillingDate);
+    const msg =
+      `👋 Hola Administrador SaaS, envío el comprobante de pago de renovación para nuestra tienda:\n\n` +
+      `• *Tienda:* ${storeTitle} (Código: \`${activeCompanyId}\`)\n` +
+      `• *Fecha de Corte:* ${dueStr}\n` +
+      `• *Monto del Plan:* L. ${amountStr}\n\n` +
+      `Adjunto imagen del comprobante para actualizar nuestra fecha de corte. ¡Gracias!`;
+
+    const cleanPhone = (saasGlobalConfig.saasAdminPhone || '').replace(/\D/g, '');
+    const waUrl = cleanPhone
+      ? `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(waUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  // Filter navigation & bottom nav items based on SaaS company permissions + collaborator allowedTabs
+  const baseRoleTabs: ActiveTab[] =
+    userSession.role === 'admin'
+      ? ALL_COMPANY_MODULES
+      : (userSession.allowedTabs || ['sales', 'inventory', 'price-checker']);
+
+  const allowedTabsList: ActiveTab[] = isSuperAdminSession
+    ? ALL_COMPANY_MODULES
+    : baseRoleTabs.filter((tab) => companyAllowedModules.includes(tab));
+
+  // If the current activeTab was disabled by the SaaS Administrator, switch to the first allowed module
+  const activeTabToRender: ActiveTab =
+    activeTab === 'companies' && isSuperAdminSession
+      ? 'companies'
+      : allowedTabsList.includes(activeTab)
+      ? activeTab
+      : allowedTabsList[0] || 'sales';
 
   return (
     <div className="fixed inset-0 w-full h-full flex flex-col md:flex-row overflow-hidden text-slate-800 bg-slate-50">
       {showSplash && (
         <SplashScreen
           storeSettings={storeSettings}
+          companyId={activeCompanyId}
+          isSaaSAdmin={false}
           isExiting={isSplashExiting}
           welcomeUser={splashWelcomeUser}
           welcomeRole={splashWelcomeRole}
@@ -1162,7 +1830,7 @@ export const App: React.FC = () => {
 
       {/* Main Sidebar */}
       <Sidebar
-        activeTab={activeTab}
+        activeTab={activeTabToRender}
         onTabChange={handleTabChange}
         onResetData={() => setShowResetConfirm(true)}
         storeSettings={storeSettings}
@@ -1173,10 +1841,109 @@ export const App: React.FC = () => {
         onCloseMobile={() => setIsMobileMenuOpen(false)}
         onLogout={handleLogout}
         onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
+        onUnlockSuperAdmin={handleUnlockSuperAdmin}
+        onLockSuperAdmin={handleLockSuperAdmin}
+        companyAllowedModules={companyAllowedModules}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-h-0 min-w-0 w-full h-full overflow-hidden relative bg-slate-50 transition-all duration-350 ease-in-out">
+        {/* Top Floating Banner ONLY when SaaS Owner is inspecting a client's store */}
+        {isSuperAdminSession && (
+          <div className="bg-slate-950 text-white px-3 sm:px-4 py-2 flex items-center justify-between gap-2 border-b border-teal-500/30 shrink-0 z-40">
+            <div className="flex items-center gap-2 text-xs min-w-0">
+              <span className="px-2 py-0.5 rounded bg-teal-500/20 text-teal-300 border border-teal-500/40 font-black text-[10px] uppercase shrink-0">
+                Modo Inspector SaaS
+              </span>
+              <span className="truncate text-slate-300">
+                Viendo tienda: <strong className="text-white">{storeSettings.storeName || activeCompanyId.toUpperCase()}</strong>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleReturnToSaaSPortal}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-extrabold text-xs transition-all cursor-pointer shrink-0 shadow-xs"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Volver a mi Panel Central SaaS</span>
+            </button>
+          </div>
+        )}
+
+        {/* Automatic Upcoming Subscription Expiry Warning Banner (Visible to Store when <= warningDaysThreshold) */}
+        {showExpiryWarningBanner && daysUntilBilling !== null && (
+          <div
+            className={`px-3 sm:px-4 py-2 flex items-center justify-between gap-2 border-b shrink-0 z-35 text-xs ${
+              daysUntilBilling < 0
+                ? 'bg-rose-600 text-white border-rose-700'
+                : 'bg-amber-500 text-slate-950 border-amber-600/40'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Clock className="w-4 h-4 shrink-0" />
+              <span className="font-bold truncate">
+                {daysUntilBilling < 0
+                  ? `⚠️ Tu suscripción venció el ${formatShortDateEs(activeCompanyTenant?.nextBillingDate)}. Realiza tu pago para evitar la suspensión del sistema.`
+                  : daysUntilBilling === 0
+                  ? `⚠️ Tu suscripción vence HOY (${formatShortDateEs(activeCompanyTenant?.nextBillingDate)}). Realiza tu pago para evitar suspensión.`
+                  : `🔔 Tu suscripción vence el ${formatShortDateEs(activeCompanyTenant?.nextBillingDate)} (en ${daysUntilBilling} ${daysUntilBilling === 1 ? 'día' : 'días'}). Realiza tu pago para evitar suspensión.`}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleSendPaymentVoucherToSaaSAdmin}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-extrabold text-[11px] transition-all cursor-pointer shadow-2xs ${
+                  daysUntilBilling < 0
+                    ? 'bg-white text-rose-700 hover:bg-rose-50'
+                    : 'bg-slate-950 text-white hover:bg-slate-800'
+                }`}
+              >
+                <WhatsAppIcon className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Enviar Comprobante</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpiryBannerDismissedToday(true)}
+                className="p-1 rounded hover:bg-black/10 cursor-pointer"
+                title="Ocultar aviso por ahora"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Global / Targeted SaaS Admin Announcement Banner */}
+        {visibleAnnouncements.map((ann) => (
+          <div
+            key={ann.id}
+            className={`px-3 sm:px-4 py-2 flex items-center justify-between gap-2 border-b shrink-0 z-35 text-xs ${
+              ann.type === 'warning'
+                ? 'bg-rose-50 text-rose-950 border-rose-200'
+                : ann.type === 'promo'
+                ? 'bg-indigo-900 text-white border-indigo-800'
+                : 'bg-teal-900 text-white border-teal-800'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Megaphone className="w-4 h-4 shrink-0 text-amber-400" />
+              <div className="min-w-0 truncate">
+                <strong className="font-black mr-1.5">{ann.title}:</strong>
+                <span className="opacity-95">{ann.message}</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleDismissAnnouncement(ann.id)}
+              className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 font-extrabold text-[11px] shrink-0 cursor-pointer"
+            >
+              Entendido
+            </button>
+          </div>
+        ))}
+
         {/* Top Header - Compact & Responsive Mobile Layout */}
         <header className="w-full max-w-full overflow-hidden bg-white text-slate-800 px-3 sm:px-4 py-2 sm:py-2.5 flex items-center justify-between border-b border-slate-200/80 shadow-xs shrink-0 gap-2 z-30">
           {/* Left: Mobile/Desktop Sidebar Toggles + Store Branding */}
@@ -1210,11 +1977,11 @@ export const App: React.FC = () => {
 
             {/* Store brand / Title */}
             <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1 overflow-hidden">
-              {(storeSettings.logoUrl || '/store-logo.jpg') ? (
+              {storeSettings.logoUrl ? (
                 <div className="h-8 w-8 sm:h-9 sm:w-auto sm:max-w-[160px] rounded-lg p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
                   <img
-                    src={storeSettings.logoUrl || '/store-logo.jpg'}
-                    alt={storeSettings.storeName || 'Tienda Gosén'}
+                    src={storeSettings.logoUrl}
+                    alt={storeSettings.storeName || activeCompanyId.toUpperCase()}
                     className="h-full w-full object-contain rounded-md mix-blend-multiply filter drop-shadow-2xs"
                   />
                 </div>
@@ -1222,13 +1989,14 @@ export const App: React.FC = () => {
                 <Store className="w-5 h-5 text-emerald-600 shrink-0" />
               )}
               <span className="font-extrabold text-slate-900 text-sm sm:text-base tracking-tight truncate block">
-                {storeSettings.storeName || 'Tienda Gosén'}
+                {storeSettings.storeName || activeCompanyId.toUpperCase()}
               </span>
             </div>
           </div>
 
           {/* Right Controls: Manual Cloud Sync Button, User Profile Badge, Install App & Logout */}
           <div className="flex items-center gap-1.5 sm:gap-2 text-slate-600 shrink-0">
+
             <button
               type="button"
               onClick={handleManualSync}
@@ -1241,7 +2009,7 @@ export const App: React.FC = () => {
               }`}
             >
               <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
+              <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizando'.slice(0, 0) || 'Sincronizar'}</span>
             </button>
 
             {userSession && (
@@ -1288,25 +2056,37 @@ export const App: React.FC = () => {
 
         {/* Tab Views Container — Reserves exact 60px on mobile for the fixed bottom bar */}
         <div className="flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden relative pb-[60px] md:pb-0">
-          {activeTab === 'dashboard' && allowedTabsList.includes('dashboard') && (
+          {activeTabToRender === 'dashboard' && allowedTabsList.includes('dashboard') && (
             <DashboardView
               inventory={inventory}
               auditHistory={auditHistory}
               sales={sales}
+              expenses={posFinanceData.expenses}
               isLoading={isInventoryLoading}
               onOpenNewProduct={() => {
                 handleTabChange('inventory');
                 setOpenProductModalTrigger(true);
               }}
               onStartAudit={() => handleTabChange('audit')}
-              onNavigateToSales={() => handleTabChange('sales')}
+              onNavigateToSales={() => {
+                setSalesSubTab('pos');
+                handleTabChange('sales');
+              }}
               onNavigateToPurchases={() => handleTabChange('purchases')}
+              onNavigateToExpenses={() => {
+                setSalesSubTab('expenses');
+                handleTabChange('sales');
+              }}
+              onNavigateToCredits={() => {
+                setSalesSubTab('credits');
+                handleTabChange('sales');
+              }}
               onFilterInventoryByCode={handleFilterInventoryByCode}
               onNavigateToAudit={() => handleTabChange('audit')}
             />
           )}
 
-          {activeTab === 'sales' && allowedTabsList.includes('sales') && (
+          {activeTabToRender === 'sales' && allowedTabsList.includes('sales') && (
             <SalesView
               inventory={inventory}
               sales={sales}
@@ -1314,18 +2094,24 @@ export const App: React.FC = () => {
               userSession={userSession}
               users={users}
               isLoading={isInventoryLoading}
+              initialSubTab={salesSubTab}
+              posFinanceData={posFinanceData}
               onRecordSale={handleRecordSale}
               onCancelSale={handleCancelSale}
+              onSavePOSFinanceData={handleSavePOSFinanceData}
+              onRecordCreditPayment={handleRecordCreditPayment}
               showToast={showToast}
             />
           )}
 
-          {activeTab === 'inventory' && allowedTabsList.includes('inventory') && (
+          {activeTabToRender === 'inventory' && allowedTabsList.includes('inventory') && (
             <InventoryView
               inventory={inventory}
               suppliers={suppliers}
               isLoading={isInventoryLoading}
               initialSearchCode={inventorySearchQuery}
+              maxProducts={companyMaxProducts}
+              saasAdminPhone={saasGlobalConfig.saasAdminPhone}
               onSaveProduct={handleSaveProduct}
               onBulkSaveProducts={handleBulkSaveProducts}
               onDeleteProduct={handleDeleteProduct}
@@ -1339,14 +2125,14 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeTab === 'price-checker' && allowedTabsList.includes('price-checker') && (
+          {activeTabToRender === 'price-checker' && allowedTabsList.includes('price-checker') && (
             <PriceCheckerTab
               inventory={inventory}
               showToast={showToast}
             />
           )}
 
-          {activeTab === 'catalog' && allowedTabsList.includes('catalog') && (
+          {activeTabToRender === 'catalog' && allowedTabsList.includes('catalog') && (
             <DigitalCatalogView
               storeSettings={storeSettings}
               inventory={inventory}
@@ -1356,7 +2142,7 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeTab === 'purchases' && allowedTabsList.includes('purchases') && (
+          {activeTabToRender === 'purchases' && allowedTabsList.includes('purchases') && (
             <PurchasesView
               suppliers={suppliers}
               inventory={inventory}
@@ -1369,7 +2155,7 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeTab === 'audit' && allowedTabsList.includes('audit') && (
+          {activeTabToRender === 'audit' && allowedTabsList.includes('audit') && (
             <AuditView
               inventory={inventory}
               suppliers={suppliers}
@@ -1379,7 +2165,7 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeTab === 'suppliers' && allowedTabsList.includes('suppliers') && (
+          {activeTabToRender === 'suppliers' && allowedTabsList.includes('suppliers') && (
             <SuppliersView
               suppliers={suppliers}
               inventory={inventory}
@@ -1390,24 +2176,26 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeTab === 'users' && allowedTabsList.includes('users') && (
+          {activeTabToRender === 'users' && allowedTabsList.includes('users') && (
             <UserManagementView
               users={users}
               storeSettings={storeSettings}
+              companyAllowedModules={companyAllowedModules}
+              maxUsers={companyMaxUsers}
               onSaveUser={handleSaveUser}
               onDeleteUser={handleDeleteUser}
               showToast={showToast}
             />
           )}
 
-          {activeTab === 'activity' && allowedTabsList.includes('activity') && (
+          {activeTabToRender === 'activity' && allowedTabsList.includes('activity') && (
             <ActivityLogView
               logs={activityLogs}
               showToast={showToast}
             />
           )}
 
-          {activeTab === 'settings' && allowedTabsList.includes('settings') && (
+          {activeTabToRender === 'settings' && allowedTabsList.includes('settings') && (
             <StoreSettingsView
               currentSettings={storeSettings}
               onSaveSettings={handleSaveStoreSettings}
@@ -1424,6 +2212,20 @@ export const App: React.FC = () => {
               purchasesCount={purchases.length}
               onResetData={() => setShowResetConfirm(true)}
               onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
+            />
+          )}
+
+          {activeTabToRender === 'companies' && isSuperAdminSession && (
+            <CompaniesSaaSView
+              companies={companies}
+              activeCompanyId={activeCompanyId}
+              saasGlobalConfig={saasGlobalConfig}
+              onSaveCompany={handleSaveCompany}
+              onDeleteCompany={handleDeleteCompany}
+              onSwitchCompany={handleSwitchCompanyWorkspace}
+              onSaveSaaSGlobalConfig={handleSaveSaaSGlobalConfig}
+              onLockSuperAdmin={handleLockSuperAdmin}
+              showToast={showToast}
             />
           )}
         </div>

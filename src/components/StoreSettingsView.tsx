@@ -65,13 +65,16 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   onResetData,
   onOpenInstallPrompt,
 }) => {
+  const isGosen = (currentSettings.companyId || 'gosen') === 'gosen';
+  const defaultPassword = isGosen ? 'GOSEN2026' : 'ADMIN2026';
+
   // Local form state
-  const [storeName, setStoreName] = useState(currentSettings.storeName || 'StockMaster');
+  const [storeName, setStoreName] = useState(currentSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda'));
   const [tagline, setTagline] = useState(currentSettings.tagline || '');
   const [logoUrl, setLogoUrl] = useState(currentSettings.logoUrl || '');
   const [phone, setPhone] = useState(currentSettings.phone || '');
   const [address, setAddress] = useState(currentSettings.address || '');
-  const [accessPassword, setAccessPassword] = useState(currentSettings.accessPassword || 'GOSEN2026');
+  const [accessPassword, setAccessPassword] = useState(currentSettings.accessPassword || defaultPassword);
   const [showAccessPassword, setShowAccessPassword] = useState(false);
 
   // Upload state
@@ -87,21 +90,21 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
 
   // Sync state if external changes happen
   useEffect(() => {
-    setStoreName(currentSettings.storeName || 'StockMaster');
+    setStoreName(currentSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda'));
     setTagline(currentSettings.tagline || '');
     setLogoUrl(currentSettings.logoUrl || '');
     setPhone(currentSettings.phone || '');
     setAddress(currentSettings.address || '');
-    setAccessPassword(currentSettings.accessPassword || 'GOSEN2026');
-  }, [currentSettings]);
+    setAccessPassword(currentSettings.accessPassword || defaultPassword);
+  }, [currentSettings, isGosen, defaultPassword]);
 
   const hasUnsavedChanges =
-    storeName !== (currentSettings.storeName || 'StockMaster') ||
+    storeName !== (currentSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda')) ||
     tagline !== (currentSettings.tagline || '') ||
     logoUrl !== (currentSettings.logoUrl || '') ||
     phone !== (currentSettings.phone || '') ||
     address !== (currentSettings.address || '') ||
-    accessPassword !== (currentSettings.accessPassword || 'GOSEN2026');
+    accessPassword !== (currentSettings.accessPassword || defaultPassword);
 
   // File upload handler
   const handleProcessLogoFile = async (file: File) => {
@@ -190,6 +193,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     setIsSaving(true);
     try {
       const updatedSettings: StoreSettings = {
+        ...currentSettings,
         storeName: storeName.trim(),
         tagline: tagline.trim(),
         logoUrl: logoUrl.trim(),
@@ -214,12 +218,12 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   };
 
   const handleResetToDefault = () => {
-    setStoreName('StockMaster');
+    setStoreName(isGosen ? 'Tienda Gosén' : 'Mi Tienda');
     setTagline('Control de Inventario y Auditoría');
     setLogoUrl('');
     setPhone('');
     setAddress('');
-    setAccessPassword('GOSEN2026');
+    setAccessPassword(defaultPassword);
     if (showToast) {
       showToast('Campos restablecidos a valores por defecto (haz clic en Guardar para confirmar)', 'info');
     }
@@ -291,7 +295,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                     type="text"
                     value={storeName}
                     onChange={(e) => setStoreName(e.target.value)}
-                    placeholder="Ej. Tienda Gosen, Supermercado El Ahorro, etc."
+                    placeholder={isGosen ? 'Ej. Tienda Gosen, Supermercado El Ahorro, etc.' : 'Ej. Comercial Mi Tienda, Boutique Central, etc.'}
                     maxLength={100}
                     className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-semibold text-slate-800 placeholder-slate-400 shadow-sm transition-all"
                     required
@@ -301,13 +305,15 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                 {/* Suggestions */}
                 <div className="flex flex-wrap items-center gap-2 mt-2.5">
                   <span className="text-xs text-slate-400 font-medium">Sugerencias rápidas:</span>
-                  <button
-                    type="button"
-                    onClick={() => setStoreName('Tienda Gosen')}
-                    className="px-2.5 py-1 text-xs rounded-lg bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-medium transition-colors cursor-pointer"
-                  >
-                    Tienda Gosen
-                  </button>
+                  {isGosen && (
+                    <button
+                      type="button"
+                      onClick={() => setStoreName('Tienda Gosen')}
+                      className="px-2.5 py-1 text-xs rounded-lg bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-medium transition-colors cursor-pointer"
+                    >
+                      Tienda Gosen
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setStoreName('Mi Tienda')}
@@ -317,10 +323,10 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setStoreName('StockMaster')}
+                    onClick={() => setStoreName('Sucursal Principal')}
                     className="px-2.5 py-1 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-medium transition-colors cursor-pointer"
                   >
-                    StockMaster
+                    Sucursal Principal
                   </button>
                 </div>
               </div>
@@ -551,18 +557,24 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   </span>
                   <div className="relative group">
                     <div className="w-20 h-20 rounded-2xl bg-slate-900 border-2 border-emerald-500/50 shadow-xl overflow-hidden p-1.5 flex items-center justify-center">
-                      <img
-                        src={logoUrl || '/pwa-512x512.png'}
-                        alt={storeName}
-                        className="w-full h-full object-contain rounded-xl"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = '/pwa-192x192.png';
-                        }}
-                      />
+                      {logoUrl || isGosen ? (
+                        <img
+                          src={logoUrl || '/pwa-512x512.png'}
+                          alt={storeName}
+                          className="w-full h-full object-contain rounded-xl"
+                          onError={(e) => {
+                            if (isGosen) {
+                              (e.target as HTMLImageElement).src = '/pwa-192x192.png';
+                            }
+                          }}
+                        />
+                      ) : (
+                        <Store className="w-10 h-10 text-emerald-400" />
+                      )}
                     </div>
                   </div>
                   <span className="mt-2.5 font-bold text-xs text-slate-200 truncate max-w-[140px]">
-                    {storeName || 'Tienda Gosén'}
+                    {storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda')}
                   </span>
                   <span className="text-[10px] text-emerald-400 font-medium">
                     App Móvil Oficial
@@ -646,7 +658,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   </div>
                 </div>
 
-                {accessPassword === 'GOSEN2026' ? (
+                {accessPassword === defaultPassword ? (
                   <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold border border-slate-200">
                     Clave Predeterminada
                   </span>
@@ -694,16 +706,16 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   <p className="text-xs text-slate-400 font-medium">
                     Mínimo 4 caracteres. Ya no se mostrará en la pantalla de inicio por seguridad.
                   </p>
-                  {accessPassword !== 'GOSEN2026' && (
+                  {accessPassword !== defaultPassword && (
                     <button
                       type="button"
                       onClick={() => {
-                        setAccessPassword('GOSEN2026');
-                        if (showToast) showToast('Contraseña reestablecida a GOSEN2026 (haz clic en Guardar)', 'info');
+                        setAccessPassword(defaultPassword);
+                        if (showToast) showToast(`Contraseña reestablecida a ${defaultPassword} (haz clic en Guardar)`, 'info');
                       }}
                       className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
                     >
-                      Restablecer a GOSEN2026
+                      Restablecer a {defaultPassword}
                     </button>
                   )}
                 </div>
@@ -743,22 +755,24 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                    Proyecto Firebase
+                    Servidor en la Nube
                   </span>
                   <div className="flex items-center gap-2">
                     <HardDrive className="w-4 h-4 text-indigo-500" />
-                    <span className="font-mono text-xs font-bold text-slate-800">tiendagosenhn</span>
+                    <span className="font-mono text-xs font-bold text-slate-800">
+                      {isGosen ? 'tiendagosenhn' : 'Nube Multi-Empresa SaaS'}
+                    </span>
                   </div>
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                    Base de Datos Activa
+                    Instancia de Tienda Activa
                   </span>
                   <div className="flex items-center gap-2">
                     <Database className="w-4 h-4 text-indigo-500" />
-                    <span className="font-mono text-xs font-bold text-slate-800 truncate" title="ai-studio-inventariogosen">
-                      ai-studio-inventariogosen
+                    <span className="font-mono text-xs font-bold text-slate-800 truncate">
+                      {isGosen ? 'ai-studio-inventariogosen' : `instancia-${currentSettings.companyId || 'tienda'}`}
                     </span>
                   </div>
                 </div>

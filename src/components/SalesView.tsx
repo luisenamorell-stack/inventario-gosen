@@ -7,6 +7,8 @@ import {
   UserSession,
   UserAccount,
   UserRole,
+  POSFinanceStoreData,
+  CreditPaymentAbone,
 } from '../types';
 import {
   ShoppingCart,
@@ -46,10 +48,12 @@ import {
   Share2,
   ShieldCheck,
   Users,
+  Wallet,
 } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
 import { playSound } from '../utils/audio';
 import { PosProductGridSkeleton } from './SkeletonLoaders';
+import { POSFinanceTabs } from './POSFinanceTabs';
 
 export const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
@@ -66,6 +70,8 @@ export const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-
   </svg>
 );
 
+export type SalesSubTab = 'pos' | 'cash-register' | 'credits' | 'expenses' | 'history';
+
 interface SalesViewProps {
   inventory: Product[];
   sales: SaleRecord[];
@@ -73,6 +79,10 @@ interface SalesViewProps {
   userSession?: UserSession | null;
   users?: UserAccount[];
   isLoading?: boolean;
+  initialSubTab?: SalesSubTab;
+  posFinanceData?: POSFinanceStoreData;
+  onSavePOSFinanceData?: (updated: POSFinanceStoreData) => Promise<void>;
+  onRecordCreditPayment?: (sale: SaleRecord, abone: CreditPaymentAbone) => Promise<SaleRecord>;
   onRecordSale: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
   onCancelSale: (sale: SaleRecord) => Promise<void>;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -85,12 +95,23 @@ export const SalesView: React.FC<SalesViewProps> = ({
   userSession,
   users = [],
   isLoading = false,
+  initialSubTab = 'pos',
+  posFinanceData,
+  onSavePOSFinanceData,
+  onRecordCreditPayment,
   onRecordSale,
   onCancelSale,
   showToast,
 }) => {
-  // Navigation between POS Terminal and Sales History
-  const [activeSubTab, setActiveSubTab] = useState<'pos' | 'history'>('pos');
+  // Navigation between POS Terminal, Cash Register, Credits, Expenses and Sales History
+  const [activeSubTab, setActiveSubTab] = useState<SalesSubTab>(initialSubTab);
+
+  useEffect(() => {
+    if (initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [initialSubTab]);
+
   // Mobile / Tablet POS active view: 'catalog' | 'cart' (< lg)
   const [mobilePosTab, setMobilePosTab] = useState<'catalog' | 'cart'>('catalog');
 
@@ -101,8 +122,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [discountType, setDiscountType] = useState<'amount' | 'percent'>('amount');
   const [discountValue, setDiscountValue] = useState<string>('');
   const [applyTax, setApplyTax] = useState<boolean>(false); // 15% ISV Honduras optional
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer' | 'other'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer' | 'credit' | 'other'>('cash');
   const [cashGiven, setCashGiven] = useState<string>('');
+  const [creditInitialDeposit, setCreditInitialDeposit] = useState<string>('');
+  const [creditDueDate, setCreditDueDate] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('Consumidor Final');
   const [customerRtn, setCustomerRtn] = useState<string>('');
   const [customerPhone, setCustomerPhone] = useState<string>('');
@@ -125,7 +148,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [historySearch, setHistorySearch] = useState('');
   const [historyDateFilter, setHistoryDateFilter] = useState<'today' | 'yesterday' | 'week' | 'month' | 'all'>('today');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'completed' | 'cancelled'>('all');
-  const [historyPaymentFilter, setHistoryPaymentFilter] = useState<'all' | 'cash' | 'card' | 'transfer'>('all');
+  const [historyPaymentFilter, setHistoryPaymentFilter] = useState<'all' | 'cash' | 'card' | 'transfer' | 'credit'>('all');
   const [historySellerFilter, setHistorySellerFilter] = useState<'all' | 'admin' | 'collaborator'>('all');
 
   // Helper to resolve who made a sale (Name + Role: Administrador vs Colaborador)
@@ -434,6 +457,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setCart([]);
     setDiscountValue('');
     setCashGiven('');
+    setCreditInitialDeposit('');
+    setCreditDueDate('');
     setCustomerName('Consumidor Final');
     setCustomerRtn('');
     setCustomerPhone('');
@@ -521,6 +546,18 @@ export const SalesView: React.FC<SalesViewProps> = ({
       return;
     }
 
+    if (paymentMethod === 'credit') {
+      const cleanCust = customerName.trim();
+      if (!cleanCust || cleanCust.toLowerCase() === 'consumidor final') {
+        playSound('error');
+        showToast(
+          'Para una venta al Crédito / Fiado debes ingresar el nombre real del cliente.',
+          'warning'
+        );
+        return;
+      }
+    }
+
     // Play classic cash register sound ("Ka-Ching!") immediately on button press
     playSound('cash-register');
 
@@ -536,6 +573,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
       });
       const saleNumber = `VTA-${now.getFullYear().toString().slice(-2)}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+      const isCredit = paymentMethod === 'credit';
+      const initialDeposit = isCredit
+        ? Math.min(cartTotal, Math.max(0, parseFloat(creditInitialDeposit) || 0))
+        : 0;
+      const computedBalanceDue = isCredit
+        ? Math.max(0, Number((cartTotal - initialDeposit).toFixed(2)))
+        : 0;
+      const initialPaymentsList: CreditPaymentAbone[] =
+        isCredit && initialDeposit > 0
+          ? [
+              {
+                id: `abn_init_${Date.now()}`,
+                amount: initialDeposit,
+                paymentMethod: 'cash',
+                timestamp: Date.now(),
+                date: dateFormatted,
+                receivedBy: userSession?.userName || 'Administrador',
+                notes: 'Prima / Abono inicial en compra',
+              },
+            ]
+          : [];
+
       const saleData: Omit<SaleRecord, 'id'> = {
         saleNumber,
         timestamp: Date.now(),
@@ -547,8 +606,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
         tax: taxAmount,
         total: cartTotal,
         paymentMethod,
-        amountPaid: paymentMethod === 'cash' ? numericCashGiven : cartTotal,
+        amountPaid:
+          paymentMethod === 'cash'
+            ? numericCashGiven
+            : paymentMethod === 'credit'
+            ? initialDeposit
+            : cartTotal,
         change: paymentMethod === 'cash' ? cashChange : 0,
+        balanceDue: computedBalanceDue,
+        creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
+        creditDueDate: isCredit && creditDueDate ? creditDueDate : undefined,
+        creditPayments: initialPaymentsList,
         customerName: customerName.trim() || 'Consumidor Final',
         customerRtn: customerRtn.trim() || undefined,
         customerPhone: customerPhone.trim() || undefined,
@@ -568,7 +636,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
       setCompletedSale(recorded);
       setShowReceiptModal(true);
       clearCart();
-      showToast(`¡Venta ${saleNumber} registrada con éxito! El inventario ha sido actualizado.`, 'success');
+      showToast(
+        isCredit
+          ? `¡Venta al Crédito ${saleNumber} registrada! Saldo pendiente: L. ${computedBalanceDue.toFixed(2)}`
+          : `¡Venta ${saleNumber} registrada con éxito! El inventario ha sido actualizado.`,
+        'success'
+      );
     } catch (err: any) {
       console.error('Checkout error:', err);
       showToast(`Error al registrar la venta: ${err?.message || err}`, 'error');
@@ -692,7 +765,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
     if (sale.tax > 0) {
       text += `*15% ISV:* L. ${sale.tax.toFixed(2)}\n`;
     }
-    text += `*TOTAL PAGADO:* L. ${sale.total.toFixed(2)}\n`;
+    text += `*TOTAL FACTURA:* L. ${sale.total.toFixed(2)}\n`;
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
     text += `💳 *Método de pago:* ${
       sale.paymentMethod === 'cash'
@@ -701,12 +774,24 @@ export const SalesView: React.FC<SalesViewProps> = ({
         ? 'Tarjeta'
         : sale.paymentMethod === 'transfer'
         ? 'Transferencia Bancaria'
+        : sale.paymentMethod === 'credit'
+        ? 'CRÉDITO / FIADO'
         : 'Otro'
     }\n`;
 
     if (sale.paymentMethod === 'cash' && sale.amountPaid) {
       text += `*Efectivo recibido:* L. ${sale.amountPaid.toFixed(2)}\n`;
       text += `*Cambio / Vuelto:* L. ${sale.change.toFixed(2)}\n`;
+    } else if (sale.paymentMethod === 'credit') {
+      const bal =
+        sale.balanceDue !== undefined
+          ? Number(sale.balanceDue)
+          : Math.max(0, sale.total - (sale.amountPaid || 0));
+      text += `*Abono / Prima Pagada:* L. ${(sale.amountPaid || 0).toFixed(2)}\n`;
+      text += `📌 *SALDO PENDIENTE:* L. ${bal.toFixed(2)}\n`;
+      if (sale.creditDueDate) {
+        text += `⏰ *Fecha de Pago:* ${sale.creditDueDate}\n`;
+      }
     }
 
     if (sale.notes) {
@@ -991,35 +1076,79 @@ export const SalesView: React.FC<SalesViewProps> = ({
         </div>
 
         {/* View Switcher Tabs */}
-        <div className="grid grid-cols-2 sm:flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveSubTab('pos')}
-            className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
               activeSubTab === 'pos'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
             }`}
           >
-            <ShoppingCart className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-            <span className="truncate">Nueva Venta (POS)</span>
+            <ShoppingCart className="w-3.5 h-3.5 shrink-0" />
+            <span>Nueva Venta (POS)</span>
             {cart.length > 0 && (
-              <span className="bg-white text-emerald-700 text-[10px] sm:text-[11px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
+              <span className="bg-white text-emerald-700 text-[10px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
                 {totalCartItemsCount}
               </span>
             )}
           </button>
 
           <button
+            onClick={() => setActiveSubTab('cash-register')}
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+              activeSubTab === 'cash-register'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <Wallet className="w-3.5 h-3.5 shrink-0" />
+            <span>Caja / Arqueo</span>
+            {(posFinanceData?.shifts || []).some((s) => s.status === 'open') && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" title="Caja Abierta" />
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveSubTab('credits')}
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+              activeSubTab === 'credits'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5 shrink-0" />
+            <span>Cuentas por Cobrar</span>
+            {sales.filter((s) => s.status === 'completed' && (s.balanceDue ?? (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01).length > 0 && (
+              <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
+                {sales.filter((s) => s.status === 'completed' && (s.balanceDue ?? (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01).length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveSubTab('expenses')}
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+              activeSubTab === 'expenses'
+                ? 'bg-rose-600 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5 shrink-0" />
+            <span>Gastos y Utilidad</span>
+          </button>
+
+          <button
             onClick={() => setActiveSubTab('history')}
-            className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
               activeSubTab === 'history'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
             }`}
           >
-            <History className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-            <span className="truncate">Historial de Ventas</span>
-            <span className="bg-slate-200 text-slate-700 text-[10px] sm:text-[11px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
+            <History className="w-3.5 h-3.5 shrink-0" />
+            <span>Historial</span>
+            <span className="bg-slate-200 text-slate-700 text-[10px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
               {sales.length}
             </span>
           </button>
@@ -1027,7 +1156,35 @@ export const SalesView: React.FC<SalesViewProps> = ({
       </div>
 
       {/* Main Content Area */}
-      {activeSubTab === 'pos' ? (
+      {activeSubTab === 'cash-register' || activeSubTab === 'credits' || activeSubTab === 'expenses' ? (
+        <POSFinanceTabs
+          mode={activeSubTab}
+          inventory={inventory}
+          sales={sales}
+          storeSettings={storeSettings}
+          userSession={userSession}
+          posFinanceData={
+            posFinanceData || {
+              companyId: storeSettings.companyId || 'gosen',
+              shifts: [],
+              expenses: [],
+              updatedAt: Date.now(),
+            }
+          }
+          onSavePOSFinanceData={async (updated) => {
+            if (onSavePOSFinanceData) await onSavePOSFinanceData(updated);
+          }}
+          onRecordCreditPayment={async (sale, abone) => {
+            if (onRecordCreditPayment) return await onRecordCreditPayment(sale, abone);
+            return sale;
+          }}
+          onViewSaleTicket={(sale) => {
+            setCompletedSale(sale);
+            setShowReceiptModal(true);
+          }}
+          showToast={showToast}
+        />
+      ) : activeSubTab === 'pos' ? (
         /* ==================== POS TERMINAL VIEW ==================== */
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden relative">
           {/* Mobile / Tablet Segmented POS Switcher (< lg) */}
@@ -1573,7 +1730,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                     Método de Pago
                   </label>
-                  <div className="grid grid-cols-3 gap-1.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('cash')}
@@ -1612,8 +1769,76 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       <Building className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">Transf.</span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentMethod('credit');
+                        if (customerName.trim().toLowerCase() === 'consumidor final') {
+                          setCustomerName('');
+                        }
+                      }}
+                      className={`py-2 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                        paymentMethod === 'credit'
+                          ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                          : 'bg-white text-amber-800 border-amber-200 hover:bg-amber-50'
+                      }`}
+                      title="Venta al Crédito / Fiado (Cuentas por Cobrar)"
+                    >
+                      <Users className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">Fiado</span>
+                    </button>
                   </div>
                 </div>
+
+                {/* Credit / Fiado configuration box */}
+                {paymentMethod === 'credit' && cart.length > 0 && (
+                  <div className="p-2.5 bg-amber-50/90 border border-amber-300 rounded-xl space-y-2 text-xs">
+                    <div className="flex items-center justify-between font-bold text-amber-950">
+                      <span>Venta al Crédito ("Fiado")</span>
+                      <span className="bg-amber-200 text-amber-900 px-2 py-0.5 rounded text-[10px]">
+                        Cartera de Clientes
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-800">
+                      Asegúrate de escribir el <strong>Nombre y WhatsApp del Cliente</strong> arriba.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
+                          Prima / Abono Hoy (L.)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max={cartTotal}
+                          placeholder="0.00"
+                          value={creditInitialDeposit}
+                          onChange={(e) => setCreditInitialDeposit(e.target.value)}
+                          className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
+                          Fecha Promesa Pago
+                        </label>
+                        <input
+                          type="date"
+                          value={creditDueDate}
+                          onChange={(e) => setCreditDueDate(e.target.value)}
+                          className="w-full px-2 py-1.5 bg-white border border-amber-300 rounded-lg text-xs text-slate-900"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between pt-1 border-t border-amber-200/80 font-bold text-amber-950">
+                      <span>Saldo Pendiente por Cobrar:</span>
+                      <span className="text-sm font-black text-amber-800">
+                        L. {Math.max(0, cartTotal - (parseFloat(creditInitialDeposit) || 0)).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Cash calculation input if cash is selected */}
                 {paymentMethod === 'cash' && cart.length > 0 && (

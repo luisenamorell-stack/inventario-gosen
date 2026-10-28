@@ -118,6 +118,24 @@ service cloud.firestore {
              data.module is string;
     }
 
+    function isValidCompany(data) {
+      return data.keys().hasAll(['name', 'slug', 'status', 'adminPassword']) &&
+             data.name is string && data.name.size() <= 200 &&
+             data.slug is string && data.slug.size() <= 100 &&
+             data.status in ['active', 'suspended'] &&
+             data.adminPassword is string && data.adminPassword.size() <= 100 &&
+             (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 200)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 50)) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 200)) &&
+             (!('plan' in data) || (data.plan is string && data.plan.size() <= 50)) &&
+             (!('price' in data) || (data.price is number)) &&
+             (!('nextBillingDate' in data) || (data.nextBillingDate is string && data.nextBillingDate.size() <= 50)) &&
+             (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 500000)) &&
+             (!('tagline' in data) || (data.tagline is string && data.tagline.size() <= 200)) &&
+             (!('address' in data) || (data.address is string && data.address.size() <= 500)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000));
+    }
+
     match /inventory/{productId} {
       allow read: if true;
       allow create, update: if isValidId(productId) && isValidProduct(incoming());
@@ -165,6 +183,12 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isValidId(logId) && isValidActivityLog(incoming());
       allow delete: if isValidId(logId);
+    }
+
+    match /companies/{companyId} {
+      allow read: if true;
+      allow create, update: if isValidId(companyId) && isValidCompany(incoming());
+      allow delete: if isValidId(companyId);
     }
 
     match /test/connection {

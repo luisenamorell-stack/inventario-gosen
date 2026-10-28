@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useMemo } from 'react';
-import { Product, AuditHistoryRecord, SaleRecord } from '../types';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
+import { Product, AuditHistoryRecord, SaleRecord, StoreExpenseRecord } from '../types';
 import {
   Box,
   Layers,
@@ -17,7 +17,10 @@ import {
   ShoppingCart,
   Truck,
   DollarSign,
-  Percent
+  Percent,
+  Wallet,
+  Receipt,
+  Users
 } from 'lucide-react';
 import Chart from 'chart.js/auto';
 import {
@@ -29,11 +32,14 @@ interface DashboardViewProps {
   inventory: Product[];
   auditHistory: AuditHistoryRecord[];
   sales?: SaleRecord[];
+  expenses?: StoreExpenseRecord[];
   isLoading?: boolean;
   onOpenNewProduct: () => void;
   onStartAudit: () => void;
   onNavigateToSales?: () => void;
   onNavigateToPurchases?: () => void;
+  onNavigateToExpenses?: () => void;
+  onNavigateToCredits?: () => void;
   onFilterInventoryByCode: (code: string) => void;
   onNavigateToAudit: () => void;
 }
@@ -42,16 +48,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   inventory,
   auditHistory,
   sales = [],
+  expenses = [],
   isLoading = false,
   onOpenNewProduct,
   onStartAudit,
   onNavigateToSales,
   onNavigateToPurchases,
+  onNavigateToExpenses,
+  onNavigateToCredits,
   onFilterInventoryByCode,
   onNavigateToAudit,
 }) => {
   const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
+  const [financePeriod, setFinancePeriod] = useState<'month' | 'today' | 'all'>('month');
 
   // Compute inventory & profit metrics with useMemo for instantaneous rendering
   const {
@@ -62,10 +72,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     projectedInventoryProfit,
     avgInventoryMarginPct,
     lowStockItems,
-    realizedSalesProfit,
-    totalSalesNetRevenue,
-    todaySalesProfit,
-    todaySalesCount,
+    periodGrossProfit,
+    periodSalesNetRevenue,
+    periodExpensesTotal,
+    periodNetFreeProfit,
+    periodSalesCount,
+    periodExpensesCount,
+    pendingCreditBalanceTotal,
+    pendingCreditCount,
   } = useMemo(() => {
     let stockSum = 0;
     let costSum = 0;
@@ -95,16 +109,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     const invProfit = retailSum - costSum;
     const invMargin = retailSum > 0 ? (invProfit / retailSum) * 100 : 0;
 
-    // Realized profit from completed sales
+    // Period boundaries
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    const isWithinPeriod = (ts: number) => {
+      if (financePeriod === 'today') return ts >= startOfToday;
+      if (financePeriod === 'month') return ts >= startOfMonth;
+      return true;
+    };
+
     let salesNetRevSum = 0;
     let salesCostSum = 0;
-    let todayProfitSum = 0;
-    let todayCount = 0;
+    let salesCount = 0;
+    let creditPendingSum = 0;
+    let creditPendingTickets = 0;
 
     sales.forEach((s) => {
       if (s.status !== 'completed') return;
+
+      // Track total pending accounts receivable ("Fiado")
+      const due =
+        s.balanceDue !== undefined
+          ? Number(s.balanceDue)
+          : s.paymentMethod === 'credit'
+          ? Math.max(0, Number(s.total) - Number(s.amountPaid || 0))
+          : 0;
+      if (due > 0.01) {
+        creditPendingSum += due;
+        creditPendingTickets += 1;
+      }
+
+      if (!isWithinPeriod(s.timestamp || 0)) return;
+
       const netSaleRev = Math.max(
         0,
         (Number(s.subtotal) || Number(s.total) || 0) - (Number(s.discount) || 0)
@@ -117,15 +155,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           0;
         saleCost += unitCost * (Number(it.quantity) || 0);
       });
-      const saleProfit = netSaleRev - saleCost;
       salesNetRevSum += netSaleRev;
       salesCostSum += saleCost;
-
-      if ((s.timestamp || 0) >= startOfToday) {
-        todayProfitSum += saleProfit;
-        todayCount += 1;
-      }
+      salesCount += 1;
     });
+
+    let expensesSum = 0;
+    let expensesCount = 0;
+    expenses.forEach((exp) => {
+      if (!isWithinPeriod(exp.timestamp || 0)) return;
+      expensesSum += Number(exp.amount) || 0;
+      expensesCount += 1;
+    });
+
+    const grossProfit = salesNetRevSum - salesCostSum;
+    const netFreeProfit = grossProfit - expensesSum;
 
     return {
       totalModels: inventory.length,
@@ -135,12 +179,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       projectedInventoryProfit: invProfit,
       avgInventoryMarginPct: invMargin,
       lowStockItems: lowItems.slice(0, 25),
-      realizedSalesProfit: salesNetRevSum - salesCostSum,
-      totalSalesNetRevenue: salesNetRevSum,
-      todaySalesProfit: todayProfitSum,
-      todaySalesCount: todayCount,
+      periodGrossProfit: grossProfit,
+      periodSalesNetRevenue: salesNetRevSum,
+      periodExpensesTotal: expensesSum,
+      periodNetFreeProfit: netFreeProfit,
+      periodSalesCount: salesCount,
+      periodExpensesCount: expensesCount,
+      pendingCreditBalanceTotal: creditPendingSum,
+      pendingCreditCount: creditPendingTickets,
     };
-  }, [inventory, sales]);
+  }, [inventory, sales, expenses, financePeriod]);
 
   // Render Chart.js
   useEffect(() => {
@@ -223,7 +271,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             Panel de Control
           </h1>
           <p className="text-xs sm:text-base text-slate-500 dark:text-slate-400 font-medium mt-0.5 sm:mt-1">
-            Resumen general y métricas de tu inventario.
+            Resumen general, finanzas operativas y métricas de tu inventario.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-2.5 w-full md:w-auto">
@@ -234,6 +282,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             >
               <ShoppingCart className="w-4 h-4 shrink-0" />
               <span>Nueva Venta</span>
+            </button>
+          )}
+          {onNavigateToExpenses && (
+            <button
+              onClick={onNavigateToExpenses}
+              className="bg-rose-600 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-rose-700 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer shadow-rose-600/20"
+            >
+              <Wallet className="w-4 h-4 shrink-0" />
+              <span>Gastos / Caja</span>
             </button>
           )}
           {onNavigateToPurchases && (
@@ -266,7 +323,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {isLoading ? (
         <DashboardStatCardsSkeleton />
       ) : (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 mb-6 sm:mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 mb-6">
         {/* Total Modelos */}
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800/80 flex items-center group hover:border-blue-200 dark:hover:border-blue-800 transition-colors">
           <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center text-2xl mr-4 group-hover:scale-110 transition-transform shrink-0 border border-blue-100 dark:border-blue-900/40">
@@ -323,76 +380,156 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
       )}
 
-      {/* Compact Profit & Profitability Bar — matches app's clean white card aesthetic */}
+      {/* Real Net Profit Formula Card: Utilidad Bruta de Ventas − Gastos Operativos = Ganancia Neta Libre */}
       {!isLoading && (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800/80 px-4 py-3 mb-6 grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-0 divide-y sm:divide-y-0 sm:divide-x divide-slate-100 dark:divide-slate-800">
-          {/* Ganancia Proyectada en Stock */}
-          <div className="flex items-center gap-3 sm:pr-4">
-            <div className="w-9 h-9 rounded-xl bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0 border border-teal-100 dark:border-teal-900/40">
-              <TrendingUp className="w-4 h-4" />
+        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800/80 p-4 sm:p-5 mb-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
+                <DollarSign className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white uppercase tracking-wide">
+                  Estado de Resultados Real (Utilidad Bruta − Gastos = Ganancia Neta Libre)
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Cálculo automático descontando el costo de mercadería y los gastos operativos del local
+                </p>
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
-                  Ganancia en Stock
-                </span>
-                <span className="text-[11px] font-semibold text-teal-600 dark:text-teal-400 shrink-0">
-                  {avgInventoryMarginPct.toFixed(1)}% margen
-                </span>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setFinancePeriod('today')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                    financePeriod === 'today'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Hoy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFinancePeriod('month')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                    financePeriod === 'month'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Este Mes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFinancePeriod('all')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                    financePeriod === 'all'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Histórico
+                </button>
               </div>
-              <div className="flex items-baseline justify-between gap-2 mt-0.5">
-                <span className="text-base sm:text-lg font-black text-slate-800 dark:text-white truncate">
-                  + L {projectedInventoryProfit.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-                <span className="text-[11px] text-slate-400 truncate">
-                  Venta: L {totalRetailValue.toLocaleString('es-HN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </span>
-              </div>
+
+              {onNavigateToExpenses && (
+                <button
+                  type="button"
+                  onClick={onNavigateToExpenses}
+                  className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-extrabold transition-colors cursor-pointer flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Registrar Gasto</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Ganancia Neta en Ventas */}
-          <div className="flex items-center gap-3 pt-2.5 sm:pt-0 sm:px-4">
-            <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-100 dark:border-emerald-900/40">
-              <DollarSign className="w-4 h-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
-                  Ganancia en Ventas
-                </span>
-                <span className="text-[11px] text-slate-400 shrink-0">Acumulada</span>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 sm:gap-4">
+            {/* 1. Utilidad Bruta de Ventas */}
+            <div className="p-3.5 rounded-xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800">
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                <span>1. Utilidad Bruta Ventas</span>
+                <span className="text-emerald-600">{periodSalesCount} ventas</span>
               </div>
-              <div className="flex items-baseline justify-between gap-2 mt-0.5">
-                <span className="text-base sm:text-lg font-black text-emerald-700 dark:text-emerald-400 truncate">
-                  + L {realizedSalesProfit.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-                <span className="text-[11px] text-slate-400 truncate">
-                  Neto: L {totalSalesNetRevenue.toLocaleString('es-HN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </span>
+              <div className="text-lg sm:text-xl font-black text-slate-900 dark:text-white mt-1">
+                L {periodGrossProfit.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-0.5">
+                Facturado neto: L {periodSalesNetRevenue.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
-          </div>
 
-          {/* Ganancia de Hoy */}
-          <div className="flex items-center gap-3 pt-2.5 sm:pt-0 sm:pl-4">
-            <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-900/40">
-              <Percent className="w-4 h-4" />
+            {/* 2. Menos Gastos Operativos */}
+            <div
+              onClick={onNavigateToExpenses}
+              className="p-3.5 rounded-xl bg-rose-50/50 dark:bg-rose-950/30 border border-rose-200/70 dark:border-rose-900/50 cursor-pointer hover:border-rose-300 transition-colors"
+            >
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-300">
+                <span>2. (−) Gastos del Local</span>
+                <span>{periodExpensesCount} registros</span>
+              </div>
+              <div className="text-lg sm:text-xl font-black text-rose-600 dark:text-rose-400 mt-1">
+                − L {periodExpensesTotal.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className="text-[11px] text-rose-500/80 mt-0.5">
+                Alquiler, energía, personal, bolsas, etc.
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
-                  Ganancia de Hoy
-                </span>
-                <span className="text-[11px] text-slate-400 shrink-0">
-                  {todaySalesCount} {todaySalesCount === 1 ? 'venta' : 'ventas'}
+
+            {/* 3. Igual a Ganancia Neta Libre */}
+            <div
+              className={`p-3.5 rounded-xl border ${
+                periodNetFreeProfit >= 0
+                  ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60'
+                  : 'bg-rose-100/70 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800'
+              }`}
+            >
+              <div className="flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+                <span>3. (=) Ganancia Neta Libre</span>
+                <span className="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-black">
+                  Real
                 </span>
               </div>
-              <div className="flex items-baseline justify-between gap-2 mt-0.5">
-                <span className="text-base sm:text-lg font-black text-slate-800 dark:text-white truncate">
-                  + L {todaySalesProfit.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <div
+                className={`text-lg sm:text-xl font-black mt-1 ${
+                  periodNetFreeProfit >= 0
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-rose-700 dark:text-rose-400'
+                }`}
+              >
+                {periodNetFreeProfit >= 0 ? '+ ' : '− '}L{' '}
+                {Math.abs(periodNetFreeProfit).toLocaleString('es-HN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-0.5">
+                Ganancia en Stock: +L {projectedInventoryProfit.toLocaleString('es-HN', { maximumFractionDigits: 0 })} ({avgInventoryMarginPct.toFixed(0)}%)
+              </div>
+            </div>
+
+            {/* 4. Cartera por Cobrar (Fiado) */}
+            <div
+              onClick={onNavigateToCredits}
+              className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/50 cursor-pointer hover:border-amber-300 transition-colors"
+            >
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+                <span className="flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Cuentas por Cobrar</span>
                 </span>
-                <span className="text-[11px] text-slate-400">Hoy</span>
+                <span>{pendingCreditCount} pendientes</span>
+              </div>
+              <div className="text-lg sm:text-xl font-black text-amber-700 dark:text-amber-400 mt-1">
+                L {pendingCreditBalanceTotal.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className="text-[11px] text-amber-700/80 mt-0.5 flex items-center justify-between">
+                <span>Ventas al Crédito / Fiado</span>
+                <span className="underline font-bold">Cobrar →</span>
               </div>
             </div>
           </div>

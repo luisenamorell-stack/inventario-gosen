@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share, PlusSquare, X, Check, Smartphone, Sparkles } from 'lucide-react';
+import { Download, Share, PlusSquare, X, Check, Smartphone, Sparkles, Store } from 'lucide-react';
 import { StoreSettings } from '../types';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -70,8 +70,9 @@ export const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({
 
   if (!isOpen) return null;
 
-  const logoSrc = storeSettings?.logoUrl || '/pwa-512x512.png';
-  const storeName = storeSettings?.storeName || 'Tienda Gosén';
+  const isGosen = (storeSettings?.companyId || 'gosen') === 'gosen';
+  const logoSrc = storeSettings?.logoUrl || (isGosen ? '/pwa-512x512.png' : '');
+  const storeName = storeSettings?.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-in fade-in duration-200">
@@ -88,15 +89,20 @@ export const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({
 
           {/* App Logo Display */}
           <div className="mx-auto w-24 h-24 rounded-2xl bg-slate-900 p-2 shadow-xl border-2 border-emerald-500/40 flex items-center justify-center overflow-hidden mb-3">
-            <img
-              src={logoSrc}
-              alt={storeName}
-              className="w-full h-full object-contain rounded-xl"
-              onError={(e) => {
-                // Fallback to pwa-192x192.png
-                (e.target as HTMLImageElement).src = '/pwa-192x192.png';
-              }}
-            />
+            {logoSrc ? (
+              <img
+                src={logoSrc}
+                alt={storeName}
+                className="w-full h-full object-contain rounded-xl"
+                onError={(e) => {
+                  if (isGosen) {
+                    (e.target as HTMLImageElement).src = '/pwa-192x192.png';
+                  }
+                }}
+              />
+            ) : (
+              <Store className="w-12 h-12 text-emerald-400" />
+            )}
           </div>
 
           <h3 className="text-xl font-bold tracking-tight">{storeName}</h3>

@@ -49,6 +49,11 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
 
+  const isGosen = (storeSettings.companyId || 'gosen') === 'gosen';
+  const showDvolada = storeSettings.enableDeliveryDvolada ?? isGosen;
+  const effectiveLogo = storeSettings.logoUrl || (isGosen ? '/store-logo.jpg' : '');
+  const displayStoreName = storeSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Catálogo Oficial');
+
   // Delivery & Customer Delivery Info Form
   const [shippingMethod, setShippingMethod] = useState<'DVOLADA' | 'RETIRO'>('DVOLADA');
   const [customerName, setCustomerName] = useState('');
@@ -161,7 +166,13 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
 
   // Format WhatsApp Order Message
   const buildWhatsAppMessage = (): string => {
-    const sName = (storeSettings.storeName || 'Tienda Gosén').toUpperCase();
+    const sName = displayStoreName.toUpperCase();
+    const deliveryMethodText =
+      shippingMethod === 'DVOLADA'
+        ? showDvolada
+          ? "D'VOLADA Servicios de Delivery 🚀"
+          : 'Envío a Domicilio 🛵'
+        : 'Retiro en Tienda 🏪';
     let text = `🛍️ *NUEVO PEDIDO DESDE EL CATÁLOGO DIGITAL*\n`;
     text += `🏪 *${sName}*\n`;
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -169,7 +180,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
     if (customerPhone.trim()) {
       text += `📞 *Teléfono:* ${customerPhone.trim()}\n`;
     }
-    text += `🛵 *Método de entrega:* ${shippingMethod === 'DVOLADA' ? "D'VOLADA Servicios de Delivery 🚀" : 'Retiro en Tienda 🏪'}\n`;
+    text += `🛵 *Método de entrega:* ${deliveryMethodText}\n`;
     if (shippingMethod === 'DVOLADA' && customerAddress.trim()) {
       text += `📍 *Dirección de envío:* ${customerAddress.trim()}\n`;
     }
@@ -265,13 +276,17 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
       <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-6 shadow-2xs">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4 text-center sm:text-left">
           <div className="flex flex-col sm:flex-row items-center gap-4">
-            {(storeSettings.logoUrl || '/store-logo.jpg') && (
+            {effectiveLogo ? (
               <div className="w-full sm:w-auto max-w-xs sm:max-w-md h-20 sm:h-28 flex items-center justify-center sm:justify-start overflow-hidden shrink-0">
                 <img
-                  src={storeSettings.logoUrl || '/store-logo.jpg'}
-                  alt={storeSettings.storeName || 'Tienda Gosén'}
+                  src={effectiveLogo}
+                  alt={displayStoreName}
                   className="h-full w-full object-contain rounded-xl mix-blend-multiply drop-shadow-xs"
                 />
+              </div>
+            ) : (
+              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 shrink-0 shadow-2xs">
+                <Store className="w-9 h-9" />
               </div>
             )}
             <div className="space-y-1">
@@ -280,7 +295,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                 <span>Catálogo Digital Oficial</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-                {storeSettings.storeName || 'Tienda Gosén'}
+                {displayStoreName}
               </h1>
               {storeSettings.tagline && (
                 <p className="text-xs sm:text-sm text-slate-500 font-medium">
@@ -338,30 +353,32 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
           </div>
         </div>
 
-        {/* Delivery Partner Banner - D'VOLADA */}
-        <div className="max-w-5xl mx-auto mt-3 bg-orange-50/90 p-3.5 sm:p-4 rounded-2xl border border-orange-200 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs relative overflow-hidden">
-          <div className="flex items-center gap-3">
-            <div className="bg-white p-1 rounded-xl shadow-xs shrink-0 border border-orange-200">
-              <img
-                src="/dvolada-delivery.jpg"
-                alt="D'VOLADA Servicios de Delivery"
-                className="h-10 sm:h-12 object-contain rounded-lg"
-              />
-            </div>
-            <div className="text-center sm:text-left">
-              <div className="flex items-center justify-center sm:justify-start gap-1.5 text-xs font-black text-orange-800 uppercase tracking-wider">
-                <Truck className="w-3.5 h-3.5 text-orange-600" />
-                <span>Delivery Oficial D'VOLADA</span>
+        {/* Delivery Partner Banner - D'VOLADA (Only if enabled for this client) */}
+        {showDvolada && (
+          <div className="max-w-5xl mx-auto mt-3 bg-orange-50/90 p-3.5 sm:p-4 rounded-2xl border border-orange-200 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs relative overflow-hidden">
+            <div className="flex items-center gap-3">
+              <div className="bg-white p-1 rounded-xl shadow-xs shrink-0 border border-orange-200">
+                <img
+                  src="/dvolada-delivery.jpg"
+                  alt="D'VOLADA Servicios de Delivery"
+                  className="h-10 sm:h-12 object-contain rounded-lg"
+                />
               </div>
-              <p className="text-xs sm:text-sm font-semibold text-slate-800 mt-0.5 leading-snug">
-                Envíos rápidos y seguros a domicilio en toda la ciudad con <strong>D'VOLADA Servicios de Delivery</strong>.
-              </p>
+              <div className="text-center sm:text-left">
+                <div className="flex items-center justify-center sm:justify-start gap-1.5 text-xs font-black text-orange-800 uppercase tracking-wider">
+                  <Truck className="w-3.5 h-3.5 text-orange-600" />
+                  <span>Delivery Oficial D'VOLADA</span>
+                </div>
+                <p className="text-xs sm:text-sm font-semibold text-slate-800 mt-0.5 leading-snug">
+                  Envíos rápidos y seguros a domicilio en toda la ciudad con <strong>D'VOLADA Servicios de Delivery</strong>.
+                </p>
+              </div>
+            </div>
+            <div className="inline-flex items-center gap-1.5 bg-orange-100 text-orange-900 border border-orange-300 text-[11px] font-extrabold px-3 py-1.5 rounded-full whitespace-nowrap shrink-0 shadow-2xs">
+              <span>🚀 Entregas Directas a Domicilio</span>
             </div>
           </div>
-          <div className="inline-flex items-center gap-1.5 bg-orange-100 text-orange-900 border border-orange-300 text-[11px] font-extrabold px-3 py-1.5 rounded-full whitespace-nowrap shrink-0 shadow-2xs">
-            <span>🚀 Entregas Directas a Domicilio</span>
-          </div>
-        </div>
+        )}
       </header>
 
       {/* Main Catalog Content */}
@@ -475,7 +492,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                       <div className="flex flex-col items-center justify-center text-slate-400 p-2 text-center">
                         <ShoppingBag className="w-8 h-8 mb-1 stroke-1 text-slate-300" />
                         <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
-                          {storeSettings.storeName || 'Tienda Gosén'}
+                          {displayStoreName}
                         </span>
                       </div>
                     )}
@@ -603,7 +620,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                 <div>
                   <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">Confirmar Pedido por WhatsApp</h3>
                   <p className="text-[11px] text-slate-500 font-medium">
-                    {storeSettings.storeName || 'Tienda Gosén'}
+                    {displayStoreName}
                   </p>
                 </div>
               </div>
@@ -674,28 +691,48 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                   Selecciona el Método de Entrega
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {/* Option 1: D'VOLADA Delivery */}
+                  {/* Option 1: Home Delivery (D'VOLADA if enabled, otherwise Generic Home Delivery) */}
                   <button
                     type="button"
                     onClick={() => setShippingMethod('DVOLADA')}
                     className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
                       shippingMethod === 'DVOLADA'
-                        ? 'bg-orange-50 border-orange-400 text-slate-900 ring-2 ring-orange-500/30 shadow-xs'
+                        ? showDvolada
+                          ? 'bg-orange-50 border-orange-400 text-slate-900 ring-2 ring-orange-500/30 shadow-xs'
+                          : 'bg-emerald-50 border-emerald-500 text-slate-900 ring-2 ring-emerald-500/30 shadow-xs'
                         : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300'
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <img
-                        src="/dvolada-delivery.jpg"
-                        alt="D'VOLADA Delivery"
-                        className="h-8 object-contain bg-white p-0.5 rounded-lg shrink-0 border border-orange-200"
-                      />
+                      {showDvolada ? (
+                        <img
+                          src="/dvolada-delivery.jpg"
+                          alt="D'VOLADA Delivery"
+                          className="h-8 object-contain bg-white p-0.5 rounded-lg shrink-0 border border-orange-200"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0 border border-emerald-200">
+                          <Truck className="w-4 h-4" />
+                        </div>
+                      )}
                       <div className="min-w-0">
-                        <div className="font-extrabold text-xs text-slate-900 truncate">D'VOLADA Delivery</div>
-                        <div className="text-[10px] text-orange-800 font-semibold truncate">Envío rápido a domicilio 🚀</div>
+                        <div className="font-extrabold text-xs text-slate-900 truncate">
+                          {showDvolada ? "D'VOLADA Delivery" : 'Envío a Domicilio'}
+                        </div>
+                        <div className={`text-[10px] font-semibold truncate ${showDvolada ? 'text-orange-800' : 'text-emerald-700'}`}>
+                          {showDvolada ? 'Envío rápido a domicilio 🚀' : 'Recibir en mi dirección 🛵'}
+                        </div>
                       </div>
                     </div>
-                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${shippingMethod === 'DVOLADA' ? 'border-orange-500 bg-orange-500' : 'border-slate-300'}`}>
+                    <div
+                      className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                        shippingMethod === 'DVOLADA'
+                          ? showDvolada
+                            ? 'border-orange-500 bg-orange-500'
+                            : 'border-emerald-500 bg-emerald-600'
+                          : 'border-slate-300'
+                      }`}
+                    >
                       {shippingMethod === 'DVOLADA' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
                     </div>
                   </button>
@@ -779,14 +816,16 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                 {shippingMethod === 'DVOLADA' && (
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">
-                      Dirección de Envío para D'VOLADA Delivery <span className="text-rose-500">*</span>
+                      {showDvolada ? "Dirección de Envío para D'VOLADA Delivery" : 'Dirección de Envío a Domicilio'} <span className="text-rose-500">*</span>
                     </label>
                     <input
                       type="text"
                       placeholder="ej. Barrio El Centro, ave. principal, frente a farmacia, casa #12"
                       value={customerAddress}
                       onChange={(e) => setCustomerAddress(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium"
+                      className={`w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 font-medium ${
+                        showDvolada ? 'focus:ring-orange-500' : 'focus:ring-emerald-500'
+                      }`}
                     />
                   </div>
                 )}

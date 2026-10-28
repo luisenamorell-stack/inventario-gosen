@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import { ActiveTab, StoreSettings, UserSession } from '../types';
 import {
   Boxes,
@@ -22,7 +22,10 @@ import {
   Users,
   Activity,
   User,
-  ShieldCheck
+  ShieldCheck,
+  Building2,
+  Key,
+  EyeOff
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -37,6 +40,9 @@ export interface SidebarProps {
   onCloseMobile?: () => void;
   onLogout?: () => void;
   onOpenInstallPrompt?: () => void;
+  onUnlockSuperAdmin?: (masterKey: string) => boolean;
+  onLockSuperAdmin?: () => void;
+  companyAllowedModules?: ActiveTab[];
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -51,9 +57,56 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile = () => {},
   onLogout,
   onOpenInstallPrompt,
+  onUnlockSuperAdmin,
+  onLockSuperAdmin,
+  companyAllowedModules,
 }) => {
-  const storeName = storeSettings?.storeName || 'StockMaster';
+  const isGosen = (storeSettings?.companyId || 'gosen') === 'gosen';
+  const storeName = storeSettings?.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda');
   const isAdmin = userSession?.role === 'admin';
+  const isSuperAdmin = Boolean(isAdmin && userSession?.isSuperAdmin === true);
+
+  // Secret 5-tap trigger on the Admin profile badge to unlock SaaS Owner Mode
+  const tapCountRef = useRef<number>(0);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showSaaSUnlockModal, setShowSaaSUnlockModal] = useState(false);
+  const [masterKeyInput, setMasterKeyInput] = useState('');
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+
+  const handleSecretAdminBadgeTap = () => {
+    if (!isAdmin) return;
+    if (isSuperAdmin) {
+      onTabChange('companies');
+      onCloseMobile();
+      return;
+    }
+    tapCountRef.current += 1;
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    if (tapCountRef.current >= 5) {
+      tapCountRef.current = 0;
+      setMasterKeyInput('');
+      setUnlockError(null);
+      setShowSaaSUnlockModal(true);
+    } else {
+      tapTimerRef.current = setTimeout(() => {
+        tapCountRef.current = 0;
+      }, 2500);
+    }
+  };
+
+  const handleConfirmUnlock = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onUnlockSuperAdmin) return;
+    const ok = onUnlockSuperAdmin(masterKeyInput.trim());
+    if (ok) {
+      setShowSaaSUnlockModal(false);
+      setMasterKeyInput('');
+      setUnlockError(null);
+      onCloseMobile();
+    } else {
+      setUnlockError('Clave Maestra de Propietario SaaS incorrecta.');
+    }
+  };
 
   const allNavItems = [
     {
@@ -127,8 +180,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
   ];
 
-  // Filter items based on user permissions
+  // Filter items based on SaaS company module permissions + user role permissions
+  const effectiveCompanyModules = companyAllowedModules || storeSettings?.allowedModules;
   const navItems = allNavItems.filter((item) => {
+    // 1. Check SaaS company-level allowed modules (unless SuperAdmin is inspecting)
+    if (!isSuperAdmin && effectiveCompanyModules && effectiveCompanyModules.length > 0) {
+      if (!effectiveCompanyModules.includes(item.id)) return false;
+    }
     if (!userSession) return true;
     if (userSession.role === 'admin') return true;
     // Collaborator: check allowed tabs
@@ -175,11 +233,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="flex-1 flex items-center gap-3 text-left group overflow-hidden cursor-pointer min-w-0"
               title="Ajustes de tienda"
             >
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
-                <Boxes className="w-6 h-6 text-emerald-400" />
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 overflow-hidden">
+                {storeSettings?.logoUrl ? (
+                  <img
+                    src={storeSettings.logoUrl}
+                    alt={storeName}
+                    className="w-full h-full object-contain p-1"
+                  />
+                ) : (
+                  <Boxes className="w-6 h-6 text-emerald-400" />
+                )}
               </div>
               <span className="font-extrabold text-base sm:text-lg text-white tracking-wider uppercase truncate">
-                {(storeName || 'TIENDA GOSEN').toUpperCase()}
+                {storeName.toUpperCase()}
               </span>
             </button>
 
@@ -197,7 +263,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* User Profile Badge */}
           {userSession && (
             <div className="px-3 pt-3 pb-1 border-b border-slate-800/80 bg-slate-950/40 shrink-0">
-              <div className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-800/60 border border-slate-700/60">
+              <div
+                onClick={handleSecretAdminBadgeTap}
+                className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-800/60 border border-slate-700/60 select-none cursor-pointer"
+              >
                 <div
                   className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                     isAdmin
@@ -210,7 +279,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="min-w-0 flex-1">
                   <div className="font-bold text-xs text-white truncate">{userSession.userName}</div>
                   <div className="text-[10px] text-slate-400 font-medium truncate uppercase">
-                    {isAdmin ? '👑 Administrador' : '👤 Colaborador'}
+                    {isSuperAdmin
+                      ? '👑 Propietario SaaS'
+                      : isAdmin
+                      ? '👑 Administrador'
+                      : '👤 Colaborador'}
                   </div>
                 </div>
               </div>
@@ -245,7 +318,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Logout Button Footer */}
           {onLogout && (
-            <div className="p-3 border-t border-slate-800 shrink-0">
+            <div className="p-3 border-t border-slate-800 shrink-0 space-y-2">
+              {isSuperAdmin && onLockSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLockSuperAdmin();
+                    onCloseMobile();
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 font-bold text-xs border border-teal-500/30 transition-colors cursor-pointer"
+                >
+                  <EyeOff className="w-3.5 h-3.5" />
+                  <span>Ocultar Panel SaaS</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onLogout}
@@ -279,12 +365,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="w-full h-full flex items-center justify-center text-left cursor-pointer rounded-xl hover:bg-slate-800/60 transition-colors group p-1"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <Boxes className="w-6 h-6 text-emerald-400" />
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform overflow-hidden">
+                  {storeSettings?.logoUrl ? (
+                    <img
+                      src={storeSettings.logoUrl}
+                      alt={storeName}
+                      className="w-full h-full object-contain p-1"
+                    />
+                  ) : (
+                    <Boxes className="w-6 h-6 text-emerald-400" />
+                  )}
                 </div>
                 {!isCollapsed && (
                   <span className="font-extrabold text-sm lg:text-base text-white tracking-wider uppercase truncate">
-                    {(storeName || 'TIENDA GOSEN').toUpperCase()}
+                    {storeName.toUpperCase()}
                   </span>
                 )}
               </div>
@@ -294,7 +388,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* User Profile Badge (Desktop) */}
           {userSession && !isCollapsed && (
             <div className="px-3 pt-3 pb-1 border-b border-slate-800/80 bg-slate-950/40 shrink-0">
-              <div className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-800/60 border border-slate-700/60">
+              <div
+                onClick={handleSecretAdminBadgeTap}
+                className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-800/60 border border-slate-700/60 select-none cursor-pointer"
+              >
                 <div
                   className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                     isAdmin
@@ -307,7 +404,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="min-w-0 flex-1">
                   <div className="font-bold text-xs text-white truncate">{userSession.userName}</div>
                   <div className="text-[10px] text-slate-400 font-medium truncate uppercase">
-                    {isAdmin ? '👑 Administrador' : '👤 Colaborador'}
+                    {isSuperAdmin
+                      ? '👑 Propietario SaaS'
+                      : isAdmin
+                      ? '👑 Administrador'
+                      : '👤 Colaborador'}
                   </div>
                 </div>
               </div>
@@ -347,7 +448,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Desktop Logout Footer */}
         {onLogout && (
-          <div className="p-3 border-t border-slate-800 shrink-0">
+          <div className="p-3 border-t border-slate-800 shrink-0 space-y-2">
+            {isSuperAdmin && onLockSuperAdmin && (
+              <button
+                type="button"
+                onClick={onLockSuperAdmin}
+                className={`w-full flex items-center rounded-xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 font-bold text-xs border border-teal-500/30 transition-colors cursor-pointer ${
+                  isCollapsed ? 'justify-center p-3' : 'justify-center py-2 px-3 gap-2'
+                }`}
+                title="Ocultar Panel SaaS (Modo Tienda Normal)"
+              >
+                <EyeOff className="w-4 h-4 shrink-0" />
+                {!isCollapsed && <span>Ocultar Panel SaaS</span>}
+              </button>
+            )}
             <button
               type="button"
               onClick={onLogout}
@@ -362,6 +476,71 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
       </aside>
+
+      {/* Secret SaaS Owner Unlock Modal (Triggered by 5 taps on Admin Badge) */}
+      {showSaaSUnlockModal && (
+        <div className="fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 text-white">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <Key className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">Modo Propietario SaaS</h3>
+                  <p className="text-[11px] text-slate-400">Desbloquear panel Mis Clientes</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSaaSUnlockModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmUnlock} className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                  Clave Maestra de Propietario
+                </label>
+                <input
+                  type="password"
+                  value={masterKeyInput}
+                  onChange={(e) => {
+                    setMasterKeyInput(e.target.value);
+                    if (unlockError) setUnlockError(null);
+                  }}
+                  placeholder="Ingresa tu clave maestra SaaS"
+                  autoFocus
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs font-mono font-bold text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              {unlockError && (
+                <p className="text-xs text-rose-400 font-semibold">{unlockError}</p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowSaaSUnlockModal(false)}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-extrabold cursor-pointer"
+                >
+                  Activar Panel SaaS
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

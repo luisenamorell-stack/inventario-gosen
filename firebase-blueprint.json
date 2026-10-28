@@ -138,9 +138,34 @@
         "userRole": { "type": "string", "maxLength": 50 },
         "action": { "type": "string", "maxLength": 500 },
         "module": { "type": "string", "maxLength": 100 },
-        "details": { "type": "string", "maxLength": 1000 }
+        "details": { "type": "string", "maxLength": 1000 },
+        "companyId": { "type": "string", "maxLength": 100 }
       },
       "required": ["timestamp", "date", "userName", "action", "module"]
+    },
+    "CompanyTenant": {
+      "title": "CompanyTenant",
+      "description": "A registered SaaS client business tenant with its own isolated inventory and settings",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 200 },
+        "slug": { "type": "string", "maxLength": 100 },
+        "ownerName": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "email": { "type": "string", "maxLength": 200 },
+        "plan": { "type": "string", "maxLength": 50 },
+        "price": { "type": "number" },
+        "nextBillingDate": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "maxLength": 50 },
+        "adminPassword": { "type": "string", "maxLength": 100 },
+        "logoUrl": { "type": "string", "maxLength": 500000 },
+        "tagline": { "type": "string", "maxLength": 200 },
+        "address": { "type": "string", "maxLength": 500 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "number" },
+        "isPrimary": { "type": "boolean" }
+      },
+      "required": ["name", "slug", "status", "adminPassword"]
     }
   },
   "firestore": {
@@ -175,6 +200,10 @@
     "/activity_logs/{logId}": {
       "schema": "ActivityLog",
       "description": "Real-time audit trail of all staff movements and operations"
+    },
+    "/companies/{companyId}": {
+      "schema": "CompanyTenant",
+      "description": "Collection of SaaS client companies and subscription licenses"
     }
   }
 }

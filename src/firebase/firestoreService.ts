@@ -12,7 +12,28 @@ import {
   limit,
   WriteBatch
 } from 'firebase/firestore';
-import { Product, Supplier, AuditHistoryRecord, StoreSettings, SaleRecord, SaleItem, PurchaseInvoice, PurchaseItem, UserAccount, ActivityLogRecord } from '../types';
+import {
+  Product,
+  Supplier,
+  AuditHistoryRecord,
+  StoreSettings,
+  SaleRecord,
+  CreditPaymentAbone,
+  CashOutMovement,
+  CashRegisterShift,
+  StoreExpenseRecord,
+  POSFinanceStoreData,
+  ExpenseCategory,
+  PurchaseInvoice,
+  UserAccount,
+  ActivityLogRecord,
+  CompanyTenant,
+  ActiveTab,
+  ALL_COMPANY_MODULES,
+  SubscriptionPaymentRecord,
+  SaaSAnnouncement,
+  SaaSGlobalConfig
+} from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
 import { db, auth } from './config';
 
@@ -68,9 +89,90 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+// ----------------- MULTI-TENANT COMPANY CONTEXT -----------------
+
+export function normalizeCompanySlug(raw?: string | null): string {
+  if (!raw) return 'gosen';
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9_-]/g, '');
+  return cleaned || 'gosen';
+}
+
+function detectInitialCompanyId(): string {
+  if (typeof window === 'undefined') return 'gosen';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const urlCompany = params.get('empresa') || params.get('tienda') || params.get('cliente');
+    if (urlCompany) {
+      const slug = normalizeCompanySlug(urlCompany);
+      localStorage.setItem('stockmaster_active_company_id', slug);
+      return slug;
+    }
+    const localSess = localStorage.getItem('stockmaster_user_session');
+    const sessionSess = sessionStorage.getItem('stockmaster_user_session');
+    const rawSess = localSess || sessionSess;
+    if (rawSess) {
+      const parsed = JSON.parse(rawSess);
+      if (parsed?.companyId) {
+        return normalizeCompanySlug(parsed.companyId);
+      }
+    }
+    const storedCompany = localStorage.getItem('stockmaster_active_company_id');
+    if (storedCompany) {
+      return normalizeCompanySlug(storedCompany);
+    }
+  } catch {}
+  return 'gosen';
+}
+
+let currentCompanyId: string = detectInitialCompanyId();
+
+export function getActiveCompanyId(): string {
+  return currentCompanyId || 'gosen';
+}
+
+export function setActiveCompanyId(companyId: string): string {
+  const normalized = normalizeCompanySlug(companyId);
+  currentCompanyId = normalized;
+  try {
+    localStorage.setItem('stockmaster_active_company_id', normalized);
+  } catch {}
+  return normalized;
+}
+
+/**
+ * Checks whether a Firestore document belongs to the requested companyId.
+ * Documents without a `companyId` field belong to `'gosen'` (the original primary store).
+ */
+export function belongsToCompany(docCompanyId: string | undefined, targetCompanyId = getActiveCompanyId()): boolean {
+  const normalizedTarget = normalizeCompanySlug(targetCompanyId);
+  const normalizedDoc = docCompanyId ? normalizeCompanySlug(docCompanyId) : 'gosen';
+  return normalizedDoc === normalizedTarget;
+}
+
+/**
+ * Generates a collision-free Firestore Document ID scoped to the active company.
+ * For 'gosen', preserves legacy document IDs so existing records update in-place.
+ */
+function getScopedDocId(rawId: string, companyId = getActiveCompanyId()): string {
+  const cleanId = rawId.trim().replace(/\//g, '_');
+  const slug = normalizeCompanySlug(companyId);
+  if (slug === 'gosen') {
+    return cleanId;
+  }
+  if (cleanId.startsWith(`${slug}__`)) {
+    return cleanId;
+  }
+  return `${slug}__${cleanId}`;
+}
+
 // ----------------- LOCAL CACHE & 1-READ SYNC STAMP HELPERS -----------------
 
-const CACHE_KEYS = {
+const BASE_CACHE_KEYS = {
   INVENTORY: 'stockmaster_cached_inventory_v1',
   INVENTORY_TS: 'stockmaster_inventory_sync_ts_v1',
   SUPPLIERS: 'stockmaster_cached_suppliers_v1',
@@ -78,8 +180,16 @@ const CACHE_KEYS = {
   PURCHASES: 'stockmaster_cached_purchases_v1',
   AUDIT: 'stockmaster_cached_audit_v1',
   USERS: 'stockmaster_cached_users_v1',
+  SETTINGS: 'stockmaster_store_settings',
   SEEDED: 'stockmaster_seeded_v1',
+  COMPANIES: 'stockmaster_cached_companies_v1',
 };
+
+function getScopedCacheKey(baseKey: string, companyId = getActiveCompanyId()): string {
+  const slug = normalizeCompanySlug(companyId);
+  if (slug === 'gosen') return baseKey;
+  return `${baseKey}__${slug}`;
+}
 
 function safeReadCache<T>(key: string): T | null {
   try {
@@ -99,75 +209,101 @@ function safeWriteCache<T>(key: string, data: T): void {
   }
 }
 
-export function getCachedInventory(): Product[] | null {
-  return safeReadCache<Product[]>(CACHE_KEYS.INVENTORY);
+export function getCachedInventory(companyId = getActiveCompanyId()): Product[] | null {
+  return safeReadCache<Product[]>(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, companyId));
 }
 
-export function setCachedInventory(items: Product[], syncTs?: number): void {
+export function setCachedInventory(items: Product[], syncTs?: number, companyId = getActiveCompanyId()): void {
   const sorted = [...items].sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
-  safeWriteCache(CACHE_KEYS.INVENTORY, sorted);
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, companyId), sorted);
   if (syncTs !== undefined) {
     try {
-      localStorage.setItem(CACHE_KEYS.INVENTORY_TS, String(syncTs));
+      localStorage.setItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, companyId), String(syncTs));
     } catch {}
   }
-  if (sorted.length > 0) {
+  if (sorted.length > 0 && normalizeCompanySlug(companyId) === 'gosen') {
     try {
-      localStorage.setItem(CACHE_KEYS.SEEDED, '1');
+      localStorage.setItem(BASE_CACHE_KEYS.SEEDED, '1');
     } catch {}
   }
 }
 
-export function getCachedSuppliers(): Supplier[] | null {
-  return safeReadCache<Supplier[]>(CACHE_KEYS.SUPPLIERS);
+export function getCachedSuppliers(companyId = getActiveCompanyId()): Supplier[] | null {
+  return safeReadCache<Supplier[]>(getScopedCacheKey(BASE_CACHE_KEYS.SUPPLIERS, companyId));
 }
 
-export function setCachedSuppliers(items: Supplier[]): void {
-  safeWriteCache(CACHE_KEYS.SUPPLIERS, items);
+export function setCachedSuppliers(items: Supplier[], companyId = getActiveCompanyId()): void {
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.SUPPLIERS, companyId), items);
 }
 
-export function getCachedSales(): SaleRecord[] | null {
-  return safeReadCache<SaleRecord[]>(CACHE_KEYS.SALES);
+export function getCachedSales(companyId = getActiveCompanyId()): SaleRecord[] | null {
+  return safeReadCache<SaleRecord[]>(getScopedCacheKey(BASE_CACHE_KEYS.SALES, companyId));
 }
 
-export function setCachedSales(items: SaleRecord[]): void {
-  safeWriteCache(CACHE_KEYS.SALES, items);
+export function setCachedSales(items: SaleRecord[], companyId = getActiveCompanyId()): void {
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.SALES, companyId), items);
 }
 
-export function getCachedPurchases(): PurchaseInvoice[] | null {
-  return safeReadCache<PurchaseInvoice[]>(CACHE_KEYS.PURCHASES);
+export function getCachedPurchases(companyId = getActiveCompanyId()): PurchaseInvoice[] | null {
+  return safeReadCache<PurchaseInvoice[]>(getScopedCacheKey(BASE_CACHE_KEYS.PURCHASES, companyId));
 }
 
-export function setCachedPurchases(items: PurchaseInvoice[]): void {
-  safeWriteCache(CACHE_KEYS.PURCHASES, items);
+export function setCachedPurchases(items: PurchaseInvoice[], companyId = getActiveCompanyId()): void {
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.PURCHASES, companyId), items);
 }
 
-export function getCachedAuditHistory(): AuditHistoryRecord[] | null {
-  return safeReadCache<AuditHistoryRecord[]>(CACHE_KEYS.AUDIT);
+export function getCachedAuditHistory(companyId = getActiveCompanyId()): AuditHistoryRecord[] | null {
+  return safeReadCache<AuditHistoryRecord[]>(getScopedCacheKey(BASE_CACHE_KEYS.AUDIT, companyId));
 }
 
-export function setCachedAuditHistory(items: AuditHistoryRecord[]): void {
-  safeWriteCache(CACHE_KEYS.AUDIT, items);
+export function setCachedAuditHistory(items: AuditHistoryRecord[], companyId = getActiveCompanyId()): void {
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.AUDIT, companyId), items);
 }
 
-export function getCachedUsers(): UserAccount[] | null {
-  return safeReadCache<UserAccount[]>(CACHE_KEYS.USERS);
+export function getCachedUsers(companyId = getActiveCompanyId()): UserAccount[] | null {
+  return safeReadCache<UserAccount[]>(getScopedCacheKey(BASE_CACHE_KEYS.USERS, companyId));
 }
 
-export function setCachedUsers(items: UserAccount[]): void {
-  safeWriteCache(CACHE_KEYS.USERS, items);
+export function setCachedUsers(items: UserAccount[], companyId = getActiveCompanyId()): void {
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.USERS, companyId), items);
+}
+
+export function getCachedStoreSettings(companyId = getActiveCompanyId()): StoreSettings | null {
+  return safeReadCache<StoreSettings>(getScopedCacheKey(BASE_CACHE_KEYS.SETTINGS, companyId));
+}
+
+export function setCachedStoreSettings(settings: StoreSettings, companyId = getActiveCompanyId()): void {
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.SETTINGS, companyId), settings);
+}
+
+export function getCachedCompanies(): CompanyTenant[] | null {
+  return safeReadCache<CompanyTenant[]>(BASE_CACHE_KEYS.COMPANIES);
+}
+
+export function setCachedCompanies(companies: CompanyTenant[]): void {
+  safeWriteCache(BASE_CACHE_KEYS.COMPANIES, companies);
+}
+
+function getSyncStateDocId(companyId = getActiveCompanyId()): string {
+  const slug = normalizeCompanySlug(companyId);
+  return slug === 'gosen' ? 'sync_state' : `sync_state_${slug}`;
+}
+
+function getStoreProfileDocId(companyId = getActiveCompanyId()): string {
+  const slug = normalizeCompanySlug(companyId);
+  return slug === 'gosen' ? 'store_profile' : `store_profile_${slug}`;
 }
 
 /**
- * Updates the lightweight 1-document sync stamp (`settings/sync_state`) whenever
+ * Updates the lightweight 1-document sync stamp (`settings/sync_state[_companyId]`) whenever
  * inventory changes, and advances the local timestamp so this device does not
  * need to re-download the inventory collection.
  */
-export async function touchInventorySyncStamp(batch?: WriteBatch): Promise<number> {
+export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = getActiveCompanyId()): Promise<number> {
   const now = Date.now();
-  const syncRef = doc(db, 'settings', 'sync_state');
+  const syncRef = doc(db, 'settings', getSyncStateDocId(companyId));
   try {
-    localStorage.setItem(CACHE_KEYS.INVENTORY_TS, String(now));
+    localStorage.setItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, companyId), String(now));
   } catch {}
 
   if (batch) {
@@ -184,24 +320,26 @@ export async function touchInventorySyncStamp(batch?: WriteBatch): Promise<numbe
 }
 
 /**
- * Smart Inventory Reader:
- * 1. Checks `settings/sync_state` (1 Firestore document read).
+ * Smart Inventory Reader (Multi-Company Isolated):
+ * 1. Checks `settings/sync_state[_companyId]` (1 Firestore document read).
  * 2. If local cache exists and its timestamp >= remote `updatedAt` (and !forceRefresh),
  *    returns the cached inventory immediately with 0 collection reads.
- * 3. Otherwise downloads `inventory` collection once, updates localStorage cache & timestamp.
+ * 3. Otherwise downloads `inventory` collection once, filters by `companyId`, updates cache & timestamp.
  */
 export async function fetchInventorySmart(
-  forceRefresh = false
+  forceRefresh = false,
+  companyId = getActiveCompanyId()
 ): Promise<{ items: Product[]; fromCache: boolean; readsUsed: number }> {
-  const cached = getCachedInventory();
-  const localTs = Number(localStorage.getItem(CACHE_KEYS.INVENTORY_TS) || 0);
+  const slug = normalizeCompanySlug(companyId);
+  const cached = getCachedInventory(slug);
+  const localTs = Number(localStorage.getItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, slug)) || 0);
 
   try {
-    const syncRef = doc(db, 'settings', 'sync_state');
+    const syncRef = doc(db, 'settings', getSyncStateDocId(slug));
     const syncSnap = await getDoc(syncRef);
     const remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
 
-    if (!forceRefresh && cached && cached.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
+    if (!forceRefresh && cached && cached.length >= 0 && remoteTs > 0 && localTs >= remoteTs) {
       return { items: cached, fromCache: true, readsUsed: 1 };
     }
 
@@ -210,8 +348,11 @@ export async function fetchInventorySmart(
     const items: Product[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      if (!belongsToCompany(data.companyId, slug)) return;
+
       items.push({
         id: docSnap.id,
+        companyId: data.companyId || 'gosen',
         code: data.code || docSnap.id,
         name: data.name || '',
         category: data.category || 'Otros',
@@ -229,16 +370,15 @@ export async function fetchInventorySmart(
 
     items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
     const effectiveTs = remoteTs > 0 ? remoteTs : Date.now();
-    setCachedInventory(items, effectiveTs);
+    setCachedInventory(items, effectiveTs, slug);
 
-    // Initialize sync_state stamp if it did not exist yet
-    if (remoteTs === 0 && items.length > 0) {
+    if (remoteTs === 0) {
       await setDoc(syncRef, { updatedAt: effectiveTs }, { merge: true }).catch(() => {});
     }
 
     return { items, fromCache: false, readsUsed: items.length + 1 };
   } catch (error) {
-    if (cached && cached.length > 0) {
+    if (cached) {
       console.warn('Using cached inventory due to connection issue:', error);
       return { items: cached, fromCache: true, readsUsed: 0 };
     }
@@ -250,8 +390,10 @@ export async function fetchInventorySmart(
 
 export function subscribeToInventory(
   onData: (items: Product[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  companyId = getActiveCompanyId()
 ) {
+  const slug = normalizeCompanySlug(companyId);
   const collRef = collection(db, 'inventory');
   return onSnapshot(
     collRef,
@@ -259,8 +401,10 @@ export function subscribeToInventory(
       const items: Product[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        if (!belongsToCompany(data.companyId, slug)) return;
         items.push({
           id: docSnap.id,
+          companyId: data.companyId || 'gosen',
           code: data.code || docSnap.id,
           name: data.name || '',
           category: data.category || 'Otros',
@@ -275,9 +419,8 @@ export function subscribeToInventory(
           img: data.img || '',
         });
       });
-      // Sort alphabetically for stable UI rendering
       items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
-      setCachedInventory(items);
+      setCachedInventory(items, undefined, slug);
       onData(items);
     },
     (error) => {
@@ -287,20 +430,25 @@ export function subscribeToInventory(
   );
 }
 
-export async function saveProductToFirestore(product: Product, oldCode?: string): Promise<void> {
-  const docId = product.code.trim().replace(/\//g, '_');
+export async function saveProductToFirestore(
+  product: Product,
+  oldCode?: string,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = normalizeCompanySlug(companyId);
+  const docId = getScopedDocId(product.code, slug);
   const path = `inventory/${docId}`;
   try {
     const batch = writeBatch(db);
 
-    // If the product code changed, remove previous document to prevent duplicates
     if (oldCode && oldCode.trim() !== product.code.trim()) {
-      const oldDocId = oldCode.trim().replace(/\//g, '_');
+      const oldDocId = getScopedDocId(oldCode, slug);
       batch.delete(doc(db, 'inventory', oldDocId));
     }
 
     const docRef = doc(db, 'inventory', docId);
     const payload: Record<string, any> = {
+      companyId: slug,
       code: product.code.trim(),
       name: product.name.trim(),
       category: product.category || 'Otros',
@@ -317,25 +465,37 @@ export async function saveProductToFirestore(product: Product, oldCode?: string)
     if (product.img?.trim()) payload.img = product.img.trim();
 
     batch.set(docRef, payload, { merge: true });
-    await touchInventorySyncStamp(batch);
+    await touchInventorySyncStamp(batch, slug);
     await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
-export async function deleteProductFromFirestore(id: string, code?: string): Promise<void> {
+export async function deleteProductFromFirestore(
+  id: string,
+  code?: string,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = normalizeCompanySlug(companyId);
   const idsToDelete = new Set<string>();
-  if (id) idsToDelete.add(id.trim());
-  if (id) idsToDelete.add(id.trim().replace(/\//g, '_'));
-  if (code) idsToDelete.add(code.trim());
-  if (code) idsToDelete.add(code.trim().replace(/\//g, '_'));
+  if (id) {
+    idsToDelete.add(id.trim());
+    idsToDelete.add(getScopedDocId(id, slug));
+  }
+  if (code) {
+    idsToDelete.add(getScopedDocId(code, slug));
+    if (slug === 'gosen') {
+      idsToDelete.add(code.trim());
+      idsToDelete.add(code.trim().replace(/\//g, '_'));
+    }
+  }
 
   const batch = writeBatch(db);
   for (const docId of idsToDelete) {
     batch.delete(doc(db, 'inventory', docId));
   }
-  await touchInventorySyncStamp(batch);
+  await touchInventorySyncStamp(batch, slug);
   try {
     await batch.commit();
   } catch (error) {
@@ -345,23 +505,26 @@ export async function deleteProductFromFirestore(id: string, code?: string): Pro
 
 export async function bulkSaveProductsToFirestore(
   products: Product[],
-  newSuppliers: Supplier[] = []
+  newSuppliers: Supplier[] = [],
+  companyId = getActiveCompanyId()
 ): Promise<void> {
   if (products.length === 0 && newSuppliers.length === 0) return;
 
+  const slug = normalizeCompanySlug(companyId);
   const CHUNK_SIZE = 400;
   try {
-    // 1. Save any new suppliers discovered in the Excel upload
     if (newSuppliers.length > 0) {
       for (let i = 0; i < newSuppliers.length; i += CHUNK_SIZE) {
         const chunk = newSuppliers.slice(i, i + CHUNK_SIZE);
         const batch = writeBatch(db);
         chunk.forEach((sup) => {
-          const docId = (sup.id || sup.name || Date.now().toString()).trim().replace(/\//g, '_');
+          const rawSupId = (sup.id || sup.name || Date.now().toString()).trim();
+          const docId = getScopedDocId(rawSupId, slug);
           const supRef = doc(db, 'suppliers', docId);
           batch.set(
             supRef,
             {
+              companyId: slug,
               name: sup.name.trim(),
               contact: sup.contact?.trim() || '',
               phone: sup.phone?.trim() || '',
@@ -375,16 +538,16 @@ export async function bulkSaveProductsToFirestore(
       }
     }
 
-    // 2. Save products in chunks of 400 to respect Firestore 500-op batch limit
     for (let i = 0; i < products.length; i += CHUNK_SIZE) {
       const chunk = products.slice(i, i + CHUNK_SIZE);
       const batch = writeBatch(db);
 
       chunk.forEach((product) => {
-        const docId = product.code.trim().replace(/\//g, '_');
-        if (!docId) return;
+        if (!product.code.trim()) return;
+        const docId = getScopedDocId(product.code, slug);
         const docRef = doc(db, 'inventory', docId);
         const payload: Record<string, any> = {
+          companyId: slug,
           code: product.code.trim(),
           name: product.name.trim(),
           category: (product.category || 'General').trim(),
@@ -403,9 +566,8 @@ export async function bulkSaveProductsToFirestore(
         batch.set(docRef, payload, { merge: true });
       });
 
-      // Touch sync stamp on the final chunk
       if (i + CHUNK_SIZE >= products.length) {
-        await touchInventorySyncStamp(batch);
+        await touchInventorySyncStamp(batch, slug);
       }
 
       await batch.commit();
@@ -417,8 +579,12 @@ export async function bulkSaveProductsToFirestore(
 
 // ----------------- SUPPLIERS (ON-DEMAND & REAL-TIME) -----------------
 
-export async function fetchSuppliersOnce(forceRefresh = false): Promise<Supplier[]> {
-  const cached = getCachedSuppliers();
+export async function fetchSuppliersOnce(
+  forceRefresh = false,
+  companyId = getActiveCompanyId()
+): Promise<Supplier[]> {
+  const slug = normalizeCompanySlug(companyId);
+  const cached = getCachedSuppliers(slug);
   if (!forceRefresh && cached && cached.length > 0) {
     return cached;
   }
@@ -427,8 +593,10 @@ export async function fetchSuppliersOnce(forceRefresh = false): Promise<Supplier
     const suppliers: Supplier[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      if (!belongsToCompany(data.companyId, slug)) return;
       suppliers.push({
         id: docSnap.id,
+        companyId: data.companyId || 'gosen',
         name: data.name || '',
         contact: data.contact || '',
         phone: data.phone || '',
@@ -437,7 +605,7 @@ export async function fetchSuppliersOnce(forceRefresh = false): Promise<Supplier
       });
     });
     suppliers.sort((a, b) => a.name.localeCompare(b.name));
-    setCachedSuppliers(suppliers);
+    setCachedSuppliers(suppliers, slug);
     return suppliers;
   } catch (error) {
     if (cached) return cached;
@@ -447,8 +615,10 @@ export async function fetchSuppliersOnce(forceRefresh = false): Promise<Supplier
 
 export function subscribeToSuppliers(
   onData: (suppliers: Supplier[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  companyId = getActiveCompanyId()
 ) {
+  const slug = normalizeCompanySlug(companyId);
   const collRef = collection(db, 'suppliers');
   return onSnapshot(
     collRef,
@@ -456,8 +626,10 @@ export function subscribeToSuppliers(
       const suppliers: Supplier[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        if (!belongsToCompany(data.companyId, slug)) return;
         suppliers.push({
           id: docSnap.id,
+          companyId: data.companyId || 'gosen',
           name: data.name || '',
           contact: data.contact || '',
           phone: data.phone || '',
@@ -466,7 +638,7 @@ export function subscribeToSuppliers(
         });
       });
       suppliers.sort((a, b) => a.name.localeCompare(b.name));
-      setCachedSuppliers(suppliers);
+      setCachedSuppliers(suppliers, slug);
       onData(suppliers);
     },
     (error) => {
@@ -479,13 +651,17 @@ export function subscribeToSuppliers(
 export async function saveSupplierToFirestore(
   supplier: Supplier,
   oldName?: string,
-  inventoryItems?: Product[]
+  inventoryItems?: Product[],
+  companyId = getActiveCompanyId()
 ): Promise<void> {
-  const docId = supplier.id ? supplier.id.replace(/\//g, '_') : Date.now().toString();
+  const slug = normalizeCompanySlug(companyId);
+  const rawId = supplier.id ? supplier.id : Date.now().toString();
+  const docId = getScopedDocId(rawId, slug);
   const path = `suppliers/${docId}`;
   try {
     const docRef = doc(db, 'suppliers', docId);
     const payload: Record<string, any> = {
+      companyId: slug,
       name: supplier.name.trim(),
     };
     if (supplier.contact?.trim()) payload.contact = supplier.contact.trim();
@@ -495,20 +671,19 @@ export async function saveSupplierToFirestore(
 
     await setDoc(docRef, payload, { merge: true });
 
-    // Cascade name update if name changed
     if (oldName && oldName !== supplier.name && inventoryItems && inventoryItems.length > 0) {
       const batch = writeBatch(db);
       let count = 0;
       inventoryItems.forEach((item) => {
         if (item.supplier === oldName) {
-          const itemDocId = item.code.trim().replace(/\//g, '_');
+          const itemDocId = getScopedDocId(item.code, slug);
           const itemRef = doc(db, 'inventory', itemDocId);
           batch.update(itemRef, { supplier: supplier.name.trim() });
           count++;
         }
       });
       if (count > 0) {
-        await touchInventorySyncStamp(batch);
+        await touchInventorySyncStamp(batch, slug);
         await batch.commit();
       }
     }
@@ -517,12 +692,21 @@ export async function saveSupplierToFirestore(
   }
 }
 
-export async function deleteSupplierFromFirestore(id: string, name?: string): Promise<void> {
+export async function deleteSupplierFromFirestore(
+  id: string,
+  name?: string,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = normalizeCompanySlug(companyId);
   const idsToDelete = new Set<string>();
-  if (id) idsToDelete.add(id.trim());
-  if (id) idsToDelete.add(id.trim().replace(/\//g, '_'));
-  if (name) idsToDelete.add(name.trim());
-  if (name) idsToDelete.add(name.trim().replace(/\//g, '_'));
+  if (id) {
+    idsToDelete.add(id.trim());
+    idsToDelete.add(getScopedDocId(id, slug));
+  }
+  if (name && slug === 'gosen') {
+    idsToDelete.add(name.trim());
+    idsToDelete.add(name.trim().replace(/\//g, '_'));
+  }
 
   for (const docId of idsToDelete) {
     try {
@@ -535,8 +719,12 @@ export async function deleteSupplierFromFirestore(id: string, name?: string): Pr
 
 // ----------------- AUDIT HISTORY & ATOMIC COMMIT -----------------
 
-export async function fetchAuditHistoryOnce(forceRefresh = false): Promise<AuditHistoryRecord[]> {
-  const cached = getCachedAuditHistory();
+export async function fetchAuditHistoryOnce(
+  forceRefresh = false,
+  companyId = getActiveCompanyId()
+): Promise<AuditHistoryRecord[]> {
+  const slug = normalizeCompanySlug(companyId);
+  const cached = getCachedAuditHistory(slug);
   if (!forceRefresh && cached && cached.length > 0) {
     return cached;
   }
@@ -545,8 +733,10 @@ export async function fetchAuditHistoryOnce(forceRefresh = false): Promise<Audit
     const records: AuditHistoryRecord[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      if (!belongsToCompany(data.companyId, slug)) return;
       records.push({
         id: docSnap.id,
+        companyId: data.companyId || 'gosen',
         date: data.date || '',
         timestamp: Number(data.timestamp) || Date.now(),
         match: Number(data.match) || 0,
@@ -558,7 +748,7 @@ export async function fetchAuditHistoryOnce(forceRefresh = false): Promise<Audit
       });
     });
     records.sort((a, b) => a.timestamp - b.timestamp);
-    setCachedAuditHistory(records);
+    setCachedAuditHistory(records, slug);
     return records;
   } catch (error) {
     if (cached) return cached;
@@ -568,8 +758,10 @@ export async function fetchAuditHistoryOnce(forceRefresh = false): Promise<Audit
 
 export function subscribeToAuditHistory(
   onData: (records: AuditHistoryRecord[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  companyId = getActiveCompanyId()
 ) {
+  const slug = normalizeCompanySlug(companyId);
   const collRef = collection(db, 'audit_history');
   return onSnapshot(
     collRef,
@@ -577,8 +769,10 @@ export function subscribeToAuditHistory(
       const records: AuditHistoryRecord[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        if (!belongsToCompany(data.companyId, slug)) return;
         records.push({
           id: docSnap.id,
+          companyId: data.companyId || 'gosen',
           date: data.date || '',
           timestamp: Number(data.timestamp) || Date.now(),
           match: Number(data.match) || 0,
@@ -588,9 +782,8 @@ export function subscribeToAuditHistory(
           totalItems: Number(data.totalItems) || 0,
         });
       });
-      // Sort chronologically ascending
       records.sort((a, b) => a.timestamp - b.timestamp);
-      setCachedAuditHistory(records);
+      setCachedAuditHistory(records, slug);
       onData(records);
     },
     (error) => {
@@ -603,27 +796,28 @@ export function subscribeToAuditHistory(
 export async function applyAuditChangesToFirestore(
   updatedInventory: Product[],
   historyRecord: AuditHistoryRecord,
-  auditedCodes?: string[]
+  auditedCodes?: string[],
+  companyId = getActiveCompanyId()
 ): Promise<void> {
+  const slug = normalizeCompanySlug(companyId);
   const batch = writeBatch(db);
-  const auditId = Date.now().toString();
+  const auditId = getScopedDocId(Date.now().toString(), slug);
 
   try {
-    // 1. Update stock of inventory items - ONLY update products that were part of the audit!
     const productsToUpdate =
       auditedCodes && auditedCodes.length > 0
         ? updatedInventory.filter((p) => auditedCodes.includes(p.code))
         : updatedInventory;
 
     productsToUpdate.forEach((product) => {
-      const docId = product.code.trim().replace(/\//g, '_');
+      const docId = getScopedDocId(product.code, slug);
       const itemRef = doc(db, 'inventory', docId);
       batch.update(itemRef, { stock: Math.max(0, Math.round(Number(product.stock) || 0)) });
     });
 
-    // 2. Record audit log
     const auditRef = doc(db, 'audit_history', auditId);
     const auditData: any = {
+      companyId: slug,
       date: historyRecord.date,
       timestamp: historyRecord.timestamp,
       match: historyRecord.match,
@@ -637,7 +831,7 @@ export async function applyAuditChangesToFirestore(
     }
 
     batch.set(auditRef, auditData);
-    await touchInventorySyncStamp(batch);
+    await touchInventorySyncStamp(batch, slug);
 
     await batch.commit();
   } catch (error) {
@@ -645,21 +839,25 @@ export async function applyAuditChangesToFirestore(
   }
 }
 
-// ----------------- SEED INITIAL DATA IF EMPTY (OPTIMIZED: MAX 1 READ) -----------------
+// ----------------- SEED INITIAL DATA IF EMPTY (ONLY FOR PRIMARY GOSEN STORE) -----------------
 
-export async function seedInitialDataIfEmpty(): Promise<boolean> {
+export async function seedInitialDataIfEmpty(companyId = getActiveCompanyId()): Promise<boolean> {
+  const slug = normalizeCompanySlug(companyId);
+  // New client companies start with a clean empty inventory (never seed Gosén demo items into new clients)
+  if (slug !== 'gosen') {
+    return false;
+  }
+
   try {
-    // Skip completely (0 reads) if we already know the database has been seeded or cached
-    if (localStorage.getItem(CACHE_KEYS.SEEDED) === '1') {
+    if (localStorage.getItem(BASE_CACHE_KEYS.SEEDED) === '1') {
       return false;
     }
-    const cachedInv = getCachedInventory();
+    const cachedInv = getCachedInventory('gosen');
     if (cachedInv && cachedInv.length > 0) {
-      localStorage.setItem(CACHE_KEYS.SEEDED, '1');
+      localStorage.setItem(BASE_CACHE_KEYS.SEEDED, '1');
       return false;
     }
 
-    // Check only 1 document instead of downloading the entire collection
     const invSnap = await getDocs(query(collection(db, 'inventory'), limit(1)));
     if (invSnap.empty) {
       console.log('Seeding initial products to Firestore...');
@@ -669,6 +867,7 @@ export async function seedInitialDataIfEmpty(): Promise<boolean> {
         const docId = item.code.trim().replace(/\//g, '_');
         const docRef = doc(db, 'inventory', docId);
         const payload: Record<string, any> = {
+          companyId: 'gosen',
           code: item.code,
           name: item.name,
           category: item.category,
@@ -685,6 +884,7 @@ export async function seedInitialDataIfEmpty(): Promise<boolean> {
       INITIAL_SUPPLIERS.forEach((sup) => {
         const docRef = doc(db, 'suppliers', sup.id);
         batch.set(docRef, {
+          companyId: 'gosen',
           name: sup.name,
           contact: sup.contact || '',
           phone: sup.phone || '',
@@ -693,14 +893,13 @@ export async function seedInitialDataIfEmpty(): Promise<boolean> {
         });
       });
 
-      await touchInventorySyncStamp(batch);
+      await touchInventorySyncStamp(batch, 'gosen');
       await batch.commit();
-      localStorage.setItem(CACHE_KEYS.SEEDED, '1');
-      console.log('Successfully seeded initial inventory and suppliers to Firestore.');
+      localStorage.setItem(BASE_CACHE_KEYS.SEEDED, '1');
       return true;
     }
 
-    localStorage.setItem(CACHE_KEYS.SEEDED, '1');
+    localStorage.setItem(BASE_CACHE_KEYS.SEEDED, '1');
     return false;
   } catch (err) {
     console.warn('Initial seeding check skipped or failed:', err);
@@ -722,107 +921,235 @@ export async function pingFirestore(): Promise<{ ok: boolean; latencyMs: number;
   }
 }
 
-// ----------------- STORE BRANDING & PROFILE SETTINGS -----------------
+// ----------------- STORE BRANDING & PROFILE SETTINGS (PER COMPANY) -----------------
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
+  companyId: 'gosen',
   storeName: 'Tienda Gosén',
   tagline: 'Control de Inventario y Ventas',
   logoUrl: '/store-logo.jpg',
   phone: '',
   address: '',
   accessPassword: 'GOSEN2026',
+  allowedModules: ALL_COMPANY_MODULES,
+  enableDeliveryDvolada: true,
+  maxProducts: 0,
+  maxUsers: 0,
 };
 
-export async function fetchStoreSettingsOnce(): Promise<StoreSettings> {
+export function getDefaultStoreSettingsForCompany(companyId = getActiveCompanyId()): StoreSettings {
+  const slug = normalizeCompanySlug(companyId);
+  if (slug === 'gosen') {
+    return { ...DEFAULT_STORE_SETTINGS };
+  }
+  const cachedComps = getCachedCompanies() || [];
+  const comp = cachedComps.find((c) => normalizeCompanySlug(c.slug) === slug);
+  return {
+    companyId: slug,
+    storeName: comp?.name || slug.toUpperCase(),
+    tagline: comp?.tagline || 'Control de Inventario y Ventas',
+    logoUrl: comp?.logoUrl || '',
+    phone: comp?.phone || '',
+    address: comp?.address || '',
+    accessPassword: comp?.adminPassword || 'ADMIN2026',
+    whatsappOrderPhone: comp?.phone || '',
+    catalogWelcomeMsg: '',
+    allowedModules:
+      Array.isArray(comp?.allowedModules) && comp!.allowedModules!.length > 0
+        ? comp!.allowedModules
+        : ALL_COMPANY_MODULES,
+    enableDeliveryDvolada: Boolean(comp?.enableDeliveryDvolada === true),
+    maxProducts: Math.max(0, Number(comp?.maxProducts) || 0),
+    maxUsers: Math.max(0, Number(comp?.maxUsers) || 0),
+  };
+}
+
+export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): Promise<StoreSettings> {
+  const slug = normalizeCompanySlug(companyId);
   try {
-    const docRef = doc(db, 'settings', 'store_profile');
+    const docRef = doc(db, 'settings', getStoreProfileDocId(slug));
     const snapshot = await getDoc(docRef);
     if (snapshot.exists()) {
       const data = snapshot.data();
+      const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
+      // Never leak Tienda Gosén's /store-logo.jpg into another client company
+      const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
       const settings: StoreSettings = {
-        storeName: data.storeName || 'Tienda Gosén',
+        companyId: slug,
+        storeName: data.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
         tagline: data.tagline || 'Control de Inventario y Ventas',
-        logoUrl: data.logoUrl || '/store-logo.jpg',
+        logoUrl: safeLogo,
         phone: data.phone || '',
         address: data.address || '',
-        accessPassword: data.accessPassword || 'GOSEN2026',
+        accessPassword: data.accessPassword || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
         whatsappOrderPhone: data.whatsappOrderPhone || '',
         catalogWelcomeMsg: data.catalogWelcomeMsg || '',
+        allowedModules:
+          Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+            ? data.allowedModules
+            : ALL_COMPANY_MODULES,
+        enableDeliveryDvolada:
+          data.enableDeliveryDvolada !== undefined
+            ? Boolean(data.enableDeliveryDvolada)
+            : slug === 'gosen',
+        maxProducts: Math.max(0, Number(data.maxProducts) || 0),
+        maxUsers: Math.max(0, Number(data.maxUsers) || 0),
         updatedAt: Number(data.updatedAt) || Date.now(),
       };
-      try {
-        localStorage.setItem('stockmaster_store_settings', JSON.stringify(settings));
-      } catch {}
+      setCachedStoreSettings(settings, slug);
       return settings;
     }
-    return DEFAULT_STORE_SETTINGS;
+
+    // If non-gosen company doesn't have settings doc yet, check companies collection
+    if (slug !== 'gosen') {
+      const compSnap = await getDoc(doc(db, 'companies', slug));
+      if (compSnap.exists()) {
+        const cData = compSnap.data();
+        const rawLogo = cData.logoUrl || '';
+        const safeLogo = rawLogo === '/store-logo.jpg' ? '' : rawLogo;
+        const fallbackSettings: StoreSettings = {
+          companyId: slug,
+          storeName: cData.name || slug.toUpperCase(),
+          tagline: cData.tagline || 'Control de Inventario y Ventas',
+          logoUrl: safeLogo,
+          phone: cData.phone || '',
+          address: cData.address || '',
+          accessPassword: cData.adminPassword || 'ADMIN2026',
+          whatsappOrderPhone: cData.phone || '',
+          catalogWelcomeMsg: '',
+          allowedModules:
+            Array.isArray(cData.allowedModules) && cData.allowedModules.length > 0
+              ? cData.allowedModules
+              : ALL_COMPANY_MODULES,
+          enableDeliveryDvolada: Boolean(cData.enableDeliveryDvolada === true),
+          maxProducts: Math.max(0, Number(cData.maxProducts) || 0),
+          maxUsers: Math.max(0, Number(cData.maxUsers) || 0),
+          updatedAt: Date.now(),
+        };
+        setCachedStoreSettings(fallbackSettings, slug);
+        return fallbackSettings;
+      }
+    }
+
+    return getDefaultStoreSettingsForCompany(slug);
   } catch (error) {
-    try {
-      const cached = localStorage.getItem('stockmaster_store_settings');
-      if (cached) return JSON.parse(cached);
-    } catch {}
-    return DEFAULT_STORE_SETTINGS;
+    const cached = getCachedStoreSettings(slug);
+    if (cached) return cached;
+    return getDefaultStoreSettingsForCompany(slug);
   }
 }
 
 export function subscribeToStoreSettings(
   onData: (settings: StoreSettings) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  companyId = getActiveCompanyId()
 ) {
-  const docRef = doc(db, 'settings', 'store_profile');
+  const slug = normalizeCompanySlug(companyId);
+  const docRef = doc(db, 'settings', getStoreProfileDocId(slug));
   return onSnapshot(
     docRef,
     (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
+        const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
+        const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
         onData({
-          storeName: data.storeName || 'Tienda Gosén',
+          companyId: slug,
+          storeName: data.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
           tagline: data.tagline || 'Control de Inventario y Ventas',
-          logoUrl: data.logoUrl || '/store-logo.jpg',
+          logoUrl: safeLogo,
           phone: data.phone || '',
           address: data.address || '',
-          accessPassword: data.accessPassword || 'GOSEN2026',
+          accessPassword: data.accessPassword || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
           whatsappOrderPhone: data.whatsappOrderPhone || '',
           catalogWelcomeMsg: data.catalogWelcomeMsg || '',
+          allowedModules:
+            Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+              ? data.allowedModules
+              : ALL_COMPANY_MODULES,
+          enableDeliveryDvolada:
+            data.enableDeliveryDvolada !== undefined
+              ? Boolean(data.enableDeliveryDvolada)
+              : slug === 'gosen',
+          maxProducts: Math.max(0, Number(data.maxProducts) || 0),
+          maxUsers: Math.max(0, Number(data.maxUsers) || 0),
           updatedAt: Number(data.updatedAt) || Date.now(),
         });
       } else {
-        // Return defaults if not configured yet
-        onData(DEFAULT_STORE_SETTINGS);
+        onData(getDefaultStoreSettingsForCompany(slug));
       }
     },
     (error) => {
       if (onError) onError(error);
-      handleFirestoreError(error, OperationType.GET, 'settings/store_profile');
+      handleFirestoreError(error, OperationType.GET, `settings/${getStoreProfileDocId(slug)}`);
     }
   );
 }
 
-export async function saveStoreSettingsToFirestore(settings: StoreSettings): Promise<void> {
-  const docRef = doc(db, 'settings', 'store_profile');
+export async function saveStoreSettingsToFirestore(
+  settings: StoreSettings,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = normalizeCompanySlug(settings.companyId || companyId);
+  const docRef = doc(db, 'settings', getStoreProfileDocId(slug));
+  const rawLogo = settings.logoUrl?.trim() || '';
+  const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
   const payload: any = {
-    storeName: settings.storeName.trim() || 'StockMaster',
+    companyId: slug,
+    storeName: settings.storeName.trim() || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
     tagline: settings.tagline?.trim() || '',
-    logoUrl: settings.logoUrl?.trim() || '',
+    logoUrl: safeLogo,
     phone: settings.phone?.trim() || '',
     address: settings.address?.trim() || '',
-    accessPassword: settings.accessPassword?.trim() || 'GOSEN2026',
+    accessPassword: settings.accessPassword?.trim() || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
     whatsappOrderPhone: settings.whatsappOrderPhone?.trim() || '',
     catalogWelcomeMsg: settings.catalogWelcomeMsg?.trim() || '',
     updatedAt: Date.now(),
   };
 
+  if (Array.isArray(settings.allowedModules) && settings.allowedModules.length > 0) {
+    payload.allowedModules = settings.allowedModules;
+  }
+  if (settings.enableDeliveryDvolada !== undefined) {
+    payload.enableDeliveryDvolada = Boolean(settings.enableDeliveryDvolada);
+  }
+  if (settings.maxProducts !== undefined) {
+    payload.maxProducts = Math.max(0, Number(settings.maxProducts) || 0);
+  }
+  if (settings.maxUsers !== undefined) {
+    payload.maxUsers = Math.max(0, Number(settings.maxUsers) || 0);
+  }
+
   try {
     await setDoc(docRef, payload, { merge: true });
+    // Also keep the company tenant record in sync if it exists
+    const compRef = doc(db, 'companies', slug);
+    await setDoc(
+      compRef,
+      {
+        name: payload.storeName,
+        slug,
+        adminPassword: payload.accessPassword,
+        phone: payload.phone,
+        logoUrl: payload.logoUrl,
+        tagline: payload.tagline,
+        address: payload.address,
+      },
+      { merge: true }
+    ).catch(() => {});
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, 'settings/store_profile');
+    handleFirestoreError(error, OperationType.WRITE, `settings/${getStoreProfileDocId(slug)}`);
   }
 }
 
 // ----------------- SALES & POS OPERATIONS -----------------
 
-export async function fetchSalesOnce(forceRefresh = false): Promise<SaleRecord[]> {
-  const cached = getCachedSales();
+export async function fetchSalesOnce(
+  forceRefresh = false,
+  companyId = getActiveCompanyId()
+): Promise<SaleRecord[]> {
+  const slug = normalizeCompanySlug(companyId);
+  const cached = getCachedSales(slug);
   if (!forceRefresh && cached && cached.length > 0) {
     return cached;
   }
@@ -831,8 +1158,10 @@ export async function fetchSalesOnce(forceRefresh = false): Promise<SaleRecord[]
     const records: SaleRecord[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      if (!belongsToCompany(data.companyId, slug)) return;
       records.push({
         id: docSnap.id,
+        companyId: data.companyId || 'gosen',
         saleNumber: data.saleNumber || `VTA-${docSnap.id.slice(-6)}`,
         timestamp: Number(data.timestamp) || Date.now(),
         date: data.date || '',
@@ -859,6 +1188,34 @@ export async function fetchSalesOnce(forceRefresh = false): Promise<SaleRecord[]
         paymentMethod: data.paymentMethod || 'cash',
         amountPaid: Number(data.amountPaid) || 0,
         change: Number(data.change) || 0,
+        balanceDue:
+          data.balanceDue !== undefined
+            ? Math.max(0, Number(data.balanceDue) || 0)
+            : data.paymentMethod === 'credit'
+            ? Math.max(0, (Number(data.total) || 0) - (Number(data.amountPaid) || 0))
+            : 0,
+        creditStatus:
+          data.creditStatus === 'paid' || data.creditStatus === 'pending'
+            ? data.creditStatus
+            : data.paymentMethod === 'credit'
+            ? (Number(data.balanceDue ?? (Number(data.total) - Number(data.amountPaid))) || 0) <= 0.01
+              ? 'paid'
+              : 'pending'
+            : undefined,
+        creditDueDate: data.creditDueDate || '',
+        creditPayments: Array.isArray(data.creditPayments)
+          ? data.creditPayments.map((cp: any) => ({
+              id: String(cp.id || `abn_${Date.now()}`),
+              amount: Number(cp.amount) || 0,
+              paymentMethod: ['cash', 'transfer', 'card'].includes(cp.paymentMethod)
+                ? cp.paymentMethod
+                : 'cash',
+              timestamp: Number(cp.timestamp) || Date.now(),
+              date: String(cp.date || ''),
+              receivedBy: String(cp.receivedBy || 'Administrador'),
+              notes: cp.notes ? String(cp.notes) : '',
+            }))
+          : [],
         customerName: data.customerName || 'Consumidor Final',
         customerPhone: data.customerPhone || '',
         customerRtn: data.customerRtn || '',
@@ -872,7 +1229,7 @@ export async function fetchSalesOnce(forceRefresh = false): Promise<SaleRecord[]
       });
     });
     records.sort((a, b) => b.timestamp - a.timestamp);
-    setCachedSales(records);
+    setCachedSales(records, slug);
     return records;
   } catch (error) {
     if (cached) return cached;
@@ -882,8 +1239,10 @@ export async function fetchSalesOnce(forceRefresh = false): Promise<SaleRecord[]
 
 export function subscribeToSales(
   onData: (sales: SaleRecord[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  companyId = getActiveCompanyId()
 ) {
+  const slug = normalizeCompanySlug(companyId);
   const collRef = collection(db, 'sales');
   return onSnapshot(
     collRef,
@@ -891,8 +1250,10 @@ export function subscribeToSales(
       const records: SaleRecord[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        if (!belongsToCompany(data.companyId, slug)) return;
         records.push({
           id: docSnap.id,
+          companyId: data.companyId || 'gosen',
           saleNumber: data.saleNumber || `VTA-${docSnap.id.slice(-6)}`,
           timestamp: Number(data.timestamp) || Date.now(),
           date: data.date || '',
@@ -919,6 +1280,34 @@ export function subscribeToSales(
           paymentMethod: data.paymentMethod || 'cash',
           amountPaid: Number(data.amountPaid) || 0,
           change: Number(data.change) || 0,
+          balanceDue:
+            data.balanceDue !== undefined
+              ? Math.max(0, Number(data.balanceDue) || 0)
+              : data.paymentMethod === 'credit'
+              ? Math.max(0, (Number(data.total) || 0) - (Number(data.amountPaid) || 0))
+              : 0,
+          creditStatus:
+            data.creditStatus === 'paid' || data.creditStatus === 'pending'
+              ? data.creditStatus
+              : data.paymentMethod === 'credit'
+              ? (Number(data.balanceDue ?? (Number(data.total) - Number(data.amountPaid))) || 0) <= 0.01
+                ? 'paid'
+                : 'pending'
+              : undefined,
+          creditDueDate: data.creditDueDate || '',
+          creditPayments: Array.isArray(data.creditPayments)
+            ? data.creditPayments.map((cp: any) => ({
+                id: String(cp.id || `abn_${Date.now()}`),
+                amount: Number(cp.amount) || 0,
+                paymentMethod: ['cash', 'transfer', 'card'].includes(cp.paymentMethod)
+                  ? cp.paymentMethod
+                  : 'cash',
+                timestamp: Number(cp.timestamp) || Date.now(),
+                date: String(cp.date || ''),
+                receivedBy: String(cp.receivedBy || 'Administrador'),
+                notes: cp.notes ? String(cp.notes) : '',
+              }))
+            : [],
           customerName: data.customerName || 'Consumidor Final',
           customerPhone: data.customerPhone || '',
           customerRtn: data.customerRtn || '',
@@ -931,9 +1320,8 @@ export function subscribeToSales(
               : undefined,
         });
       });
-      // Sort newest first
       records.sort((a, b) => b.timestamp - a.timestamp);
-      setCachedSales(records);
+      setCachedSales(records, slug);
       onData(records);
     },
     (error) => {
@@ -945,18 +1333,19 @@ export function subscribeToSales(
 
 export async function recordSaleInFirestore(
   saleData: Omit<SaleRecord, 'id'>,
-  currentInventory: Product[]
+  currentInventory: Product[],
+  companyId = getActiveCompanyId()
 ): Promise<SaleRecord> {
+  const slug = normalizeCompanySlug(companyId);
   const batch = writeBatch(db);
-  const saleId = `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const saleId = getScopedDocId(`${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, slug);
   const saleRef = doc(db, 'sales', saleId);
 
   try {
-    // 1. Deduct quantity sold from current stock of each inventory item
     for (const item of saleData.items) {
-      const sanitizedCode = item.code.trim().replace(/\//g, '_');
-      const productRef = doc(db, 'inventory', sanitizedCode);
-      
+      const productDocId = getScopedDocId(item.code, slug);
+      const productRef = doc(db, 'inventory', productDocId);
+
       const currentProd = currentInventory.find(
         (p) => p.code.trim() === item.code.trim() || p.id === item.productId
       );
@@ -966,8 +1355,15 @@ export async function recordSaleInFirestore(
       batch.update(productRef, { stock: newStock });
     }
 
-    // 2. Record sale document
+    const isCredit = saleData.paymentMethod === 'credit';
+    const totalVal = Number(saleData.total) || 0;
+    const paidVal = Number(saleData.amountPaid) || 0;
+    const computedBalanceDue = isCredit
+      ? Math.max(0, saleData.balanceDue !== undefined ? Number(saleData.balanceDue) : totalVal - paidVal)
+      : 0;
+
     const payload: any = {
+      companyId: slug,
       saleNumber: saleData.saleNumber || `VTA-${Date.now().toString().slice(-6)}`,
       timestamp: saleData.timestamp || Date.now(),
       date: saleData.date || new Date().toLocaleString(),
@@ -988,10 +1384,14 @@ export async function recordSaleInFirestore(
       subtotal: Number(saleData.subtotal) || 0,
       discount: Number(saleData.discount) || 0,
       tax: Number(saleData.tax) || 0,
-      total: Number(saleData.total) || 0,
+      total: totalVal,
       paymentMethod: saleData.paymentMethod || 'cash',
-      amountPaid: Number(saleData.amountPaid) || 0,
+      amountPaid: paidVal,
       change: Number(saleData.change) || 0,
+      balanceDue: computedBalanceDue,
+      creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
+      creditDueDate: (saleData.creditDueDate || '').trim(),
+      creditPayments: Array.isArray(saleData.creditPayments) ? saleData.creditPayments : [],
       customerName: (saleData.customerName || 'Consumidor Final').trim(),
       customerPhone: (saleData.customerPhone || '').trim(),
       customerRtn: (saleData.customerRtn || '').trim(),
@@ -1007,7 +1407,7 @@ export async function recordSaleInFirestore(
     };
 
     batch.set(saleRef, payload);
-    await touchInventorySyncStamp(batch);
+    await touchInventorySyncStamp(batch, slug);
 
     await batch.commit();
 
@@ -1020,19 +1420,59 @@ export async function recordSaleInFirestore(
   }
 }
 
+export async function recordCreditPaymentInFirestore(
+  sale: SaleRecord,
+  newAbone: CreditPaymentAbone,
+  companyId = getActiveCompanyId()
+): Promise<SaleRecord> {
+  const slug = normalizeCompanySlug(companyId);
+  const saleRef = doc(db, 'sales', sale.id);
+  const existingPayments = Array.isArray(sale.creditPayments) ? sale.creditPayments : [];
+  const updatedPayments = [...existingPayments, newAbone];
+  const newAmountPaid = Math.min(sale.total, (Number(sale.amountPaid) || 0) + Number(newAbone.amount));
+  const newBalanceDue = Math.max(0, Number((sale.total - newAmountPaid).toFixed(2)));
+  const newCreditStatus: 'pending' | 'paid' = newBalanceDue <= 0.01 ? 'paid' : 'pending';
+
+  const updatedSale: SaleRecord = {
+    ...sale,
+    companyId: sale.companyId || slug,
+    amountPaid: newAmountPaid,
+    balanceDue: newBalanceDue,
+    creditStatus: newCreditStatus,
+    creditPayments: updatedPayments,
+  };
+
+  try {
+    await setDoc(
+      saleRef,
+      {
+        amountPaid: updatedSale.amountPaid,
+        balanceDue: updatedSale.balanceDue,
+        creditStatus: updatedSale.creditStatus,
+        creditPayments: updatedSale.creditPayments,
+      },
+      { merge: true }
+    );
+    return updatedSale;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+  }
+}
+
 export async function cancelSaleInFirestore(
   sale: SaleRecord,
-  currentInventory: Product[]
+  currentInventory: Product[],
+  companyId = getActiveCompanyId()
 ): Promise<void> {
+  const slug = normalizeCompanySlug(companyId);
   const batch = writeBatch(db);
   const saleRef = doc(db, 'sales', sale.id);
 
   try {
-    // 1. Restore stock for each product in the cancelled sale
     for (const item of sale.items) {
-      const sanitizedCode = item.code.trim().replace(/\//g, '_');
-      const productRef = doc(db, 'inventory', sanitizedCode);
-      
+      const productDocId = getScopedDocId(item.code, slug);
+      const productRef = doc(db, 'inventory', productDocId);
+
       const currentProd = currentInventory.find(
         (p) => p.code.trim() === item.code.trim() || p.id === item.productId
       );
@@ -1042,9 +1482,8 @@ export async function cancelSaleInFirestore(
       batch.update(productRef, { stock: restoredStock });
     }
 
-    // 2. Mark sale as cancelled
     batch.update(saleRef, { status: 'cancelled' });
-    await touchInventorySyncStamp(batch);
+    await touchInventorySyncStamp(batch, slug);
 
     await batch.commit();
   } catch (error) {
@@ -1062,8 +1501,12 @@ export async function deleteSaleFromFirestore(saleId: string): Promise<void> {
 
 // ----------------- PURCHASES / FACTURAS DE COMPRA -----------------
 
-export async function fetchPurchasesOnce(forceRefresh = false): Promise<PurchaseInvoice[]> {
-  const cached = getCachedPurchases();
+export async function fetchPurchasesOnce(
+  forceRefresh = false,
+  companyId = getActiveCompanyId()
+): Promise<PurchaseInvoice[]> {
+  const slug = normalizeCompanySlug(companyId);
+  const cached = getCachedPurchases(slug);
   if (!forceRefresh && cached && cached.length > 0) {
     return cached;
   }
@@ -1072,8 +1515,10 @@ export async function fetchPurchasesOnce(forceRefresh = false): Promise<Purchase
     const records: PurchaseInvoice[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      if (!belongsToCompany(data.companyId, slug)) return;
       records.push({
         id: docSnap.id,
+        companyId: data.companyId || 'gosen',
         invoiceNumber: data.invoiceNumber || `FAC-${docSnap.id.slice(-6)}`,
         supplierId: data.supplierId || '',
         supplierName: data.supplierName || 'Proveedor',
@@ -1105,7 +1550,7 @@ export async function fetchPurchasesOnce(forceRefresh = false): Promise<Purchase
       });
     });
     records.sort((a, b) => b.timestamp - a.timestamp);
-    setCachedPurchases(records);
+    setCachedPurchases(records, slug);
     return records;
   } catch (error) {
     if (cached) return cached;
@@ -1115,8 +1560,10 @@ export async function fetchPurchasesOnce(forceRefresh = false): Promise<Purchase
 
 export function subscribeToPurchases(
   onData: (purchases: PurchaseInvoice[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  companyId = getActiveCompanyId()
 ) {
+  const slug = normalizeCompanySlug(companyId);
   const collRef = collection(db, 'purchases');
   return onSnapshot(
     collRef,
@@ -1124,8 +1571,10 @@ export function subscribeToPurchases(
       const records: PurchaseInvoice[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        if (!belongsToCompany(data.companyId, slug)) return;
         records.push({
           id: docSnap.id,
+          companyId: data.companyId || 'gosen',
           invoiceNumber: data.invoiceNumber || `FAC-${docSnap.id.slice(-6)}`,
           supplierId: data.supplierId || '',
           supplierName: data.supplierName || 'Proveedor',
@@ -1156,9 +1605,8 @@ export function subscribeToPurchases(
           receivedBy: data.receivedBy || 'Administrador',
         });
       });
-      // Sort newest first
       records.sort((a, b) => b.timestamp - a.timestamp);
-      setCachedPurchases(records);
+      setCachedPurchases(records, slug);
       onData(records);
     },
     (error) => {
@@ -1170,17 +1618,18 @@ export function subscribeToPurchases(
 
 export async function recordPurchaseInFirestore(
   purchaseData: Omit<PurchaseInvoice, 'id'>,
-  currentInventory: Product[]
+  currentInventory: Product[],
+  companyId = getActiveCompanyId()
 ): Promise<PurchaseInvoice> {
+  const slug = normalizeCompanySlug(companyId);
   const batch = writeBatch(db);
-  const purchaseId = `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const purchaseId = getScopedDocId(`${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, slug);
   const purchaseRef = doc(db, 'purchases', purchaseId);
 
   try {
-    // 1. Increase current stock and update cost/price for each purchased item
     for (const item of purchaseData.items) {
-      const sanitizedCode = item.code.trim().replace(/\//g, '_');
-      const productRef = doc(db, 'inventory', sanitizedCode);
+      const productDocId = getScopedDocId(item.code, slug);
+      const productRef = doc(db, 'inventory', productDocId);
 
       const existing = currentInventory.find(
         (p) => p.code.trim().toLowerCase() === item.code.trim().toLowerCase() || p.id === item.productId
@@ -1199,15 +1648,14 @@ export async function recordPurchaseInFirestore(
           updatePayload.price = Number(item.salePrice);
         }
 
-        // Keep supplier name synced if present
         if (purchaseData.supplierName && !existing.supplier) {
           updatePayload.supplier = purchaseData.supplierName;
         }
 
         batch.update(productRef, updatePayload);
       } else {
-        // If product does not exist yet in inventory, auto-create it
         const newProductPayload: Record<string, any> = {
+          companyId: slug,
           code: item.code.trim(),
           name: item.name.trim(),
           category: item.category?.trim() || 'General',
@@ -1223,8 +1671,8 @@ export async function recordPurchaseInFirestore(
       }
     }
 
-    // 2. Save purchase invoice document
     const invoicePayload: any = {
+      companyId: slug,
       invoiceNumber: purchaseData.invoiceNumber.trim(),
       supplierId: purchaseData.supplierId.trim(),
       supplierName: purchaseData.supplierName.trim(),
@@ -1254,7 +1702,7 @@ export async function recordPurchaseInFirestore(
     };
 
     batch.set(purchaseRef, invoicePayload);
-    await touchInventorySyncStamp(batch);
+    await touchInventorySyncStamp(batch, slug);
 
     await batch.commit();
 
@@ -1269,16 +1717,17 @@ export async function recordPurchaseInFirestore(
 
 export async function cancelPurchaseInFirestore(
   purchase: PurchaseInvoice,
-  currentInventory: Product[]
+  currentInventory: Product[],
+  companyId = getActiveCompanyId()
 ): Promise<void> {
+  const slug = normalizeCompanySlug(companyId);
   const batch = writeBatch(db);
   const purchaseRef = doc(db, 'purchases', purchase.id);
 
   try {
-    // 1. Subtract the entered stock back from inventory
     for (const item of purchase.items) {
-      const sanitizedCode = item.code.trim().replace(/\//g, '_');
-      const productRef = doc(db, 'inventory', sanitizedCode);
+      const productDocId = getScopedDocId(item.code, slug);
+      const productRef = doc(db, 'inventory', productDocId);
 
       const existing = currentInventory.find(
         (p) => p.code.trim().toLowerCase() === item.code.trim().toLowerCase() || p.id === item.productId
@@ -1290,9 +1739,8 @@ export async function cancelPurchaseInFirestore(
       batch.update(productRef, { stock: newStock });
     }
 
-    // 2. Mark invoice as cancelled
     batch.update(purchaseRef, { status: 'cancelled' });
-    await touchInventorySyncStamp(batch);
+    await touchInventorySyncStamp(batch, slug);
 
     await batch.commit();
   } catch (error) {
@@ -1310,8 +1758,12 @@ export async function deletePurchaseFromFirestore(purchaseId: string): Promise<v
 
 // ----------------- COLLABORATORS & USERS MANAGEMENT -----------------
 
-export async function fetchUsersOnce(forceRefresh = false): Promise<UserAccount[]> {
-  const cached = getCachedUsers();
+export async function fetchUsersOnce(
+  forceRefresh = false,
+  companyId = getActiveCompanyId()
+): Promise<UserAccount[]> {
+  const slug = normalizeCompanySlug(companyId);
+  const cached = getCachedUsers(slug);
   if (!forceRefresh && cached && cached.length > 0) {
     return cached;
   }
@@ -1320,8 +1772,10 @@ export async function fetchUsersOnce(forceRefresh = false): Promise<UserAccount[
     const records: UserAccount[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      if (!belongsToCompany(data.companyId, slug)) return;
       records.push({
         id: docSnap.id,
+        companyId: data.companyId || 'gosen',
         name: data.name || '',
         username: data.username || '',
         password: data.password || '',
@@ -1333,7 +1787,7 @@ export async function fetchUsersOnce(forceRefresh = false): Promise<UserAccount[
       });
     });
     records.sort((a, b) => a.name.localeCompare(b.name));
-    setCachedUsers(records);
+    setCachedUsers(records, slug);
     return records;
   } catch (error) {
     if (cached) return cached;
@@ -1344,8 +1798,10 @@ export async function fetchUsersOnce(forceRefresh = false): Promise<UserAccount[
 
 export function subscribeToUsers(
   onData: (users: UserAccount[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  companyId = getActiveCompanyId()
 ) {
+  const slug = normalizeCompanySlug(companyId);
   const collRef = collection(db, 'users');
   return onSnapshot(
     collRef,
@@ -1353,8 +1809,10 @@ export function subscribeToUsers(
       const records: UserAccount[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        if (!belongsToCompany(data.companyId, slug)) return;
         records.push({
           id: docSnap.id,
+          companyId: data.companyId || 'gosen',
           name: data.name || '',
           username: data.username || '',
           password: data.password || '',
@@ -1366,7 +1824,7 @@ export function subscribeToUsers(
         });
       });
       records.sort((a, b) => a.name.localeCompare(b.name));
-      setCachedUsers(records);
+      setCachedUsers(records, slug);
       onData(records);
     },
     (error) => {
@@ -1376,10 +1834,16 @@ export function subscribeToUsers(
   );
 }
 
-export async function saveUserToFirestore(user: UserAccount): Promise<void> {
-  const userId = user.id || `usr_${Date.now()}`;
+export async function saveUserToFirestore(
+  user: UserAccount,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = normalizeCompanySlug(user.companyId || companyId);
+  const rawUserId = user.id || `usr_${Date.now()}`;
+  const userId = getScopedDocId(rawUserId, slug);
   const docRef = doc(db, 'users', userId);
   const payload = {
+    companyId: slug,
     name: user.name.trim(),
     username: user.username.trim().toLowerCase(),
     password: user.password.trim(),
@@ -1396,9 +1860,16 @@ export async function saveUserToFirestore(user: UserAccount): Promise<void> {
   }
 }
 
-export async function deleteUserFromFirestore(userId: string): Promise<void> {
+export async function deleteUserFromFirestore(
+  userId: string,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = normalizeCompanySlug(companyId);
   try {
     await deleteDoc(doc(db, 'users', userId));
+    if (slug !== 'gosen' && !userId.startsWith(`${slug}__`)) {
+      await deleteDoc(doc(db, 'users', getScopedDocId(userId, slug))).catch(() => {});
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
   }
@@ -1406,14 +1877,19 @@ export async function deleteUserFromFirestore(userId: string): Promise<void> {
 
 // ----------------- ACTIVITY LOGS & MOVEMENT AUDIT TRAIL -----------------
 
-export async function fetchActivityLogsOnce(): Promise<ActivityLogRecord[]> {
+export async function fetchActivityLogsOnce(
+  companyId = getActiveCompanyId()
+): Promise<ActivityLogRecord[]> {
+  const slug = normalizeCompanySlug(companyId);
   try {
-    const snapshot = await getDocs(query(collection(db, 'activity_logs'), limit(150)));
+    const snapshot = await getDocs(query(collection(db, 'activity_logs'), limit(200)));
     const records: ActivityLogRecord[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      if (!belongsToCompany(data.companyId, slug)) return;
       records.push({
         id: docSnap.id,
+        companyId: data.companyId || 'gosen',
         timestamp: Number(data.timestamp) || Date.now(),
         date: data.date || new Date().toLocaleString('es-HN'),
         userName: data.userName || 'Usuario',
@@ -1433,8 +1909,10 @@ export async function fetchActivityLogsOnce(): Promise<ActivityLogRecord[]> {
 
 export function subscribeToActivityLogs(
   onData: (logs: ActivityLogRecord[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  companyId = getActiveCompanyId()
 ) {
+  const slug = normalizeCompanySlug(companyId);
   const collRef = collection(db, 'activity_logs');
   return onSnapshot(
     collRef,
@@ -1442,8 +1920,10 @@ export function subscribeToActivityLogs(
       const records: ActivityLogRecord[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        if (!belongsToCompany(data.companyId, slug)) return;
         records.push({
           id: docSnap.id,
+          companyId: data.companyId || 'gosen',
           timestamp: Number(data.timestamp) || Date.now(),
           date: data.date || new Date().toLocaleString('es-HN'),
           userName: data.userName || 'Usuario',
@@ -1453,7 +1933,6 @@ export function subscribeToActivityLogs(
           details: data.details || '',
         });
       });
-      // Sort newest first
       records.sort((a, b) => b.timestamp - a.timestamp);
       onData(records);
     },
@@ -1465,12 +1944,15 @@ export function subscribeToActivityLogs(
 }
 
 export async function logActivityInFirestore(
-  log: Omit<ActivityLogRecord, 'id' | 'timestamp' | 'date'>
+  log: Omit<ActivityLogRecord, 'id' | 'timestamp' | 'date'>,
+  companyId = getActiveCompanyId()
 ): Promise<void> {
-  const logId = `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const slug = normalizeCompanySlug(log.companyId || companyId);
+  const logId = getScopedDocId(`act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, slug);
   const docRef = doc(db, 'activity_logs', logId);
   const now = new Date();
   const payload = {
+    companyId: slug,
     timestamp: now.getTime(),
     date: now.toLocaleString('es-HN', {
       year: 'numeric',
@@ -1493,4 +1975,566 @@ export async function logActivityInFirestore(
   }
 }
 
+// ----------------- MULTI-COMPANY / SAAS CLIENT TENANTS MANAGEMENT -----------------
 
+export const DEFAULT_GOSEN_COMPANY: CompanyTenant = {
+  id: 'gosen',
+  name: 'Tienda Gosén',
+  slug: 'gosen',
+  ownerName: 'Administración Gosén',
+  phone: '',
+  email: 'Luisenamorell@gmail.com',
+  plan: 'vitalicio',
+  price: 0,
+  status: 'active',
+  adminPassword: 'GOSEN2026',
+  logoUrl: '/store-logo.jpg',
+  tagline: 'Control de Inventario y Ventas',
+  allowedModules: ALL_COMPANY_MODULES,
+  enableDeliveryDvolada: true,
+  maxProducts: 0,
+  maxUsers: 0,
+  paymentHistory: [],
+  createdAt: 1704067200000,
+  isPrimary: true,
+};
+
+function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTenant {
+  const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
+  const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
+  const parsedHistory: SubscriptionPaymentRecord[] = Array.isArray(data.paymentHistory)
+    ? data.paymentHistory.map((p: any) => ({
+        id: String(p.id || `pay_${Date.now()}`),
+        receiptNumber: String(p.receiptNumber || 'REC-001'),
+        companySlug: String(p.companySlug || slug),
+        companyName: String(p.companyName || data.name || slug),
+        amount: Number(p.amount) || 0,
+        plan: ['mensual', 'anual', 'vitalicio', 'prueba'].includes(p.plan) ? p.plan : 'mensual',
+        paymentMethod: ['transferencia', 'efectivo', 'tarjeta', 'otro'].includes(p.paymentMethod)
+          ? p.paymentMethod
+          : 'transferencia',
+        reference: p.reference ? String(p.reference) : '',
+        periodLabel: String(p.periodLabel || 'Renovación de Suscripción'),
+        previousBillingDate: p.previousBillingDate ? String(p.previousBillingDate) : '',
+        newBillingDate: String(p.newBillingDate || ''),
+        paidAt: Number(p.paidAt) || Date.now(),
+        dateFormatted: String(p.dateFormatted || new Date().toLocaleDateString('es-HN')),
+        notes: p.notes ? String(p.notes) : '',
+      }))
+    : [];
+
+  return {
+    id: slug,
+    name: data.name || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
+    slug,
+    ownerName: data.ownerName || 'Propietario',
+    phone: data.phone || '',
+    email: data.email || '',
+    plan: ['mensual', 'anual', 'vitalicio', 'prueba'].includes(data.plan) ? data.plan : 'mensual',
+    price: Number(data.price) || 0,
+    nextBillingDate: data.nextBillingDate || '',
+    status: data.status === 'suspended' ? 'suspended' : 'active',
+    moraReason: data.moraReason || '',
+    suspendedAt: data.suspendedAt ? Number(data.suspendedAt) : undefined,
+    adminPassword: data.adminPassword || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
+    logoUrl: safeLogo,
+    tagline: data.tagline || 'Control de Inventario y Ventas',
+    address: data.address || '',
+    notes: data.notes || '',
+    allowedModules:
+      Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+        ? (data.allowedModules as ActiveTab[])
+        : ALL_COMPANY_MODULES,
+    enableDeliveryDvolada:
+      data.enableDeliveryDvolada !== undefined
+        ? Boolean(data.enableDeliveryDvolada)
+        : slug === 'gosen',
+    maxProducts: Math.max(0, Number(data.maxProducts) || 0),
+    maxUsers: Math.max(0, Number(data.maxUsers) || 0),
+    paymentHistory: parsedHistory,
+    createdAt: Number(data.createdAt) || Date.now(),
+    isPrimary: slug === 'gosen',
+  };
+}
+
+export async function fetchCompaniesOnce(forceRefresh = false): Promise<CompanyTenant[]> {
+  const cached = getCachedCompanies();
+  if (!forceRefresh && cached && cached.length > 0) {
+    return cached;
+  }
+
+  try {
+    const snapshot = await getDocs(collection(db, 'companies'));
+    const map = new Map<string, CompanyTenant>();
+    map.set('gosen', { ...DEFAULT_GOSEN_COMPANY });
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const slug = normalizeCompanySlug(data.slug || docSnap.id);
+      map.set(slug, sanitizeCompanyDoc(slug, data));
+    });
+
+    const list = Array.from(map.values()).sort((a, b) => {
+      if (a.slug === 'gosen') return -1;
+      if (b.slug === 'gosen') return 1;
+      return b.createdAt - a.createdAt;
+    });
+
+    setCachedCompanies(list);
+    return list;
+  } catch (error) {
+    if (cached && cached.length > 0) return cached;
+    return [DEFAULT_GOSEN_COMPANY];
+  }
+}
+
+export function subscribeToCompaniesRealtime(
+  onData: (companies: CompanyTenant[]) => void
+): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'companies'),
+      (snapshot) => {
+        const map = new Map<string, CompanyTenant>();
+        map.set('gosen', { ...DEFAULT_GOSEN_COMPANY });
+
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          const slug = normalizeCompanySlug(data.slug || docSnap.id);
+          map.set(slug, sanitizeCompanyDoc(slug, data));
+        });
+
+        const list = Array.from(map.values()).sort((a, b) => {
+          if (a.slug === 'gosen') return -1;
+          if (b.slug === 'gosen') return 1;
+          return b.createdAt - a.createdAt;
+        });
+
+        setCachedCompanies(list);
+        onData(list);
+      },
+      (err) => {
+        console.warn('Companies realtime listener warning:', err);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+export async function saveCompanyToFirestore(company: CompanyTenant): Promise<CompanyTenant> {
+  const slug = normalizeCompanySlug(company.slug || company.id);
+  const docRef = doc(db, 'companies', slug);
+
+  const rawLogo = (company.logoUrl || '').trim();
+  const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
+  const safeAllowedModules: ActiveTab[] =
+    Array.isArray(company.allowedModules) && company.allowedModules.length > 0
+      ? company.allowedModules
+      : ALL_COMPANY_MODULES;
+  const safeDeliveryDvolada =
+    company.enableDeliveryDvolada !== undefined
+      ? Boolean(company.enableDeliveryDvolada)
+      : slug === 'gosen';
+  const safeMaxProducts = Math.max(0, Number(company.maxProducts) || 0);
+  const safeMaxUsers = Math.max(0, Number(company.maxUsers) || 0);
+  const safePaymentHistory: SubscriptionPaymentRecord[] = Array.isArray(company.paymentHistory)
+    ? company.paymentHistory
+    : [];
+
+  const normalized: CompanyTenant = {
+    id: slug,
+    name: company.name.trim(),
+    slug,
+    ownerName: (company.ownerName || 'Propietario').trim(),
+    phone: (company.phone || '').trim(),
+    email: (company.email || '').trim(),
+    plan: company.plan || 'mensual',
+    price: Math.max(0, Number(company.price) || 0),
+    nextBillingDate: (company.nextBillingDate || '').trim(),
+    status: company.status === 'suspended' ? 'suspended' : 'active',
+    moraReason: (company.moraReason || '').trim(),
+    suspendedAt: company.status === 'suspended' ? (company.suspendedAt || Date.now()) : undefined,
+    adminPassword: (company.adminPassword || 'ADMIN2026').trim(),
+    logoUrl: safeLogo,
+    tagline: (company.tagline || 'Control de Inventario y Ventas').trim(),
+    address: (company.address || '').trim(),
+    notes: (company.notes || '').trim(),
+    allowedModules: safeAllowedModules,
+    enableDeliveryDvolada: safeDeliveryDvolada,
+    maxProducts: safeMaxProducts,
+    maxUsers: safeMaxUsers,
+    paymentHistory: safePaymentHistory,
+    createdAt: company.createdAt || Date.now(),
+    isPrimary: slug === 'gosen',
+  };
+
+  try {
+    const batch = writeBatch(db);
+    batch.set(
+      docRef,
+      {
+        name: normalized.name,
+        slug: normalized.slug,
+        ownerName: normalized.ownerName,
+        phone: normalized.phone,
+        email: normalized.email,
+        plan: normalized.plan,
+        price: normalized.price,
+        nextBillingDate: normalized.nextBillingDate,
+        status: normalized.status,
+        moraReason: normalized.moraReason || '',
+        suspendedAt: normalized.suspendedAt || null,
+        adminPassword: normalized.adminPassword,
+        logoUrl: normalized.logoUrl,
+        tagline: normalized.tagline,
+        address: normalized.address,
+        notes: normalized.notes,
+        allowedModules: normalized.allowedModules,
+        enableDeliveryDvolada: normalized.enableDeliveryDvolada,
+        maxProducts: normalized.maxProducts,
+        maxUsers: normalized.maxUsers,
+        paymentHistory: normalized.paymentHistory,
+        createdAt: normalized.createdAt,
+        isPrimary: normalized.isPrimary,
+      },
+      { merge: true }
+    );
+
+    // Also initialize/sync the company's store_profile settings document
+    const profileRef = doc(db, 'settings', getStoreProfileDocId(slug));
+    const profilePayload: StoreSettings = {
+      companyId: slug,
+      storeName: normalized.name,
+      tagline: normalized.tagline,
+      logoUrl: normalized.logoUrl,
+      phone: normalized.phone,
+      address: normalized.address,
+      accessPassword: normalized.adminPassword,
+      whatsappOrderPhone: normalized.phone,
+      allowedModules: normalized.allowedModules,
+      enableDeliveryDvolada: normalized.enableDeliveryDvolada,
+      maxProducts: normalized.maxProducts,
+      maxUsers: normalized.maxUsers,
+      updatedAt: Date.now(),
+    };
+    batch.set(profileRef, profilePayload, { merge: true });
+    setCachedStoreSettings(profilePayload, slug);
+
+    await batch.commit();
+    return normalized;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `companies/${slug}`);
+  }
+}
+
+export async function deleteCompanyFromFirestore(companySlug: string): Promise<void> {
+  const slug = normalizeCompanySlug(companySlug);
+  if (slug === 'gosen') {
+    throw new Error('No se puede eliminar la tienda principal Gosén.');
+  }
+  try {
+    await deleteDoc(doc(db, 'companies', slug));
+    await deleteDoc(doc(db, 'settings', getStoreProfileDocId(slug))).catch(() => {});
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `companies/${slug}`);
+  }
+}
+
+// ----------------- SAAS GLOBAL CONFIG & ANNOUNCEMENTS -----------------
+
+const SAAS_GLOBAL_CACHE_KEY = 'stockmaster_saas_global_config_v1';
+
+export const DEFAULT_SAAS_GLOBAL_CONFIG: SaaSGlobalConfig = {
+  saasAdminPhone: '',
+  saasBrandName: 'Administración SaaS',
+  expiryWarningDays: 5,
+  announcements: [],
+  updatedAt: Date.now(),
+};
+
+export function getCachedSaaSGlobalConfig(): SaaSGlobalConfig {
+  const cached = safeReadCache<SaaSGlobalConfig>(SAAS_GLOBAL_CACHE_KEY);
+  return cached || { ...DEFAULT_SAAS_GLOBAL_CONFIG };
+}
+
+export function setCachedSaaSGlobalConfig(config: SaaSGlobalConfig): void {
+  safeWriteCache(SAAS_GLOBAL_CACHE_KEY, config);
+}
+
+function sanitizeSaaSGlobalDoc(data: Record<string, any>): SaaSGlobalConfig {
+  const announcements: SaaSAnnouncement[] = Array.isArray(data.announcements)
+    ? data.announcements.map((a: any) => ({
+        id: String(a.id || `ann_${Date.now()}`),
+        title: String(a.title || 'Comunicado del Administrador'),
+        message: String(a.message || ''),
+        type: ['info', 'warning', 'update', 'promo'].includes(a.type) ? a.type : 'info',
+        targetCompanySlug: String(a.targetCompanySlug || 'all'),
+        isActive: a.isActive !== false,
+        createdAt: Number(a.createdAt) || Date.now(),
+        author: a.author ? String(a.author) : 'Administrador SaaS',
+      }))
+    : [];
+
+  return {
+    saasAdminPhone: String(data.saasAdminPhone || ''),
+    saasBrandName: String(data.saasBrandName || data.storeName || 'Administración SaaS'),
+    expiryWarningDays: Math.max(1, Math.min(30, Number(data.expiryWarningDays) || 5)),
+    announcements,
+    updatedAt: Number(data.updatedAt) || Date.now(),
+  };
+}
+
+export async function fetchSaaSGlobalConfigOnce(): Promise<SaaSGlobalConfig> {
+  try {
+    const docRef = doc(db, 'settings', 'saas_global_config');
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const cfg = sanitizeSaaSGlobalDoc(snap.data());
+      setCachedSaaSGlobalConfig(cfg);
+      return cfg;
+    }
+    return getCachedSaaSGlobalConfig();
+  } catch {
+    return getCachedSaaSGlobalConfig();
+  }
+}
+
+export function subscribeToSaaSGlobalConfig(
+  onData: (config: SaaSGlobalConfig) => void
+): () => void {
+  try {
+    const docRef = doc(db, 'settings', 'saas_global_config');
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const cfg = sanitizeSaaSGlobalDoc(snap.data());
+          setCachedSaaSGlobalConfig(cfg);
+          onData(cfg);
+        }
+      },
+      (err) => {
+        console.warn('SaaS global config realtime listener warning:', err);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+export async function saveSaaSGlobalConfigToFirestore(
+  config: SaaSGlobalConfig
+): Promise<SaaSGlobalConfig> {
+  const docRef = doc(db, 'settings', 'saas_global_config');
+  const normalized: SaaSGlobalConfig = {
+    saasAdminPhone: (config.saasAdminPhone || '').trim(),
+    saasBrandName: (config.saasBrandName || 'Administración SaaS').trim(),
+    expiryWarningDays: Math.max(1, Math.min(30, Number(config.expiryWarningDays) || 5)),
+    announcements: Array.isArray(config.announcements) ? config.announcements : [],
+    updatedAt: Date.now(),
+  };
+
+  try {
+    await setDoc(
+      docRef,
+      {
+        storeName: normalized.saasBrandName.slice(0, 190), // satisfies isValidStoreSettings
+        saasAdminPhone: normalized.saasAdminPhone,
+        saasBrandName: normalized.saasBrandName,
+        expiryWarningDays: normalized.expiryWarningDays,
+        announcements: normalized.announcements,
+        updatedAt: normalized.updatedAt,
+      },
+      { merge: true }
+    );
+    setCachedSaaSGlobalConfig(normalized);
+    return normalized;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'settings/saas_global_config');
+  }
+}
+
+// ----------------- POS CASH REGISTER SHIFTS & STORE OPERATING EXPENSES -----------------
+
+const POS_FINANCE_CACHE_BASE = 'stockmaster_pos_finance_v1';
+
+function getPOSFinanceDocId(companyId = getActiveCompanyId()): string {
+  const slug = normalizeCompanySlug(companyId);
+  return slug === 'gosen' ? 'pos_finance_gosen' : `pos_finance_${slug}`;
+}
+
+export function getCachedPOSFinanceData(companyId = getActiveCompanyId()): POSFinanceStoreData {
+  const slug = normalizeCompanySlug(companyId);
+  const cached = safeReadCache<POSFinanceStoreData>(getScopedCacheKey(POS_FINANCE_CACHE_BASE, slug));
+  return (
+    cached || {
+      companyId: slug,
+      shifts: [],
+      expenses: [],
+      updatedAt: Date.now(),
+    }
+  );
+}
+
+export function setCachedPOSFinanceData(
+  data: POSFinanceStoreData,
+  companyId = getActiveCompanyId()
+): void {
+  const slug = normalizeCompanySlug(companyId);
+  safeWriteCache(getScopedCacheKey(POS_FINANCE_CACHE_BASE, slug), data);
+}
+
+function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinanceStoreData {
+  const shifts: CashRegisterShift[] = Array.isArray(raw.shifts)
+    ? raw.shifts.map((s: any) => ({
+        id: String(s.id || `shift_${Date.now()}`),
+        companyId: slug,
+        status: s.status === 'closed' ? 'closed' : 'open',
+        openedAt: Number(s.openedAt) || Date.now(),
+        openedDate: String(s.openedDate || ''),
+        openedBy: String(s.openedBy || 'Administrador'),
+        openingCash: Number(s.openingCash) || 0,
+        cashMovements: Array.isArray(s.cashMovements)
+          ? s.cashMovements.map((m: any) => ({
+              id: String(m.id || `mov_${Date.now()}`),
+              amount: Number(m.amount) || 0,
+              reason: String(m.reason || ''),
+              category: m.category ? String(m.category) : 'Otros',
+              timestamp: Number(m.timestamp) || Date.now(),
+              dateFormatted: String(m.dateFormatted || ''),
+              user: String(m.user || 'Cajero'),
+            }))
+          : [],
+        closedAt: s.closedAt ? Number(s.closedAt) : undefined,
+        closedDate: s.closedDate ? String(s.closedDate) : undefined,
+        closedBy: s.closedBy ? String(s.closedBy) : undefined,
+        cashSalesTotal: s.cashSalesTotal !== undefined ? Number(s.cashSalesTotal) : undefined,
+        transferSalesTotal:
+          s.transferSalesTotal !== undefined ? Number(s.transferSalesTotal) : undefined,
+        cardSalesTotal: s.cardSalesTotal !== undefined ? Number(s.cardSalesTotal) : undefined,
+        creditSalesTotal: s.creditSalesTotal !== undefined ? Number(s.creditSalesTotal) : undefined,
+        creditAbonosCashTotal:
+          s.creditAbonosCashTotal !== undefined ? Number(s.creditAbonosCashTotal) : undefined,
+        cashOutTotal: s.cashOutTotal !== undefined ? Number(s.cashOutTotal) : undefined,
+        expectedCashInDrawer:
+          s.expectedCashInDrawer !== undefined ? Number(s.expectedCashInDrawer) : undefined,
+        countedPhysicalCash:
+          s.countedPhysicalCash !== undefined ? Number(s.countedPhysicalCash) : undefined,
+        difference: s.difference !== undefined ? Number(s.difference) : undefined,
+        notes: s.notes ? String(s.notes) : '',
+      }))
+    : [];
+
+  const validCategories: ExpenseCategory[] = [
+    'Alquiler',
+    'Energía / Servicios',
+    'Pago de Personal',
+    'Bolsas / Empaque',
+    'Transporte / Envíos',
+    'Publicidad',
+    'Mantenimiento',
+    'Otros',
+  ];
+
+  const expenses: StoreExpenseRecord[] = Array.isArray(raw.expenses)
+    ? raw.expenses.map((e: any) => ({
+        id: String(e.id || `exp_${Date.now()}`),
+        companyId: slug,
+        date: String(e.date || new Date().toISOString().slice(0, 10)),
+        timestamp: Number(e.timestamp) || Date.now(),
+        category: validCategories.includes(e.category) ? e.category : 'Otros',
+        description: String(e.description || ''),
+        amount: Number(e.amount) || 0,
+        paymentMethod: ['cash', 'transfer', 'card'].includes(e.paymentMethod)
+          ? e.paymentMethod
+          : 'cash',
+        registeredBy: String(e.registeredBy || 'Administrador'),
+        fromCashDrawer: Boolean(e.fromCashDrawer),
+      }))
+    : [];
+
+  return {
+    companyId: slug,
+    shifts: shifts.sort((a, b) => b.openedAt - a.openedAt),
+    expenses: expenses.sort((a, b) => b.timestamp - a.timestamp),
+    updatedAt: Number(raw.updatedAt) || Date.now(),
+  };
+}
+
+export async function fetchPOSFinanceDataOnce(
+  companyId = getActiveCompanyId()
+): Promise<POSFinanceStoreData> {
+  const slug = normalizeCompanySlug(companyId);
+  try {
+    const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const parsed = sanitizePOSFinanceDoc(slug, snap.data());
+      setCachedPOSFinanceData(parsed, slug);
+      return parsed;
+    }
+    return getCachedPOSFinanceData(slug);
+  } catch {
+    return getCachedPOSFinanceData(slug);
+  }
+}
+
+export function subscribeToPOSFinanceData(
+  onData: (data: POSFinanceStoreData) => void,
+  companyId = getActiveCompanyId()
+): () => void {
+  const slug = normalizeCompanySlug(companyId);
+  try {
+    const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const parsed = sanitizePOSFinanceDoc(slug, snap.data());
+          setCachedPOSFinanceData(parsed, slug);
+          onData(parsed);
+        } else {
+          onData(getCachedPOSFinanceData(slug));
+        }
+      },
+      (err) => {
+        console.warn('POS finance listener warning:', err);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+export async function savePOSFinanceDataToFirestore(
+  data: POSFinanceStoreData,
+  companyId = getActiveCompanyId()
+): Promise<POSFinanceStoreData> {
+  const slug = normalizeCompanySlug(data.companyId || companyId);
+  const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
+  const normalized: POSFinanceStoreData = {
+    companyId: slug,
+    shifts: Array.isArray(data.shifts) ? data.shifts.slice(0, 120) : [],
+    expenses: Array.isArray(data.expenses) ? data.expenses.slice(0, 500) : [],
+    updatedAt: Date.now(),
+  };
+
+  try {
+    await setDoc(
+      docRef,
+      {
+        storeName: `Finanzas POS ${slug}`.slice(0, 190), // satisfies isValidStoreSettings
+        companyId: slug,
+        shifts: normalized.shifts,
+        expenses: normalized.expenses,
+        updatedAt: normalized.updatedAt,
+      },
+      { merge: true }
+    );
+    setCachedPOSFinanceData(normalized, slug);
+    return normalized;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `settings/${getPOSFinanceDocId(slug)}`);
+  }
+}

@@ -34,6 +34,8 @@ interface InventoryViewProps {
   suppliers: Supplier[];
   isLoading?: boolean;
   initialSearchCode?: string;
+  maxProducts?: number;
+  saasAdminPhone?: string;
   onSaveProduct: (product: Product, oldCode?: string) => void;
   onBulkSaveProducts?: (
     products: Product[],
@@ -52,6 +54,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   suppliers,
   isLoading = false,
   initialSearchCode = '',
+  maxProducts = 0,
   onSaveProduct,
   onBulkSaveProducts,
   onDeleteProduct,
@@ -123,6 +126,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   }, [showModalInitially]);
 
   const handleOpenCreate = () => {
+    if (maxProducts > 0 && inventory.length >= maxProducts) {
+      if (showToast) {
+        showToast(
+          `Has alcanzado el límite de tu plan (${inventory.length}/${maxProducts} productos). Contacta al Administrador SaaS para ampliar tu plan.`,
+          'warning'
+        );
+      }
+      return;
+    }
     setEditingProduct(null);
     setFormData({
       code: '',
@@ -369,13 +381,37 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       {/* Header */}
       <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5 sm:gap-4">
         <div>
-          <h1 className="text-lg sm:text-2xl font-bold text-slate-800 leading-tight">Catálogo de Productos</h1>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h1 className="text-lg sm:text-2xl font-bold text-slate-800 leading-tight">Catálogo de Productos</h1>
+            {maxProducts > 0 && (
+              <span
+                className={`px-2.5 py-0.5 rounded-lg text-xs font-extrabold border ${
+                  inventory.length >= maxProducts
+                    ? 'bg-amber-50 text-amber-800 border-amber-300'
+                    : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                }`}
+              >
+                Plan: {inventory.length} / {maxProducts} productos
+              </span>
+            )}
+          </div>
           <p className="text-xs sm:text-sm text-slate-500">Gestiona todos los artículos de la tienda.</p>
         </div>
         <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
           <button
             type="button"
-            onClick={() => setIsBulkImportOpen(true)}
+            onClick={() => {
+              if (maxProducts > 0 && inventory.length >= maxProducts) {
+                if (showToast) {
+                  showToast(
+                    `Has alcanzado el límite de tu plan (${inventory.length}/${maxProducts} productos). Contacta al Administrador SaaS para ampliar tu plan.`,
+                    'warning'
+                  );
+                }
+                return;
+              }
+              setIsBulkImportOpen(true);
+            }}
             className="bg-slate-900 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer border border-slate-800 whitespace-nowrap"
             title="Subir stock o catálogo masivamente desde Excel (.xlsx / .csv) o copiando y pegando"
           >
