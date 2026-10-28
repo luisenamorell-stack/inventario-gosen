@@ -831,6 +831,34 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return filteredSalesHistory.slice(start, start + HISTORY_PAGE_SIZE);
   }, [filteredSalesHistory, historyPage]);
 
+  // Map of product code -> cost for fast O(1) fallback if an older sale item has cost=0
+  const inventoryCostMap = useMemo(() => {
+    const map = new Map<string, number>();
+    inventory.forEach((p) => {
+      map.set((p.code || '').trim().toLowerCase(), Number(p.cost) || 0);
+    });
+    return map;
+  }, [inventory]);
+
+  // Helper to compute exact cost, net revenue (excluding ISV), profit and margin for a single sale
+  const getSaleFinancials = (sale: SaleRecord) => {
+    const netRevenue = Math.max(
+      0,
+      (Number(sale.subtotal) || Number(sale.total) || 0) - (Number(sale.discount) || 0)
+    );
+    let totalCost = 0;
+    (sale.items || []).forEach((it) => {
+      const unitCost =
+        Number(it.cost) ||
+        inventoryCostMap.get((it.code || '').trim().toLowerCase()) ||
+        0;
+      totalCost += unitCost * (Number(it.quantity) || 0);
+    });
+    const profit = netRevenue - totalCost;
+    const marginPct = netRevenue > 0 ? (profit / netRevenue) * 100 : 0;
+    return { netRevenue, totalCost, profit, marginPct };
+  };
+
   // Overall statistics for sales
   const salesMetrics = useMemo(() => {
     const validSales = filteredSalesHistory.filter((s) => s.status === 'completed');
@@ -838,24 +866,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
     const totalItemsSold = validSales.reduce((sum, s) => sum + s.totalItems, 0);
     const averageTicket = validSales.length > 0 ? totalRevenue / validSales.length : 0;
 
-    // Gross profit calculation (Price - Cost)
     let totalCost = 0;
+    let totalNetRevenue = 0;
     validSales.forEach((s) => {
-      s.items.forEach((it) => {
-        totalCost += (Number(it.cost) || 0) * it.quantity;
-      });
+      const fin = getSaleFinancials(s);
+      totalCost += fin.totalCost;
+      totalNetRevenue += fin.netRevenue;
     });
-    const estimatedProfit = Math.max(0, totalRevenue - totalCost);
+    const estimatedProfit = totalNetRevenue - totalCost;
+    const marginPct = totalNetRevenue > 0 ? (estimatedProfit / totalNetRevenue) * 100 : 0;
 
     return {
       count: validSales.length,
       revenue: totalRevenue,
+      netRevenue: totalNetRevenue,
+      totalCost,
       itemsSold: totalItemsSold,
       avgTicket: averageTicket,
       profit: estimatedProfit,
+      marginPct,
       cancelledCount: filteredSalesHistory.filter((s) => s.status === 'cancelled').length,
     };
-  }, [filteredSalesHistory]);
+  }, [filteredSalesHistory, inventoryCostMap]);
 
   // Confirm Sale Cancellation
   const handleConfirmCancelSale = async () => {
@@ -876,7 +908,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
   };
 
-  // Export Sales to CSV
+  // Export Sales to CSV (includes Cost, Profit & Margin)
   const handleExportCSV = () => {
     if (filteredSalesHistory.length === 0) {
       showToast('No hay ventas para exportar con los filtros seleccionados.', 'warning');
@@ -895,7 +927,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
       'Subtotal (L)',
       'Descuento (L)',
       'ISV (L)',
-      'Total (L)',
+      'Total Facturado (L)',
+      'Costo Total (L)',
+      'Ganancia Neta (L)',
+      'Margen (%)',
       'Efectivo Recibido',
       'Cambio',
       'Estado',
@@ -904,6 +939,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
     const rows = filteredSalesHistory.map((s) => {
       const seller = getSaleSellerInfo(s);
+      const fin = getSaleFinancials(s);
       return [
         `"${s.saleNumber}"`,
         `"${s.date}"`,
@@ -917,6 +953,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
         s.discount.toFixed(2),
         s.tax.toFixed(2),
         s.total.toFixed(2),
+        s.status === 'completed' ? fin.totalCost.toFixed(2) : '0.00',
+        s.status === 'completed' ? fin.profit.toFixed(2) : '0.00',
+        s.status === 'completed' ? `${fin.marginPct.toFixed(1)}%` : '0%',
         s.amountPaid.toFixed(2),
         s.change.toFixed(2),
         `"${s.status === 'completed' ? 'Completada' : 'Anulada'}"`,
@@ -932,7 +971,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    showToast('Reporte de ventas exportado exitosamente a CSV.', 'success');
+    showToast('Reporte de ventas y ganancias exportado exitosamente a CSV.', 'success');
   };
 
   return (
@@ -1800,12 +1839,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
         /* ==================== SALES HISTORY VIEW ==================== */
         <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-4 sm:space-y-5 pb-40 md:pb-24">
           {/* Top KPI Metrics Banner */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-3">
             <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
               <div className="min-w-0">
                 <span className="text-[11px] sm:text-xs text-slate-500 font-medium block truncate">Total Facturado</span>
-                <span className="text-sm sm:text-2xl font-extrabold text-emerald-700 block truncate">
+                <span className="text-sm sm:text-xl font-extrabold text-emerald-700 block truncate">
                   L. {salesMetrics.revenue.toFixed(2)}
+                </span>
+                <span className="text-[10px] text-slate-400 block truncate">
+                  Costo: L. {salesMetrics.totalCost.toFixed(2)}
                 </span>
               </div>
               <div className="p-2 sm:p-2.5 bg-emerald-50 rounded-xl text-emerald-600 shrink-0 hidden sm:flex">
@@ -1813,10 +1855,32 @@ export const SalesView: React.FC<SalesViewProps> = ({
               </div>
             </div>
 
+            {/* Ganancia Neta Card */}
+            <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
+              <div className="min-w-0">
+                <span className="text-[11px] sm:text-xs text-slate-500 font-medium block truncate">
+                  Ganancia Neta
+                </span>
+                <span
+                  className={`text-sm sm:text-xl font-extrabold block truncate ${
+                    salesMetrics.profit >= 0 ? 'text-teal-700' : 'text-rose-600'
+                  }`}
+                >
+                  {salesMetrics.profit >= 0 ? '+' : ''}L. {salesMetrics.profit.toFixed(2)}
+                </span>
+                <span className="text-[10px] text-slate-400 block truncate">
+                  Margen: {salesMetrics.marginPct.toFixed(1)}%
+                </span>
+              </div>
+              <div className="p-2 sm:p-2.5 bg-teal-50 rounded-xl text-teal-600 shrink-0 hidden sm:flex">
+                <TrendingUp className="w-5 h-5" />
+              </div>
+            </div>
+
             <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
               <div className="min-w-0">
                 <span className="text-[11px] sm:text-xs text-slate-500 font-medium block truncate">Ventas Completadas</span>
-                <span className="text-sm sm:text-2xl font-extrabold text-slate-900 block">
+                <span className="text-sm sm:text-xl font-extrabold text-slate-900 block">
                   {salesMetrics.count}
                 </span>
                 {salesMetrics.cancelledCount > 0 && (
@@ -1833,7 +1897,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
             <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
               <div className="min-w-0">
                 <span className="text-[11px] sm:text-xs text-slate-500 font-medium block truncate">Unidades Vendidas</span>
-                <span className="text-sm sm:text-2xl font-extrabold text-slate-900 block">
+                <span className="text-sm sm:text-xl font-extrabold text-slate-900 block">
                   {salesMetrics.itemsSold}
                 </span>
               </div>
@@ -1842,15 +1906,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
               </div>
             </div>
 
-            <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
+            <div className="col-span-2 lg:col-span-1 p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
               <div className="min-w-0">
                 <span className="text-[11px] sm:text-xs text-slate-500 font-medium block truncate">Ticket Promedio</span>
-                <span className="text-sm sm:text-2xl font-extrabold text-slate-900 block truncate">
+                <span className="text-sm sm:text-xl font-extrabold text-slate-900 block truncate">
                   L. {salesMetrics.avgTicket.toFixed(2)}
                 </span>
               </div>
               <div className="p-2 sm:p-2.5 bg-amber-50 rounded-xl text-amber-600 shrink-0 hidden sm:flex">
-                <TrendingUp className="w-5 h-5" />
+                <Percent className="w-5 h-5" />
               </div>
             </div>
           </div>
@@ -1986,6 +2050,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   {paginatedSalesHistory.map((sale) => {
                     const isCancelled = sale.status === 'cancelled';
                     const sellerInfo = getSaleSellerInfo(sale);
+                    const fin = getSaleFinancials(sale);
                     return (
                       <div
                         key={sale.id}
@@ -2018,12 +2083,21 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           <div className="text-right shrink-0">
                             <span className="text-[10px] text-slate-400 block">Total</span>
                             <span
-                              className={`text-base font-black ${
+                              className={`text-base font-black block ${
                                 isCancelled ? 'line-through text-slate-400' : 'text-emerald-700'
                               }`}
                             >
                               L. {sale.total.toFixed(2)}
                             </span>
+                            {!isCancelled && (
+                              <span
+                                className={`text-[10px] font-bold block ${
+                                  fin.profit >= 0 ? 'text-teal-700' : 'text-rose-600'
+                                }`}
+                              >
+                                Ganancia: {fin.profit >= 0 ? '+' : ''}L. {fin.profit.toFixed(2)} ({fin.marginPct.toFixed(0)}%)
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -2134,6 +2208,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       <th className="py-3 px-4">Artículos</th>
                       <th className="py-3 px-4">Método</th>
                       <th className="py-3 px-4 text-right">Total</th>
+                      <th className="py-3 px-4 text-right">Ganancia Neta</th>
                       <th className="py-3 px-4 text-center">Estado</th>
                       <th className="py-3 px-4 text-center">Acciones</th>
                     </tr>
@@ -2142,6 +2217,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     {paginatedSalesHistory.map((sale) => {
                       const isCancelled = sale.status === 'cancelled';
                       const sellerInfo = getSaleSellerInfo(sale);
+                      const fin = getSaleFinancials(sale);
 
                       return (
                         <tr
@@ -2206,6 +2282,24 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             <span className={isCancelled ? 'line-through text-slate-400' : 'text-emerald-700'}>
                               L. {sale.total.toFixed(2)}
                             </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            {isCancelled ? (
+                              <span className="text-xs text-slate-400">—</span>
+                            ) : (
+                              <div className="flex flex-col items-end">
+                                <span
+                                  className={`font-bold text-xs sm:text-sm ${
+                                    fin.profit >= 0 ? 'text-teal-700' : 'text-rose-600'
+                                  }`}
+                                >
+                                  {fin.profit >= 0 ? '+' : ''}L. {fin.profit.toFixed(2)}
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  Costo: L. {fin.totalCost.toFixed(2)} ({fin.marginPct.toFixed(0)}%)
+                                </span>
+                              </div>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-center">
                             <span

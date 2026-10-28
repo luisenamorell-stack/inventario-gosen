@@ -15,7 +15,9 @@ import {
   ArrowDown,
   ArrowUp,
   ShoppingCart,
-  Truck
+  Truck,
+  DollarSign,
+  Percent
 } from 'lucide-react';
 import Chart from 'chart.js/auto';
 import {
@@ -51,17 +53,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
 
-  // Compute metrics with useMemo for instantaneous rendering
-  const { totalModels, totalStock, totalValue, lowStockItems } = useMemo(() => {
+  // Compute inventory & profit metrics with useMemo for instantaneous rendering
+  const {
+    totalModels,
+    totalStock,
+    totalValue,
+    totalRetailValue,
+    projectedInventoryProfit,
+    avgInventoryMarginPct,
+    lowStockItems,
+    realizedSalesProfit,
+    totalSalesNetRevenue,
+    todaySalesProfit,
+    todaySalesCount,
+  } = useMemo(() => {
     let stockSum = 0;
-    let valueSum = 0;
+    let costSum = 0;
+    let retailSum = 0;
     const lowItems: Product[] = [];
+    const costByCode = new Map<string, number>();
 
     inventory.forEach((item) => {
       const st = Number(item.stock) || 0;
       const co = Number(item.cost) || 0;
+      const pr = Number(item.price) || 0;
+      const disc = Math.min(pr, Math.max(0, Number(item.discount) || 0));
+      const finalPrice = Math.max(0, pr - disc);
+
+      costByCode.set((item.code || '').trim().toLowerCase(), co);
+
       stockSum += st;
-      valueSum += st * co;
+      costSum += st * co;
+      retailSum += st * finalPrice;
       if (st <= 3) {
         lowItems.push(item);
       }
@@ -69,13 +92,55 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
     lowItems.sort((a, b) => Number(a.stock) - Number(b.stock));
 
+    const invProfit = retailSum - costSum;
+    const invMargin = retailSum > 0 ? (invProfit / retailSum) * 100 : 0;
+
+    // Realized profit from completed sales
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    let salesNetRevSum = 0;
+    let salesCostSum = 0;
+    let todayProfitSum = 0;
+    let todayCount = 0;
+
+    sales.forEach((s) => {
+      if (s.status !== 'completed') return;
+      const netSaleRev = Math.max(
+        0,
+        (Number(s.subtotal) || Number(s.total) || 0) - (Number(s.discount) || 0)
+      );
+      let saleCost = 0;
+      (s.items || []).forEach((it) => {
+        const unitCost =
+          Number(it.cost) ||
+          costByCode.get((it.code || '').trim().toLowerCase()) ||
+          0;
+        saleCost += unitCost * (Number(it.quantity) || 0);
+      });
+      const saleProfit = netSaleRev - saleCost;
+      salesNetRevSum += netSaleRev;
+      salesCostSum += saleCost;
+
+      if ((s.timestamp || 0) >= startOfToday) {
+        todayProfitSum += saleProfit;
+        todayCount += 1;
+      }
+    });
+
     return {
       totalModels: inventory.length,
       totalStock: stockSum,
-      totalValue: valueSum,
+      totalValue: costSum,
+      totalRetailValue: retailSum,
+      projectedInventoryProfit: invProfit,
+      avgInventoryMarginPct: invMargin,
       lowStockItems: lowItems.slice(0, 25),
+      realizedSalesProfit: salesNetRevSum - salesCostSum,
+      totalSalesNetRevenue: salesNetRevSum,
+      todaySalesProfit: todayProfitSum,
+      todaySalesCount: todayCount,
     };
-  }, [inventory]);
+  }, [inventory, sales]);
 
   // Render Chart.js
   useEffect(() => {
@@ -256,6 +321,82 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </div>
+      )}
+
+      {/* Compact Profit & Profitability Bar — matches app's clean white card aesthetic */}
+      {!isLoading && (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800/80 px-4 py-3 mb-6 grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-0 divide-y sm:divide-y-0 sm:divide-x divide-slate-100 dark:divide-slate-800">
+          {/* Ganancia Proyectada en Stock */}
+          <div className="flex items-center gap-3 sm:pr-4">
+            <div className="w-9 h-9 rounded-xl bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0 border border-teal-100 dark:border-teal-900/40">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
+                  Ganancia en Stock
+                </span>
+                <span className="text-[11px] font-semibold text-teal-600 dark:text-teal-400 shrink-0">
+                  {avgInventoryMarginPct.toFixed(1)}% margen
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5">
+                <span className="text-base sm:text-lg font-black text-slate-800 dark:text-white truncate">
+                  + L {projectedInventoryProfit.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span className="text-[11px] text-slate-400 truncate">
+                  Venta: L {totalRetailValue.toLocaleString('es-HN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Ganancia Neta en Ventas */}
+          <div className="flex items-center gap-3 pt-2.5 sm:pt-0 sm:px-4">
+            <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-100 dark:border-emerald-900/40">
+              <DollarSign className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
+                  Ganancia en Ventas
+                </span>
+                <span className="text-[11px] text-slate-400 shrink-0">Acumulada</span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5">
+                <span className="text-base sm:text-lg font-black text-emerald-700 dark:text-emerald-400 truncate">
+                  + L {realizedSalesProfit.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span className="text-[11px] text-slate-400 truncate">
+                  Neto: L {totalSalesNetRevenue.toLocaleString('es-HN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Ganancia de Hoy */}
+          <div className="flex items-center gap-3 pt-2.5 sm:pt-0 sm:pl-4">
+            <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-900/40">
+              <Percent className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
+                  Ganancia de Hoy
+                </span>
+                <span className="text-[11px] text-slate-400 shrink-0">
+                  {todaySalesCount} {todaySalesCount === 1 ? 'venta' : 'ventas'}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5">
+                <span className="text-base sm:text-lg font-black text-slate-800 dark:text-white truncate">
+                  + L {todaySalesProfit.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span className="text-[11px] text-slate-400">Hoy</span>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Main Content: Chart + Critical Alerts */}

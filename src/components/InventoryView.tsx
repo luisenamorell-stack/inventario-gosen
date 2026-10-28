@@ -17,7 +17,8 @@ import {
   ChevronRight,
   Tag,
   Percent,
-  Check
+  Check,
+  TrendingUp
 } from 'lucide-react';
 
 import { ConfirmDialog } from './ConfirmDialog';
@@ -70,6 +71,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     | 'price-asc'
     | 'cost-desc'
     | 'cost-asc'
+    | 'profit-desc'
+    | 'profit-asc'
     | 'name-asc'
     | 'name-desc'
     | 'code-asc'
@@ -299,6 +302,20 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           return (Number(b.cost) || 0) - (Number(a.cost) || 0);
         case 'cost-asc':
           return (Number(a.cost) || 0) - (Number(b.cost) || 0);
+        case 'profit-desc': {
+          const aFinal = Math.max(0, (Number(a.price) || 0) - (Number(a.discount) || 0));
+          const bFinal = Math.max(0, (Number(b.price) || 0) - (Number(b.discount) || 0));
+          const aProfit = aFinal - (Number(a.cost) || 0);
+          const bProfit = bFinal - (Number(b.cost) || 0);
+          return bProfit - aProfit;
+        }
+        case 'profit-asc': {
+          const aFinal = Math.max(0, (Number(a.price) || 0) - (Number(a.discount) || 0));
+          const bFinal = Math.max(0, (Number(b.price) || 0) - (Number(b.discount) || 0));
+          const aProfit = aFinal - (Number(a.cost) || 0);
+          const bProfit = bFinal - (Number(b.cost) || 0);
+          return aProfit - bProfit;
+        }
         case 'name-asc':
           return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
         case 'name-desc':
@@ -313,6 +330,26 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       }
     });
   }, [inventory, deferredSearch, selectedCategory, selectedSupplier, sortOption]);
+
+  // Financial & Profit summary for currently filtered inventory
+  const inventoryFinancialSummary = React.useMemo(() => {
+    let totalCost = 0;
+    let totalRetail = 0;
+    let totalUnits = 0;
+    filteredInventory.forEach((item) => {
+      const st = Math.max(0, Number(item.stock) || 0);
+      const co = Number(item.cost) || 0;
+      const pr = Number(item.price) || 0;
+      const disc = Math.min(pr, Math.max(0, Number(item.discount) || 0));
+      const finalPrice = Math.max(0, pr - disc);
+      totalUnits += st;
+      totalCost += st * co;
+      totalRetail += st * finalPrice;
+    });
+    const totalProfit = totalRetail - totalCost;
+    const marginPct = totalRetail > 0 ? (totalProfit / totalRetail) * 100 : 0;
+    return { totalUnits, totalCost, totalRetail, totalProfit, marginPct };
+  }, [filteredInventory]);
 
   // Paginated subset to render only active page in DOM
   const totalPages = pageSize === 'all' ? 1 : Math.max(1, Math.ceil(filteredInventory.length / pageSize));
@@ -355,6 +392,36 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Compact Profit & Valuation Strip for Filtered Inventory */}
+      <div className="bg-white px-4 py-2.5 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-x-6 gap-y-1.5 text-xs">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-600">
+          <span>
+            Costo Stock:{' '}
+            <strong className="text-slate-900 font-bold">
+              L. {inventoryFinancialSummary.totalCost.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </strong>
+          </span>
+          <span className="text-slate-300 hidden sm:inline">·</span>
+          <span>
+            Valor Venta:{' '}
+            <strong className="text-slate-900 font-bold">
+              L. {inventoryFinancialSummary.totalRetail.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </strong>
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs">
+          <TrendingUp className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+          <span className="text-slate-600">Ganancia Potencial:</span>
+          <strong className="text-emerald-700 font-extrabold text-xs sm:text-sm">
+            + L. {inventoryFinancialSummary.totalProfit.toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </strong>
+          <span className="text-slate-400 font-medium">
+            ({inventoryFinancialSummary.marginPct.toFixed(1)}%)
+          </span>
+        </div>
+      </div>
 
       {/* Main card table container */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200">
@@ -420,6 +487,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               >
                 <option value="stock-desc">📦 Stock: Mayor a Menor</option>
                 <option value="stock-asc">📦 Stock: Menor a Mayor</option>
+                <option value="profit-desc">📈 Ganancia: Mayor a Menor</option>
+                <option value="profit-asc">📉 Ganancia: Menor a Mayor</option>
                 <option value="price-desc">💰 Precio: Mayor a Menor</option>
                 <option value="price-asc">💰 Precio: Menor a Mayor</option>
                 <option value="cost-desc">🏷️ Costo: Mayor a Menor</option>
@@ -467,6 +536,20 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               }`}
             >
               <span>Precio: {sortOption === 'price-desc' ? 'Mayor a Menor ↓' : sortOption === 'price-asc' ? 'Menor a Mayor ↑' : 'Mayor a Menor'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSortOption((prev) => (prev === 'profit-desc' ? 'profit-asc' : 'profit-desc'))}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                sortOption === 'profit-desc'
+                  ? 'bg-emerald-600 text-white shadow-2xs font-bold'
+                  : sortOption === 'profit-asc'
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold'
+                  : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              <span>Ganancia: {sortOption === 'profit-desc' ? 'Mayor a Menor ↓' : sortOption === 'profit-asc' ? 'Menor a Mayor ↑' : 'Mayor a Menor'}</span>
             </button>
           </div>
 
@@ -546,7 +629,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
                   <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
                     <div>
-                      <span className="text-[10px] text-slate-400 block -mb-0.5">Precio</span>
+                      <span className="text-[10px] text-slate-400 block -mb-0.5">
+                        Costo: L. {Number(item.cost || 0).toFixed(2)}
+                      </span>
                       {(Number(item.discount) || 0) > 0 ? (
                         <div>
                           <div className="flex items-center gap-1.5">
@@ -571,6 +656,20 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                           L. {Number(item.price || 0).toFixed(2)}
                         </span>
                       )}
+                      {(() => {
+                        const finalP = Math.max(0, Number(item.price || 0) - Number(item.discount || 0));
+                        const unitProfit = finalP - Number(item.cost || 0);
+                        const margin = finalP > 0 ? (unitProfit / finalP) * 100 : 0;
+                        return (
+                          <div
+                            className={`text-[10px] font-bold mt-0.5 ${
+                              unitProfit >= 0 ? 'text-teal-700' : 'text-rose-600'
+                            }`}
+                          >
+                            Ganancia: {unitProfit >= 0 ? '+' : ''}L. {unitProfit.toFixed(2)} ({margin.toFixed(0)}%)
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="text-center">
@@ -813,6 +912,23 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             </button>
                           </div>
                         )}
+                        {(() => {
+                          const finalP = Math.max(
+                            0,
+                            Number(item.price || 0) - Number(item.discount || 0)
+                          );
+                          const unitProfit = finalP - Number(item.cost || 0);
+                          const margin = finalP > 0 ? (unitProfit / finalP) * 100 : 0;
+                          return (
+                            <p
+                              className={`text-[11px] font-bold mt-1 ${
+                                unitProfit >= 0 ? 'text-teal-700' : 'text-rose-600'
+                              }`}
+                            >
+                              Ganancia: {unitProfit >= 0 ? '+' : ''}L {unitProfit.toFixed(2)} ({margin.toFixed(0)}%)
+                            </p>
+                          );
+                        })()}
                       </td>
                       <td className="p-4 border-b border-slate-100 text-center">
                         <span
@@ -1276,6 +1392,54 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         </div>
                       )}
                     </div>
+
+                    {/* Compact Live Profit & Margin Strip */}
+                    {(() => {
+                      const unitCost = Number(formData.cost) || 0;
+                      const finalUnitPrice = Math.max(
+                        0,
+                        (Number(formData.price) || 0) - computedFormDiscount
+                      );
+                      const unitProfit = finalUnitPrice - unitCost;
+                      const profitMarginPct =
+                        finalUnitPrice > 0 ? (unitProfit / finalUnitPrice) * 100 : 0;
+                      const stockQty = Math.max(0, Number(formData.stock) || 0);
+                      const totalStockProfit = unitProfit * stockQty;
+                      const isPositive = unitProfit >= 0;
+
+                      return (
+                        <div
+                          className={`px-3.5 py-2.5 rounded-xl border flex flex-wrap items-center justify-between gap-2 text-xs ${
+                            isPositive
+                              ? 'bg-slate-50 border-slate-200 text-slate-700'
+                              : 'bg-rose-50/70 border-rose-200 text-rose-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 font-semibold">
+                            <TrendingUp
+                              className={`w-3.5 h-3.5 ${
+                                isPositive ? 'text-emerald-600' : 'text-rose-600'
+                              }`}
+                            />
+                            <span>Ganancia c/u:</span>
+                            <strong
+                              className={`font-extrabold ${
+                                isPositive ? 'text-emerald-700' : 'text-rose-600'
+                              }`}
+                            >
+                              {isPositive ? '+' : ''}L. {unitProfit.toFixed(2)} ({profitMarginPct.toFixed(1)}%)
+                            </strong>
+                          </div>
+
+                          <div className="text-slate-500">
+                            Total stock ({stockQty}):{' '}
+                            <strong className="text-slate-800 font-bold">
+                              {totalStockProfit >= 0 ? '+' : ''}L. {totalStockProfit.toFixed(2)}
+                            </strong>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     <div>
                       <ImageUploader
