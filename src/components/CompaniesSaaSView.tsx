@@ -46,6 +46,7 @@ import {
   Megaphone,
   Calendar,
   Printer,
+  Download,
   Send,
   Package,
   Clock,
@@ -53,6 +54,8 @@ import {
   Bell
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
+import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
+import { SecurityAuditPanel } from './SecurityAuditPanel';
 
 export const SAAS_MODULE_OPTIONS: {
   id: ActiveTab;
@@ -240,6 +243,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [permMaxProducts, setPermMaxProducts] = useState<string>('0');
   const [permMaxUsers, setPermMaxUsers] = useState<string>('0');
   const [isSavingPerms, setIsSavingPerms] = useState<boolean>(false);
+  const [showSecurityLabModal, setShowSecurityLabModal] = useState<boolean>(false);
 
   // Subscription Payment & Receipt Modal State
   const [paymentCompany, setPaymentCompany] = useState<CompanyTenant | null>(null);
@@ -480,16 +484,22 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     window.open(waUrl, '_blank', 'noopener,noreferrer');
   };
 
+  const handleDownloadReceiptPDF = (
+    payment: SubscriptionPaymentRecord,
+    comp: CompanyTenant
+  ) => {
+    downloadSaaSReceiptPdf(
+      payment,
+      comp,
+      saasGlobalConfig?.saasBrandName || 'Plataforma de Inventario y Facturación POS'
+    );
+    showToast(`Comprobante ${payment.receiptNumber}.pdf descargado`, 'success');
+  };
+
   const handlePrintReceiptPDF = (
     payment: SubscriptionPaymentRecord,
     comp: CompanyTenant
   ) => {
-    const printWin = window.open('', '_blank', 'width=720,height=840');
-    if (!printWin) {
-      showToast('Permite las ventanas emergentes para imprimir o guardar el PDF.', 'warning');
-      return;
-    }
-
     const html = `
       <!DOCTYPE html>
       <html lang="es">
@@ -498,19 +508,18 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         <title>Recibo SaaS ${payment.receiptNumber} - ${comp.name}</title>
         <style>
           * { box-sizing: border-box; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
-          body { margin: 0; padding: 32px; background: #f8fafc; color: #0f172a; }
-          .card { max-width: 600px; margin: 0 auto; background: #ffffff; border: 2px solid #e2e8f0; border-radius: 20px; padding: 32px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
-          .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #f1f5f9; padding-bottom: 20px; margin-bottom: 20px; }
+          body { margin: 0; padding: 24px; background: #ffffff; color: #0f172a; }
+          .card { max-width: 600px; margin: 0 auto; background: #ffffff; border: 2px solid #cbd5e1; border-radius: 16px; padding: 28px; }
+          .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #f1f5f9; padding-bottom: 18px; margin-bottom: 18px; }
           .badge { display: inline-block; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; text-transform: uppercase; }
-          .title { font-size: 20px; font-weight: 900; margin: 0; color: #0f172a; }
+          .title { font-size: 18px; font-weight: 900; margin: 0; color: #0f172a; }
           .subtitle { font-size: 12px; color: #64748b; margin-top: 4px; }
-          .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px dashed #e2e8f0; font-size: 13px; }
+          .row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px dashed #e2e8f0; font-size: 13px; }
           .label { color: #64748b; font-weight: 600; }
           .val { color: #0f172a; font-weight: 800; text-align: right; }
-          .total-box { margin-top: 20px; background: #0f172a; color: #ffffff; padding: 18px 20px; border-radius: 14px; display: flex; justify-content: space-between; align-items: center; }
-          .next-box { margin-top: 16px; background: #f0fdfa; border: 1px solid #99f6e4; color: #0f766e; padding: 12px 16px; border-radius: 12px; font-size: 13px; font-weight: 700; text-align: center; }
-          .footer { margin-top: 24px; text-align: center; font-size: 11px; color: #94a3b8; }
-          @media print { body { background: #fff; padding: 0; } .card { border: 1px solid #cbd5e1; box-shadow: none; } }
+          .total-box { margin-top: 18px; background: #0f172a; color: #ffffff; padding: 16px 20px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; }
+          .next-box { margin-top: 14px; background: #f0fdfa; border: 1px solid #99f6e4; color: #0f766e; padding: 12px 16px; border-radius: 10px; font-size: 13px; font-weight: 700; text-align: center; }
+          .footer { margin-top: 20px; text-align: center; font-size: 11px; color: #64748b; }
         </style>
       </head>
       <body>
@@ -550,15 +559,10 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             Recibo generado digitalmente por la Consola Central SaaS • Gracias por su pago.
           </div>
         </div>
-        <script>
-          window.onload = function() { window.print(); };
-        </script>
       </body>
       </html>
     `;
-    printWin.document.open();
-    printWin.document.write(html);
-    printWin.document.close();
+    printHtmlDocument(html, `Recibo SaaS ${payment.receiptNumber}`);
   };
 
   // Global / Targeted Announcements Handlers
@@ -944,6 +948,15 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowSecurityLabModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 font-extrabold text-xs border border-emerald-500/40 shadow-xs transition-all cursor-pointer"
+            >
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>Probar Blindaje y Seguridad</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowAnnouncementsModal(true)}
@@ -1969,7 +1982,21 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDownloadReceiptPDF(
+                            selectedReceiptToView.payment,
+                            selectedReceiptToView.company
+                          )
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Descargar PDF</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={() =>
@@ -1981,7 +2008,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-extrabold text-xs cursor-pointer"
                       >
                         <Printer className="w-3.5 h-3.5 text-slate-700" />
-                        <span>Imprimir / PDF</span>
+                        <span>Imprimir</span>
                       </button>
 
                       <button
@@ -2036,15 +2063,23 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="font-black text-sm text-emerald-700">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="font-black text-sm text-emerald-700 mr-1">
                             L. {pay.amount.toLocaleString('es-HN', { minimumFractionDigits: 2 })}
                           </span>
                           <button
                             type="button"
+                            onClick={() => handleDownloadReceiptPDF(pay, paymentCompany)}
+                            className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 cursor-pointer"
+                            title="Descargar PDF directo"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => handlePrintReceiptPDF(pay, paymentCompany)}
                             className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
-                            title="Imprimir / Guardar PDF"
+                            title="Imprimir en cualquier impresora"
                           >
                             <Printer className="w-3.5 h-3.5" />
                           </button>
@@ -2131,17 +2166,25 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="font-black text-sm text-emerald-700">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="font-black text-sm text-emerald-700 mr-1">
                         L. {payment.amount.toLocaleString('es-HN', { minimumFractionDigits: 2 })}
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadReceiptPDF(payment, company)}
+                        className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>PDF</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => handlePrintReceiptPDF(payment, company)}
                         className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
                       >
                         <Printer className="w-3.5 h-3.5" />
-                        <span>PDF</span>
+                        <span>Imprimir</span>
                       </button>
                       <button
                         type="button"
@@ -2741,6 +2784,35 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Live Security & Penetration Lab Modal for SaaS Admin */}
+      {showSecurityLabModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="w-full max-w-6xl max-h-[92vh] overflow-y-auto rounded-3xl relative shadow-2xl">
+            <div className="sticky top-3 right-3 z-30 flex justify-end px-4 pt-3 pointer-events-none">
+              <button
+                type="button"
+                onClick={() => setShowSecurityLabModal(false)}
+                className="pointer-events-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900/95 hover:bg-rose-600 text-white text-xs font-extrabold border border-slate-700 shadow-lg transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+                <span>Cerrar Laboratorio</span>
+              </button>
+            </div>
+            <div className="-mt-12">
+              <SecurityAuditPanel
+                storeName={saasGlobalConfig?.saasBrandName || 'Plataforma Central SaaS'}
+                companyId={activeCompanyId}
+                accessPassword={saasMasterKey}
+                inventoryCount={companies.length * 100}
+                salesCount={allPaymentsList.length}
+                auditHistoryCount={companies.length}
+                showToast={showToast}
+              />
+            </div>
           </div>
         </div>
       )}

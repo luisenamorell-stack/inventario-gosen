@@ -9,7 +9,19 @@ import {
   UserRole,
   POSFinanceStoreData,
   CreditPaymentAbone,
+  PrinterPaperFormat,
 } from '../types';
+import {
+  PRINTER_FORMAT_OPTIONS,
+  getPreferredPrinterFormat,
+  setPreferredPrinterFormat,
+  printHtmlDocument,
+  buildSaleDocumentHtml,
+  downloadSalePdf,
+  buildSalesReportHtml,
+  downloadSalesReportPdf,
+} from '../utils/printPdfService';
+import { PrintFormatModal, PrinterConnectionManager } from './PrintFormatModal';
 import {
   ShoppingCart,
   Search,
@@ -136,13 +148,18 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [completedSale, setCompletedSale] = useState<SaleRecord | null>(null);
   const [showReceiptModal, setShowReceiptModal] = useState<boolean>(false);
   const [receiptWhatsAppPhone, setReceiptWhatsAppPhone] = useState<string>('');
+  const [receiptPrinterFormat, setReceiptPrinterFormat] = useState<PrinterPaperFormat>(() =>
+    getPreferredPrinterFormat(storeSettings)
+  );
+  const [showSalesReportPrintModal, setShowSalesReportPrintModal] = useState<boolean>(false);
 
   // Sync WhatsApp phone whenever completedSale changes
   useEffect(() => {
     if (completedSale) {
       setReceiptWhatsAppPhone(completedSale.customerPhone || '');
+      setReceiptPrinterFormat(getPreferredPrinterFormat(storeSettings));
     }
-  }, [completedSale]);
+  }, [completedSale, storeSettings]);
 
   // ------------------ HISTORY STATE ------------------
   const [historySearch, setHistorySearch] = useState('');
@@ -650,59 +667,43 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
   };
 
-  // Print Receipt handler
-  const handlePrintReceipt = () => {
-    if (!receiptPrintRef.current) return;
-    const printContents = receiptPrintRef.current.innerHTML;
-    const printWindow = window.open('', '_blank', 'width=450,height=650');
-    if (printWindow) {
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Ticket de Venta - ${completedSale?.saleNumber || 'Recibo'}</title>
-            <style>
-              body {
-                font-family: 'Courier New', Courier, monospace;
-                margin: 0;
-                padding: 16px;
-                color: #000;
-                background: #fff;
-                font-size: 13px;
-                line-height: 1.35;
-              }
-              .text-center { text-align: center; }
-              .text-right { text-align: right; }
-              .font-bold { font-weight: bold; }
-              .border-b { border-bottom: 1px dashed #444; }
-              .border-t { border-top: 1px dashed #444; }
-              .py-1 { padding-top: 4px; padding-bottom: 4px; }
-              .my-2 { margin-top: 8px; margin-bottom: 8px; }
-              .flex { display: flex; justify-content: space-between; }
-              .justify-center { justify-content: center; }
-              img { width: 52px; height: 52px; object-fit: contain; margin: 0 auto 4px; display: block; border-radius: 8px; }
-              .table { width: 100%; border-collapse: collapse; }
-              .table th { text-align: left; border-bottom: 1px solid #000; padding: 4px 0; }
-              .table td { padding: 4px 0; }
-              @media print {
-                @page { margin: 0; size: 80mm auto; }
-                body { padding: 8px; }
-              }
-            </style>
-          </head>
-          <body>
-            ${printContents}
-            <script>
-              window.onload = function() {
-                window.print();
-                setTimeout(() => window.close(), 500);
-              };
-            </script>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-    }
+  // Print Receipt / Invoice handler (supports 58mm, 80mm, Half-Letter, Letter/A4 on any printer or connected Bluetooth/USB)
+  const handlePrintReceipt = (formatOverride?: PrinterPaperFormat, targetSaleOverride?: SaleRecord) => {
+    const saleToPrint = targetSaleOverride || completedSale;
+    if (!saleToPrint) return;
+    const fmt = formatOverride || receiptPrinterFormat;
+    setPreferredPrinterFormat(fmt);
+    const sellerInfo = getSaleSellerInfo(saleToPrint);
+    const sellerStr = `${sellerInfo.name} (${sellerInfo.roleLabel})`;
+    const html = buildSaleDocumentHtml(saleToPrint, storeSettings, fmt, sellerStr);
+    printHtmlDocument(
+      html,
+      `Factura ${saleToPrint.saleNumber}`,
+      fmt,
+      storeSettings,
+      saleToPrint,
+      sellerStr
+    );
+    const opt = PRINTER_FORMAT_OPTIONS.find((o) => o.id === fmt);
+    showToast(
+      `Enviando comprobante a impresora en formato ${opt?.shortLabel || fmt}...`,
+      'info'
+    );
+  };
+
+  // Direct PDF Download for a single sale invoice / ticket
+  const handleDownloadSalePdf = async (formatOverride?: PrinterPaperFormat, targetSaleOverride?: SaleRecord) => {
+    const saleToDownload = targetSaleOverride || completedSale;
+    if (!saleToDownload) return;
+    const fmt = formatOverride || receiptPrinterFormat;
+    const sellerInfo = getSaleSellerInfo(saleToDownload);
+    await downloadSalePdf(
+      saleToDownload,
+      storeSettings,
+      fmt,
+      `${sellerInfo.name} (${sellerInfo.roleLabel})`
+    );
+    showToast(`PDF Ejecutivo de ${saleToDownload.saleNumber} descargado correctamente.`, 'success');
   };
 
   // Generate a formatted, professional digital ticket for WhatsApp
@@ -2245,7 +2246,24 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 <option value="cancelled">Anuladas</option>
               </select>
 
-              {/* Export Button */}
+              {/* Print / PDF Report Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (filteredSalesHistory.length === 0) {
+                    showToast('No hay ventas en el filtro actual para imprimir o exportar.', 'warning');
+                    return;
+                  }
+                  setShowSalesReportPrintModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg transition-colors cursor-pointer shadow-2xs"
+                title="Imprimir reporte de ventas en cualquier impresora o guardar como PDF"
+              >
+                <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Imprimir / PDF</span>
+              </button>
+
+              {/* Export CSV Button */}
               <button
                 type="button"
                 onClick={handleExportCSV}
@@ -2253,7 +2271,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 title="Exportar a CSV"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>Exportar CSV</span>
+                <span>CSV</span>
               </button>
             </div>
           </div>
@@ -2392,8 +2410,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               }}
                               className="px-2.5 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center gap-1 cursor-pointer"
                             >
-                              <Receipt className="w-3.5 h-3.5" />
-                              <span>Ver Ticket</span>
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>Imprimir / Ticket</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadSalePdf('letter', sale)}
+                              className="px-2.5 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg flex items-center gap-1 cursor-pointer"
+                              title="Descargar factura en PDF"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>PDF</span>
                             </button>
                             <button
                               type="button"
@@ -2539,17 +2566,27 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           </td>
                           <td className="py-3 px-4 text-center">
                             <div className="flex items-center justify-center gap-1">
-                              {/* View receipt modal */}
+                              {/* View receipt / print modal */}
                               <button
                                 type="button"
                                 onClick={() => {
                                   setCompletedSale(sale);
                                   setShowReceiptModal(true);
                                 }}
-                                className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
-                                title="Ver comprobante / ticket"
+                                className="p-1.5 text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                                title="Ver comprobante / Elegir Impresora"
                               >
-                                <Receipt className="w-4 h-4" />
+                                <Printer className="w-4 h-4" />
+                              </button>
+
+                              {/* Direct PDF download */}
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadSalePdf('letter', sale)}
+                                className="p-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="Descargar Factura en PDF (.pdf)"
+                              >
+                                <Download className="w-4 h-4" />
                               </button>
 
                               {/* WhatsApp direct send */}
@@ -2885,10 +2922,66 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   💡 Si dejas el número en blanco, se abrirá tu WhatsApp para elegir cualquier contacto.
                 </p>
               </div>
+              {/* Direct Printer Connection + Format Selector inside Receipt Modal */}
+              <PrinterConnectionManager
+                storeSettings={storeSettings}
+                selectedFormat={receiptPrinterFormat}
+                onSelectFormat={(fmt) => {
+                  setReceiptPrinterFormat(fmt);
+                  setPreferredPrinterFormat(fmt);
+                }}
+                showToast={showToast}
+                compact
+              />
+
+              {/* Multi-Printer Paper Format Selector inside Receipt Modal */}
+              <div className="bg-slate-100 border border-slate-200 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                    <Printer className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Formato de Impresora / Papel y PDF:</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
+                    Multi-Impresora + PDF
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {PRINTER_FORMAT_OPTIONS.map((opt) => {
+                    const active = receiptPrinterFormat === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setReceiptPrinterFormat(opt.id);
+                          setPreferredPrinterFormat(opt.id);
+                        }}
+                        className={`p-2 rounded-lg border text-left transition-all cursor-pointer ${
+                          active
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="text-[11px] font-extrabold leading-tight flex items-center justify-between">
+                          <span>{opt.shortLabel}</span>
+                          {active && <Check className="w-3 h-3 text-emerald-400 shrink-0" />}
+                        </div>
+                        <div
+                          className={`text-[9.5px] mt-0.5 truncate ${
+                            active ? 'text-slate-300' : 'text-slate-400'
+                          }`}
+                        >
+                          {opt.printerTypes}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
             {/* Modal Actions */}
-            <div className="p-3 bg-slate-50 border-t border-slate-100 flex items-center gap-2 shrink-0">
+            <div className="p-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => handleSendTicketWhatsApp()}
@@ -2896,17 +2989,29 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 title="Enviar comprobante de venta por WhatsApp"
               >
                 <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
-                <span className="truncate">Enviar WhatsApp</span>
+                <span className="truncate">WhatsApp</span>
               </button>
 
               <button
                 type="button"
-                onClick={handlePrintReceipt}
-                className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
-                title="Imprimir ticket físico"
+                onClick={() => handleDownloadSalePdf(receiptPrinterFormat)}
+                className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
+                title="Descargar factura o ticket como archivo .PDF directo"
               >
-                <Printer className="w-4 h-4" />
-                <span>Imprimir</span>
+                <Download className="w-4 h-4" />
+                <span>PDF</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handlePrintReceipt(receiptPrinterFormat)}
+                className="py-2.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
+                title="Imprimir en la impresora seleccionada"
+              >
+                <Printer className="w-4 h-4 text-emerald-400" />
+                <span>
+                  Imprimir ({PRINTER_FORMAT_OPTIONS.find((o) => o.id === receiptPrinterFormat)?.shortLabel})
+                </span>
               </button>
               <button
                 type="button"
@@ -2919,6 +3024,66 @@ export const SalesView: React.FC<SalesViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* ==================== MULTI-PRINTER & PDF MODAL FOR SALES REPORT ==================== */}
+      <PrintFormatModal
+        isOpen={showSalesReportPrintModal}
+        onClose={() => setShowSalesReportPrintModal(false)}
+        title="Reporte Ejecutivo de Ventas y Ganancias"
+        subtitle={`${filteredSalesHistory.length} transacciones filtradas`}
+        storeSettings={storeSettings}
+        defaultFormat="letter"
+        buildHtml={(fmt) =>
+          buildSalesReportHtml(
+            filteredSalesHistory,
+            {
+              periodLabel:
+                historyDateFilter === 'today'
+                  ? 'Hoy'
+                  : historyDateFilter === 'yesterday'
+                  ? 'Ayer'
+                  : historyDateFilter === 'week'
+                  ? 'Últimos 7 días'
+                  : historyDateFilter === 'month'
+                  ? 'Este mes'
+                  : 'Todo el historial',
+              count: salesMetrics.count,
+              itemsSold: salesMetrics.itemsSold,
+              revenue: salesMetrics.revenue,
+              totalCost: salesMetrics.totalCost,
+              profit: salesMetrics.profit,
+              marginPct: salesMetrics.marginPct,
+            },
+            storeSettings,
+            fmt
+          )
+        }
+        onDownloadPdf={() =>
+          downloadSalesReportPdf(
+            filteredSalesHistory,
+            {
+              periodLabel:
+                historyDateFilter === 'today'
+                  ? 'Hoy'
+                  : historyDateFilter === 'yesterday'
+                  ? 'Ayer'
+                  : historyDateFilter === 'week'
+                  ? 'Últimos 7 días'
+                  : historyDateFilter === 'month'
+                  ? 'Este mes'
+                  : 'Todo el historial',
+              count: salesMetrics.count,
+              itemsSold: salesMetrics.itemsSold,
+              revenue: salesMetrics.revenue,
+              totalCost: salesMetrics.totalCost,
+              profit: salesMetrics.profit,
+              marginPct: salesMetrics.marginPct,
+            },
+            storeSettings
+          )
+        }
+        showToast={showToast}
+      />
 
       {/* ==================== CONFIRM CANCEL SALE DIALOG ==================== */}
       <ConfirmDialog

@@ -341,6 +341,8 @@ export interface PurchaseInvoice {
   receivedBy?: string;
 }
 
+export type PrinterPaperFormat = '80mm' | '58mm' | 'letter' | 'half-letter';
+
 export interface StoreSettings {
   companyId?: string;
   storeName: string;
@@ -348,6 +350,9 @@ export interface StoreSettings {
   logoUrl?: string;
   phone?: string;
   address?: string;
+  storeRtn?: string;
+  defaultPrinterFormat?: PrinterPaperFormat;
+  receiptFooterText?: string;
   accessPassword?: string;
   whatsappOrderPhone?: string;
   catalogWelcomeMsg?: string;

@@ -243,27 +243,29 @@
 
 /* Print Styles */
 @media print {
-  body > * {
+  html,
+  body {
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  body > *:not(#gosen-print-portal) {
     display: none !important;
   }
-  #root {
+
+  #gosen-print-portal {
     display: block !important;
-  }
-  #root > * {
-    display: none !important;
-  }
-  #root > #printable-report {
-    display: block !important;
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    margin: 0;
-    padding: 1.5cm;
-    background: white !important;
-    color: black !important;
-  }
-  @page {
-    margin: 1cm;
+    position: relative !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #000000 !important;
   }
 }
+

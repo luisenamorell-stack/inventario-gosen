@@ -38,6 +38,17 @@ import {
   User,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
+import { PrintFormatModal } from './PrintFormatModal';
+import {
+  buildShiftArqueoHtml,
+  downloadShiftArqueoPdf,
+  buildCreditStatementHtml,
+  downloadCreditStatementPdf,
+  buildCreditPortfolioReportHtml,
+  downloadCreditPortfolioReportPdf,
+  buildIncomeStatementHtml,
+  downloadIncomeStatementPdf,
+} from '../utils/printPdfService';
 
 const EXPENSE_CATEGORIES: ExpenseCategory[] = [
   'Alquiler',
@@ -89,6 +100,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [countedCashInput, setCountedCashInput] = useState<string>('');
   const [closingNotes, setClosingNotes] = useState<string>('');
   const [isSavingShift, setIsSavingShift] = useState<boolean>(false);
+
+  // Print & PDF Modal States
+  const [shiftForPrintModal, setShiftForPrintModal] = useState<CashRegisterShift | null>(null);
+  const [creditSaleForPrintModal, setCreditSaleForPrintModal] = useState<SaleRecord | null>(null);
+  const [showCreditPortfolioPrintModal, setShowCreditPortfolioPrintModal] = useState<boolean>(false);
+  const [showIncomeStatementPrintModal, setShowIncomeStatementPrintModal] = useState<boolean>(false);
 
   // Live metrics for the currently open shift
   const activeShiftMetrics = useMemo(() => {
@@ -320,56 +337,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   };
 
   const handlePrintShiftReport = (shift: CashRegisterShift) => {
-    const win = window.open('', '_blank', 'width=480,height=700');
-    if (!win) return;
-    const diff = Number(shift.difference || 0);
-    const diffLabel =
-      Math.abs(diff) < 0.01
-        ? 'CUADRE EXACTO (L. 0.00)'
-        : diff > 0
-        ? `SOBRANTE (+L. ${diff.toFixed(2)})`
-        : `FALTANTE (-L. ${Math.abs(diff).toFixed(2)})`;
-
-    win.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Arqueo de Caja - ${storeSettings.storeName}</title>
-          <style>
-            body { font-family: 'Courier New', monospace; padding: 18px; color: #111; font-size: 13px; }
-            .center { text-align: center; }
-            .bold { font-weight: bold; }
-            .row { display: flex; justify-content: space-between; margin: 5px 0; }
-            .divider { border-top: 1px dashed #555; margin: 10px 0; }
-          </style>
-        </head>
-        <body>
-          <div class="center">
-            <h2 style="margin:0;">${storeSettings.storeName || 'TIENDA'}</h2>
-            <p style="margin:4px 0;">REPORTE DE ARQUEO Y CIERRE DE CAJA</p>
-          </div>
-          <div class="divider"></div>
-          <div class="row"><span>Apertura:</span><span>${shift.openedDate} (${shift.openedBy})</span></div>
-          <div class="row"><span>Cierre:</span><span>${shift.closedDate || 'En curso'} (${shift.closedBy || '-'})</span></div>
-          <div class="divider"></div>
-          <div class="row"><span>(+) Efectivo Inicial:</span><span>L. ${(shift.openingCash || 0).toFixed(2)}</span></div>
-          <div class="row"><span>(+) Ventas en Efectivo:</span><span>L. ${(shift.cashSalesTotal || 0).toFixed(2)}</span></div>
-          <div class="row"><span>(+) Abonos Crédito (Efectivo):</span><span>L. ${(shift.creditAbonosCashTotal || 0).toFixed(2)}</span></div>
-          <div class="row"><span>(-) Salidas de Caja:</span><span>- L. ${(shift.cashOutTotal || 0).toFixed(2)}</span></div>
-          <div class="divider"></div>
-          <div class="row bold"><span>(=) EFECTIVO ESPERADO:</span><span>L. ${(shift.expectedCashInDrawer || 0).toFixed(2)}</span></div>
-          <div class="row bold"><span>EFECTIVO FÍSICO CONTADO:</span><span>L. ${(shift.countedPhysicalCash || 0).toFixed(2)}</span></div>
-          <div class="row bold"><span>RESULTADO ARQUEO:</span><span>${diffLabel}</span></div>
-          <div class="divider"></div>
-          <div class="row"><span>Ventas por Transferencia:</span><span>L. ${(shift.transferSalesTotal || 0).toFixed(2)}</span></div>
-          <div class="row"><span>Ventas con Tarjeta:</span><span>L. ${(shift.cardSalesTotal || 0).toFixed(2)}</span></div>
-          <div class="row"><span>Ventas al Crédito (Fiado):</span><span>L. ${(shift.creditSalesTotal || 0).toFixed(2)}</span></div>
-          ${shift.notes ? `<div class="divider"></div><div><strong>Notas:</strong> ${shift.notes}</div>` : ''}
-          <script>window.onload = function(){ window.print(); setTimeout(() => window.close(), 400); };</script>
-        </body>
-      </html>
-    `);
-    win.document.close();
+    setShiftForPrintModal(shift);
   };
 
   // ==================== 2. CREDIT ACCOUNTS / CARTERA STATE ====================
@@ -709,7 +677,30 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             </div>
           </div>
 
-          {!activeShift && (
+          {activeShift ? (
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  handlePrintShiftReport({
+                    ...activeShift,
+                    cashSalesTotal: activeShiftMetrics.cashSales,
+                    transferSalesTotal: activeShiftMetrics.transferSales,
+                    cardSalesTotal: activeShiftMetrics.cardSales,
+                    creditSalesTotal: activeShiftMetrics.creditSales,
+                    creditAbonosCashTotal: activeShiftMetrics.creditAbonosCash,
+                    cashOutTotal: activeShiftMetrics.cashOutTotal,
+                    expectedCashInDrawer: activeShiftMetrics.expectedCash,
+                  })
+                }
+                className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs cursor-pointer transition-all flex items-center gap-1.5"
+                title="Imprimir o descargar en PDF el corte parcial del turno actual"
+              >
+                <Printer className="w-4 h-4 text-emerald-300" />
+                <span>Imprimir / PDF Corte Parcial</span>
+              </button>
+            </div>
+          ) : (
             <form onSubmit={handleOpenShift} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
@@ -1085,14 +1076,27 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             </span>
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <button
-                              type="button"
-                              onClick={() => handlePrintShiftReport(s)}
-                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
-                              title="Imprimir reporte de arqueo"
-                            >
-                              <Printer className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handlePrintShiftReport(s)}
+                                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                                title="Imprimir reporte de arqueo (Elegir Impresora)"
+                              >
+                                <Printer className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  downloadShiftArqueoPdf(s, storeSettings);
+                                  showToast('PDF de Arqueo de Caja descargado.', 'success');
+                                }}
+                                className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer"
+                                title="Descargar Arqueo en PDF (.pdf)"
+                              >
+                                <Download className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1102,6 +1106,20 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             </div>
           )}
         </div>
+
+        {/* Multi-Printer & PDF Modal for Shift Arqueo */}
+        {shiftForPrintModal && (
+          <PrintFormatModal
+            isOpen={Boolean(shiftForPrintModal)}
+            onClose={() => setShiftForPrintModal(null)}
+            title="Reporte de Arqueo y Cierre de Caja"
+            subtitle={`Cajero: ${shiftForPrintModal.closedBy || shiftForPrintModal.openedBy}`}
+            storeSettings={storeSettings}
+            buildHtml={(fmt) => buildShiftArqueoHtml(shiftForPrintModal, storeSettings, fmt)}
+            onDownloadPdf={() => downloadShiftArqueoPdf(shiftForPrintModal, storeSettings)}
+            showToast={showToast}
+          />
+        )}
       </div>
     );
   }
@@ -1166,39 +1184,57 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             />
           </div>
 
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+              <button
+                type="button"
+                onClick={() => setCreditFilter('pending')}
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
+                  creditFilter === 'pending'
+                    ? 'bg-amber-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Pendientes ({creditPortfolioStats.pendingAccountsCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreditFilter('paid')}
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
+                  creditFilter === 'paid'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Pagadas
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreditFilter('all')}
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
+                  creditFilter === 'all'
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Todas ({creditSales.length})
+              </button>
+            </div>
+
             <button
               type="button"
-              onClick={() => setCreditFilter('pending')}
-              className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
-                creditFilter === 'pending'
-                  ? 'bg-amber-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
+              onClick={() => {
+                if (filteredCreditSales.length === 0) {
+                  showToast('No hay cuentas por cobrar en esta vista para imprimir.', 'warning');
+                  return;
+                }
+                setShowCreditPortfolioPrintModal(true);
+              }}
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="Imprimir o descargar en PDF la Cartera de Cuentas por Cobrar"
             >
-              Pendientes ({creditPortfolioStats.pendingAccountsCount})
-            </button>
-            <button
-              type="button"
-              onClick={() => setCreditFilter('paid')}
-              className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
-                creditFilter === 'paid'
-                  ? 'bg-emerald-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Pagadas
-            </button>
-            <button
-              type="button"
-              onClick={() => setCreditFilter('all')}
-              className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
-                creditFilter === 'all'
-                  ? 'bg-slate-900 text-white shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Todas ({creditSales.length})
+              <Printer className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Imprimir / PDF Cartera</span>
             </button>
           </div>
         </div>
@@ -1349,14 +1385,24 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                     >
                       <WhatsAppIcon className="w-3.5 h-3.5 fill-white" />
-                      <span>Estado de Cuenta</span>
+                      <span>WhatsApp</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setCreditSaleForPrintModal(sale)}
+                      className="py-2 px-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
+                      title="Imprimir o descargar en PDF el Estado de Cuenta del cliente"
+                    >
+                      <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>PDF / Imprimir</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => onViewSaleTicket(sale)}
                       className="py-2 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs cursor-pointer"
-                      title="Ver Ticket"
+                      title="Ver Factura Original"
                     >
                       <Receipt className="w-4 h-4" />
                     </button>
@@ -1487,6 +1533,33 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             </div>
           </div>
         )}
+
+        {/* Multi-Printer & PDF Modal for Individual Customer Credit Statement */}
+        {creditSaleForPrintModal && (
+          <PrintFormatModal
+            isOpen={Boolean(creditSaleForPrintModal)}
+            onClose={() => setCreditSaleForPrintModal(null)}
+            title={`Estado de Cuenta — ${creditSaleForPrintModal.customerName || 'Cliente'}`}
+            subtitle={`Factura ${creditSaleForPrintModal.saleNumber}`}
+            storeSettings={storeSettings}
+            buildHtml={(fmt) => buildCreditStatementHtml(creditSaleForPrintModal, storeSettings, fmt)}
+            onDownloadPdf={() => downloadCreditStatementPdf(creditSaleForPrintModal, storeSettings)}
+            showToast={showToast}
+          />
+        )}
+
+        {/* Multi-Printer & PDF Modal for Credit Portfolio Report */}
+        <PrintFormatModal
+          isOpen={showCreditPortfolioPrintModal}
+          onClose={() => setShowCreditPortfolioPrintModal(false)}
+          title="Reporte General de Cartera de Cuentas por Cobrar"
+          subtitle={`${filteredCreditSales.length} cuentas filtradas`}
+          storeSettings={storeSettings}
+          defaultFormat="letter"
+          buildHtml={(fmt) => buildCreditPortfolioReportHtml(filteredCreditSales, storeSettings, fmt)}
+          onDownloadPdf={() => downloadCreditPortfolioReportPdf(filteredCreditSales, storeSettings)}
+          showToast={showToast}
+        />
       </div>
     );
   }
@@ -1506,28 +1579,40 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
-            {(
-              [
-                { id: 'today', label: 'Hoy' },
-                { id: 'week', label: '7 Días' },
-                { id: 'month', label: 'Este Mes' },
-                { id: 'all', label: 'Todo' },
-              ] as const
-            ).map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => setExpPeriodFilter(p.id)}
-                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
-                  expPeriodFilter === p.id
-                    ? 'bg-white text-slate-900 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+              {(
+                [
+                  { id: 'today', label: 'Hoy' },
+                  { id: 'week', label: '7 Días' },
+                  { id: 'month', label: 'Este Mes' },
+                  { id: 'all', label: 'Todo' },
+                ] as const
+              ).map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setExpPeriodFilter(p.id)}
+                  className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
+                    expPeriodFilter === p.id
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowIncomeStatementPrintModal(true)}
+              className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="Imprimir o descargar en PDF el Estado de Resultados y Gastos"
+            >
+              <Printer className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Imprimir / PDF Estado de Resultados</span>
+            </button>
           </div>
         </div>
 
@@ -1757,6 +1842,72 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           )}
         </div>
       </div>
+
+      {/* Multi-Printer & PDF Modal for Income Statement & Expenses */}
+      <PrintFormatModal
+        isOpen={showIncomeStatementPrintModal}
+        onClose={() => setShowIncomeStatementPrintModal(false)}
+        title="Estado de Resultados y Gastos Operativos"
+        subtitle={
+          expPeriodFilter === 'today'
+            ? 'Período: Hoy'
+            : expPeriodFilter === 'week'
+            ? 'Período: Últimos 7 Días'
+            : expPeriodFilter === 'month'
+            ? 'Período: Este Mes'
+            : 'Período: Histórico Completo'
+        }
+        storeSettings={storeSettings}
+        defaultFormat="letter"
+        buildHtml={(fmt) =>
+          buildIncomeStatementHtml(
+            {
+              periodLabel:
+                expPeriodFilter === 'today'
+                  ? 'Hoy'
+                  : expPeriodFilter === 'week'
+                  ? 'Últimos 7 Días'
+                  : expPeriodFilter === 'month'
+                  ? 'Este Mes'
+                  : 'Histórico Completo',
+              grossSalesRevenue: financialStatement.grossSalesRevenue,
+              totalCostOfGoods: financialStatement.totalCostOfGoods,
+              grossProfit: financialStatement.grossProfit,
+              totalOperatingExpenses: financialStatement.totalOperatingExpenses,
+              netFreeProfit: financialStatement.netFreeProfit,
+              netMarginPct: financialStatement.netMarginPct,
+              salesCount: financialStatement.salesCount,
+              expenses: financialStatement.filteredExpenses,
+            },
+            storeSettings,
+            fmt
+          )
+        }
+        onDownloadPdf={() =>
+          downloadIncomeStatementPdf(
+            {
+              periodLabel:
+                expPeriodFilter === 'today'
+                  ? 'Hoy'
+                  : expPeriodFilter === 'week'
+                  ? 'Últimos 7 Días'
+                  : expPeriodFilter === 'month'
+                  ? 'Este Mes'
+                  : 'Histórico Completo',
+              grossSalesRevenue: financialStatement.grossSalesRevenue,
+              totalCostOfGoods: financialStatement.totalCostOfGoods,
+              grossProfit: financialStatement.grossProfit,
+              totalOperatingExpenses: financialStatement.totalOperatingExpenses,
+              netFreeProfit: financialStatement.netFreeProfit,
+              netMarginPct: financialStatement.netMarginPct,
+              salesCount: financialStatement.salesCount,
+              expenses: financialStatement.filteredExpenses,
+            },
+            storeSettings
+          )
+        }
+        showToast={showToast}
+      />
     </div>
   );
 };

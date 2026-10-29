@@ -3,9 +3,12 @@ import { Product, Supplier, AuditSessionItem, GroupedAuditItem, AuditHistoryReco
 import { playSound } from '../utils/audio';
 import { PrintableReport } from './PrintableReport';
 import { ConfirmDialog } from './ConfirmDialog';
+import { PrintFormatModal } from './PrintFormatModal';
+import { buildAuditReportHtml, downloadAuditReportPdf } from '../utils/printPdfService';
 import {
   ClipboardList,
   Printer,
+  Download,
   Sparkles,
   Camera,
   CameraOff,
@@ -161,6 +164,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
   // Result / Summary Modal
   const [isResultModalOpen, setIsResultModalOpen] = useState(false);
+  const [showAuditPrintModal, setShowAuditPrintModal] = useState(false);
   const [summaryData, setSummaryData] = useState<{
     match: number;
     missing: number;
@@ -699,7 +703,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
   };
 
   const handlePrint = () => {
-    window.print();
+    setShowAuditPrintModal(true);
   };
 
   // Filtered products for Batch Modal (ONLY items that belong to the current audit session)
@@ -2040,21 +2044,47 @@ export const AuditView: React.FC<AuditViewProps> = ({
               <p className="text-xs text-slate-500">
                 ¿Deseas aplicar estos cambios al inventario del sistema?
               </p>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
-                  onClick={handlePrint}
-                  className="px-4 py-2 text-slate-700 font-medium hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors text-sm flex items-center gap-2 cursor-pointer"
+                  type="button"
+                  onClick={() => {
+                    downloadAuditReportPdf(
+                      {
+                        dateStr: new Date().toLocaleString('es-HN', { dateStyle: 'full', timeStyle: 'short' }),
+                        scope: activeScope.description,
+                        match: summaryData.match,
+                        missing: summaryData.missing,
+                        extra: summaryData.extra,
+                        netImpact: summaryData.netImpact,
+                        groupedItems,
+                        aiSummary: summaryData.aiSummary,
+                      },
+                      storeSettings
+                    );
+                    showToast('Reporte de auditoría descargado en PDF (.pdf)', 'success');
+                  }}
+                  className="px-4 py-2 text-indigo-700 font-bold bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition-colors text-sm flex items-center gap-2 cursor-pointer"
                 >
-                  <Printer className="w-4 h-4" />
-                  <span>Imprimir Reporte</span>
+                  <Download className="w-4 h-4" />
+                  <span>Descargar PDF</span>
                 </button>
                 <button
+                  type="button"
+                  onClick={handlePrint}
+                  className="px-4 py-2 text-slate-800 font-bold hover:bg-slate-100 border border-slate-300 rounded-xl transition-colors text-sm flex items-center gap-2 cursor-pointer"
+                >
+                  <Printer className="w-4 h-4 text-emerald-600" />
+                  <span>Imprimir (Elegir Impresora)</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setIsResultModalOpen(false)}
                   className="px-5 py-2 text-slate-600 font-medium hover:bg-slate-100 rounded-xl transition-colors text-sm cursor-pointer"
                 >
                   Descartar
                 </button>
                 <button
+                  type="button"
                   onClick={handleApplyChanges}
                   className="px-5 py-2 bg-emerald-600 text-white font-medium hover:bg-emerald-700 rounded-xl transition-colors shadow-sm text-sm cursor-pointer"
                 >
@@ -2065,6 +2095,48 @@ export const AuditView: React.FC<AuditViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Multi-Printer & PDF Center Modal for Audit Report */}
+      <PrintFormatModal
+        isOpen={showAuditPrintModal}
+        onClose={() => setShowAuditPrintModal(false)}
+        title="Imprimir / Exportar Reporte de Auditoría Física"
+        subtitle={`Alcance: ${activeScope.description} (${groupedItems.length} grupos)`}
+        storeSettings={storeSettings}
+        defaultFormat="letter"
+        buildHtml={(fmt) =>
+          buildAuditReportHtml(
+            {
+              dateStr: new Date().toLocaleString('es-HN', { dateStyle: 'full', timeStyle: 'short' }),
+              scope: activeScope.description,
+              match: summaryData.match,
+              missing: summaryData.missing,
+              extra: summaryData.extra,
+              netImpact: summaryData.netImpact,
+              groupedItems,
+              aiSummary: summaryData.aiSummary,
+            },
+            storeSettings,
+            fmt
+          )
+        }
+        onDownloadPdf={() =>
+          downloadAuditReportPdf(
+            {
+              dateStr: new Date().toLocaleString('es-HN', { dateStyle: 'full', timeStyle: 'short' }),
+              scope: activeScope.description,
+              match: summaryData.match,
+              missing: summaryData.missing,
+              extra: summaryData.extra,
+              netImpact: summaryData.netImpact,
+              groupedItems,
+              aiSummary: summaryData.aiSummary,
+            },
+            storeSettings
+          )
+        }
+        showToast={showToast}
+      />
 
       {/* Hidden element for printing */}
       <PrintableReport

@@ -2108,6 +2108,7 @@ export const App: React.FC = () => {
             <InventoryView
               inventory={inventory}
               suppliers={suppliers}
+              storeSettings={storeSettings}
               isLoading={isInventoryLoading}
               initialSearchCode={inventorySearchQuery}
               maxProducts={companyMaxProducts}

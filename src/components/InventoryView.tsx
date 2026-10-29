@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Product, Supplier } from '../types';
+import { Product, Supplier, StoreSettings } from '../types';
 import {
   Plus,
   Search,
@@ -18,7 +18,9 @@ import {
   Tag,
   Percent,
   Check,
-  TrendingUp
+  TrendingUp,
+  Printer,
+  Download
 } from 'lucide-react';
 
 import { ConfirmDialog } from './ConfirmDialog';
@@ -28,10 +30,13 @@ import {
   InventoryTableRowsSkeleton,
 } from './SkeletonLoaders';
 import { BulkStockImportModal, StockUpdateMode } from './BulkStockImportModal';
+import { PrintFormatModal } from './PrintFormatModal';
+import { buildInventoryReportHtml, downloadInventoryReportPdf } from '../utils/printPdfService';
 
 interface InventoryViewProps {
   inventory: Product[];
   suppliers: Supplier[];
+  storeSettings?: StoreSettings;
   isLoading?: boolean;
   initialSearchCode?: string;
   maxProducts?: number;
@@ -52,6 +57,7 @@ interface InventoryViewProps {
 export const InventoryView: React.FC<InventoryViewProps> = ({
   inventory,
   suppliers,
+  storeSettings,
   isLoading = false,
   initialSearchCode = '',
   maxProducts = 0,
@@ -85,6 +91,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(showModalInitially);
   const [isBulkImportOpen, setIsBulkImportOpen] = useState(false);
+  const [showInventoryPrintModal, setShowInventoryPrintModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
@@ -400,6 +407,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
           <button
             type="button"
+            onClick={() => setShowInventoryPrintModal(true)}
+            className="bg-white text-slate-800 px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-50 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-300 whitespace-nowrap"
+            title="Imprimir catálogo o descargar PDF de inventario valorizado en cualquier impresora"
+          >
+            <Printer className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Imprimir / PDF</span>
+          </button>
+          <button
+            type="button"
             onClick={() => {
               if (maxProducts > 0 && inventory.length >= maxProducts) {
                 if (showToast) {
@@ -421,7 +437,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <button
             type="button"
             onClick={handleOpenCreate}
-            className="bg-emerald-600 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer whitespace-nowrap"
+            className="col-span-2 sm:col-span-1 bg-emerald-600 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer whitespace-nowrap"
           >
             <Plus className="w-4 h-4 shrink-0" />
             <span>Nuevo Artículo</span>
@@ -1739,6 +1755,32 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             }
           }
         }}
+        showToast={showToast}
+      />
+
+      {/* Multi-Printer & PDF Center Modal for Inventory Valuation Report */}
+      <PrintFormatModal
+        isOpen={showInventoryPrintModal}
+        onClose={() => setShowInventoryPrintModal(false)}
+        title="Reporte de Inventario y Valoración Financiera"
+        subtitle={`${filteredInventory.length} productos filtrados (${inventoryFinancialSummary.totalUnits} unidades)`}
+        storeSettings={storeSettings}
+        defaultFormat="letter"
+        buildHtml={(fmt) =>
+          buildInventoryReportHtml(
+            filteredInventory,
+            storeSettings,
+            fmt,
+            `Categoría: ${selectedCategory === 'all' ? 'Todas' : selectedCategory} | Proveedor: ${selectedSupplier === 'all' ? 'Todos' : selectedSupplier}`
+          )
+        }
+        onDownloadPdf={() =>
+          downloadInventoryReportPdf(
+            filteredInventory,
+            storeSettings,
+            `Categoría: ${selectedCategory === 'all' ? 'Todas' : selectedCategory} | Proveedor: ${selectedSupplier === 'all' ? 'Todos' : selectedSupplier}`
+          )
+        }
         showToast={showToast}
       />
     </div>

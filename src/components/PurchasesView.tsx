@@ -5,7 +5,19 @@ import {
   PurchaseInvoice,
   PurchaseItem,
   StoreSettings,
+  PrinterPaperFormat,
 } from '../types';
+import {
+  PRINTER_FORMAT_OPTIONS,
+  getPreferredPrinterFormat,
+  setPreferredPrinterFormat,
+  printHtmlDocument,
+  buildPurchaseInvoiceHtml,
+  downloadPurchaseInvoicePdf,
+  buildPurchasesReportHtml,
+  downloadPurchasesReportPdf,
+} from '../utils/printPdfService';
+import { PrintFormatModal } from './PrintFormatModal';
 import {
   FileText,
   Truck,
@@ -95,6 +107,10 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
   // ------------------ HISTORY & RECEIPT STATE ------------------
   const [selectedInvoiceForModal, setSelectedInvoiceForModal] = useState<PurchaseInvoice | null>(null);
   const [showInvoiceDetailsModal, setShowInvoiceDetailsModal] = useState<boolean>(false);
+  const [invoicePrinterFormat, setInvoicePrinterFormat] = useState<PrinterPaperFormat>(() =>
+    getPreferredPrinterFormat(storeSettings)
+  );
+  const [showPurchasesReportPrintModal, setShowPurchasesReportPrintModal] = useState<boolean>(false);
   const [invoiceToCancel, setInvoiceToCancel] = useState<PurchaseInvoice | null>(null);
   const [isCancelling, setIsCancelling] = useState<boolean>(false);
 
@@ -487,44 +503,24 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
     showToast('Reporte de compras exportado a CSV.', 'success');
   };
 
-  // Print voucher
-  const handlePrintReceipt = () => {
-    if (!receiptPrintRef.current) return;
-    const printContents = receiptPrintRef.current.innerHTML;
-    const printWindow = window.open('', '_blank', 'width=550,height=750');
-    if (printWindow) {
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Comprobante de Ingreso de Factura - ${selectedInvoiceForModal?.invoiceNumber}</title>
-            <style>
-              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; color: #1e293b; font-size: 13px; line-height: 1.4; }
-              .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 16px; }
-              .title { font-size: 18px; font-weight: bold; color: #0f172a; margin-bottom: 4px; }
-              .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
-              .table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-              .table th { background: #f8fafc; border-bottom: 2px solid #cbd5e1; padding: 6px; text-align: left; font-size: 11px; text-transform: uppercase; }
-              .table td { border-bottom: 1px solid #f1f5f9; padding: 6px; font-size: 12px; }
-              .text-right { text-align: right; }
-              .font-bold { font-weight: bold; }
-              .totals { margin-top: 16px; border-top: 2px solid #e2e8f0; padding-top: 10px; }
-              @media print { body { padding: 0; } }
-            </style>
-          </head>
-          <body>
-            ${printContents}
-            <script>
-              window.onload = function() {
-                window.print();
-                setTimeout(() => window.close(), 500);
-              };
-            </script>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-    }
+  // Print voucher on any selected printer format
+  const handlePrintReceipt = (formatOverride?: PrinterPaperFormat, invOverride?: PurchaseInvoice) => {
+    const targetInv = invOverride || selectedInvoiceForModal;
+    if (!targetInv) return;
+    const fmt = formatOverride || invoicePrinterFormat;
+    setPreferredPrinterFormat(fmt);
+    const html = buildPurchaseInvoiceHtml(targetInv, storeSettings, fmt);
+    printHtmlDocument(html, `Factura Compra ${targetInv.invoiceNumber}`, fmt);
+    const opt = PRINTER_FORMAT_OPTIONS.find((o) => o.id === fmt);
+    showToast(`Abriendo impresión en formato ${opt?.shortLabel || fmt}...`, 'info');
+  };
+
+  // Direct PDF download for purchase invoice
+  const handleDownloadInvoicePdf = (invOverride?: PurchaseInvoice) => {
+    const targetInv = invOverride || selectedInvoiceForModal;
+    if (!targetInv) return;
+    downloadPurchaseInvoicePdf(targetInv, storeSettings);
+    showToast(`PDF de Factura ${targetInv.invoiceNumber} descargado.`, 'success');
   };
 
   // Send purchase invoice summary to supplier or manager via WhatsApp
@@ -1270,6 +1266,23 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                 </button>
               </div>
 
+              {/* Print / PDF Purchases Report */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (filteredPurchases.length === 0) {
+                    showToast('No hay facturas de compra para imprimir o exportar.', 'warning');
+                    return;
+                  }
+                  setShowPurchasesReportPrintModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg transition-colors cursor-pointer shadow-2xs"
+                title="Imprimir reporte de compras en cualquier impresora o guardar en PDF"
+              >
+                <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Imprimir / PDF</span>
+              </button>
+
               {/* Export to CSV */}
               <button
                 type="button"
@@ -1278,7 +1291,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                 title="Exportar compras a CSV"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>Exportar</span>
+                <span>CSV</span>
               </button>
             </div>
           </div>
@@ -1445,17 +1458,27 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                           </td>
                           <td className="py-3 px-4 text-center">
                             <div className="flex items-center justify-center gap-1">
-                              {/* View detail modal */}
+                              {/* View / Print modal */}
                               <button
                                 type="button"
                                 onClick={() => {
                                   setSelectedInvoiceForModal(purchase);
                                   setShowInvoiceDetailsModal(true);
                                 }}
-                                className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                                title="Ver comprobante de recepción"
+                                className="p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                                title="Ver e imprimir comprobante de recepción"
                               >
-                                <Eye className="w-4 h-4" />
+                                <Printer className="w-4 h-4" />
+                              </button>
+
+                              {/* Direct PDF download */}
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadInvoicePdf(purchase)}
+                                className="p-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="Descargar Factura de Compra en PDF (.pdf)"
+                              >
+                                <Download className="w-4 h-4" />
                               </button>
 
                               {/* Cancel invoice button */}
@@ -1617,10 +1640,54 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   </div>
                 )}
               </div>
+              {/* Multi-Printer Format Selector inside Purchase Invoice Modal */}
+              <div className="bg-slate-100 border border-slate-200 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                    <Printer className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Formato de Impresora / Papel:</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full">
+                    Multi-Impresora + PDF
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {PRINTER_FORMAT_OPTIONS.map((opt) => {
+                    const active = invoicePrinterFormat === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setInvoicePrinterFormat(opt.id);
+                          setPreferredPrinterFormat(opt.id);
+                        }}
+                        className={`p-2 rounded-lg border text-left transition-all cursor-pointer ${
+                          active
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="text-[11px] font-extrabold leading-tight flex items-center justify-between">
+                          <span>{opt.shortLabel}</span>
+                          {active && <Check className="w-3 h-3 text-emerald-400 shrink-0" />}
+                        </div>
+                        <div
+                          className={`text-[9.5px] mt-0.5 truncate ${
+                            active ? 'text-slate-300' : 'text-slate-400'
+                          }`}
+                        >
+                          {opt.printerTypes}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
             {/* Modal Actions */}
-            <div className="p-3 bg-slate-50 border-t border-slate-100 flex items-center gap-2 shrink-0">
+            <div className="p-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={handleSendInvoiceWhatsApp}
@@ -1628,17 +1695,29 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                 title="Compartir comprobante de compra por WhatsApp"
               >
                 <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
-                <span className="truncate">Enviar WhatsApp</span>
+                <span className="truncate">WhatsApp</span>
               </button>
 
               <button
                 type="button"
-                onClick={handlePrintReceipt}
-                className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
-                title="Imprimir comprobante físico"
+                onClick={() => handleDownloadInvoicePdf()}
+                className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
+                title="Descargar comprobante de compra en PDF (.pdf)"
               >
-                <Printer className="w-4 h-4" />
-                <span>Imprimir</span>
+                <Download className="w-4 h-4" />
+                <span>PDF</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handlePrintReceipt(invoicePrinterFormat)}
+                className="py-2.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
+                title="Imprimir comprobante en la impresora seleccionada"
+              >
+                <Printer className="w-4 h-4 text-emerald-400" />
+                <span>
+                  Imprimir ({PRINTER_FORMAT_OPTIONS.find((o) => o.id === invoicePrinterFormat)?.shortLabel})
+                </span>
               </button>
               <button
                 type="button"
@@ -1651,6 +1730,58 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* ==================== MULTI-PRINTER & PDF MODAL FOR PURCHASES REPORT ==================== */}
+      <PrintFormatModal
+        isOpen={showPurchasesReportPrintModal}
+        onClose={() => setShowPurchasesReportPrintModal(false)}
+        title="Reporte General de Facturas de Compra"
+        subtitle={`${filteredPurchases.length} facturas filtradas`}
+        storeSettings={storeSettings}
+        defaultFormat="letter"
+        buildHtml={(fmt) =>
+          buildPurchasesReportHtml(
+            filteredPurchases,
+            {
+              periodLabel:
+                historyDateFilter === 'today'
+                  ? 'Hoy'
+                  : historyDateFilter === 'week'
+                  ? 'Últimos 7 días'
+                  : historyDateFilter === 'month'
+                  ? 'Este mes'
+                  : 'Todas las fechas',
+              count: purchaseMetrics.count,
+              totalUnits: purchaseMetrics.totalUnits,
+              totalSpent: purchaseMetrics.totalSpent,
+              activeSuppliersCount: purchaseMetrics.activeSuppliersCount,
+            },
+            storeSettings,
+            fmt
+          )
+        }
+        onDownloadPdf={() =>
+          downloadPurchasesReportPdf(
+            filteredPurchases,
+            {
+              periodLabel:
+                historyDateFilter === 'today'
+                  ? 'Hoy'
+                  : historyDateFilter === 'week'
+                  ? 'Últimos 7 días'
+                  : historyDateFilter === 'month'
+                  ? 'Este mes'
+                  : 'Todas las fechas',
+              count: purchaseMetrics.count,
+              totalUnits: purchaseMetrics.totalUnits,
+              totalSpent: purchaseMetrics.totalSpent,
+              activeSuppliersCount: purchaseMetrics.activeSuppliersCount,
+            },
+            storeSettings
+          )
+        }
+        showToast={showToast}
+      />
 
       {/* ==================== NEW PRODUCT MODAL ==================== */}
       {showNewProductModal && (
