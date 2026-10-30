@@ -942,7 +942,7 @@ export async function sendEscPosToConnectedPrinter(data: Uint8Array): Promise<bo
       await fetch(`http://${ip}:${port}/`, {
         method: 'POST',
         mode: 'no-cors',
-        body: new Blob([data], { type: 'application/octet-stream' }),
+        body: new Blob([data.buffer as ArrayBuffer], { type: 'application/octet-stream' }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);

@@ -562,7 +562,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       </body>
       </html>
     `;
-    printHtmlDocument(html, `Recibo SaaS ${payment.receiptNumber}`);
+    printHtmlDocument(html, `Recibo SaaS ${payment.receiptNumber}`, 'letter');
   };
 
   // Global / Targeted Announcements Handlers

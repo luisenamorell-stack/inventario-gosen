@@ -28,10 +28,27 @@
 <body class="w-full h-full overflow-hidden bg-slate-50 text-slate-800 antialiased selection:bg-emerald-500 selection:text-white">
   <div id="root" class="h-full w-full"></div>
   <script>
+    window.addEventListener('unhandledrejection', function(event) {
+      var reason = event && event.reason;
+      var msg = reason && (reason.message || String(reason)) || '';
+      var stack = reason && reason.stack || '';
+      if (msg.indexOf('WebSocket closed without opened') !== -1 || stack.indexOf('@vite/client') !== -1) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
+    window.addEventListener('error', function(event) {
+      var msg = (event && event.message) || '';
+      var file = (event && event.filename) || '';
+      if (msg.indexOf('WebSocket closed without opened') !== -1 || file.indexOf('@vite/client') !== -1) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
     if ('caches' in window) {
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
-          if (key !== 'tienda-gosen-v6') {
+          if (key !== 'tienda-gosen-v7') {
             caches.delete(key);
           }
         });

@@ -1769,7 +1769,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         buildHtml={(fmt) =>
           buildInventoryReportHtml(
             filteredInventory,
-            storeSettings,
+            storeSettings || { storeName: 'Tienda Gosén' },
             fmt,
             `Categoría: ${selectedCategory === 'all' ? 'Todas' : selectedCategory} | Proveedor: ${selectedSupplier === 'all' ? 'Todos' : selectedSupplier}`
           )
@@ -1777,7 +1777,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         onDownloadPdf={() =>
           downloadInventoryReportPdf(
             filteredInventory,
-            storeSettings,
+            storeSettings || { storeName: 'Tienda Gosén' },
             `Categoría: ${selectedCategory === 'all' ? 'Todas' : selectedCategory} | Proveedor: ${selectedSupplier === 'all' ? 'Todos' : selectedSupplier}`
           )
         }

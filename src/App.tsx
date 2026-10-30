@@ -1482,7 +1482,9 @@ export const App: React.FC = () => {
         action: `Registró abono a Venta N° ${sale.saleNumber} (${sale.customerName || 'Cliente'})`,
         module: 'sales',
         details: `Abono: L. ${abone.amount.toFixed(2)} (${abone.paymentMethod.toUpperCase()}) - Restante: L. ${(updatedSale.balanceDue || 0).toFixed(2)}`,
-      });
+      }, activeCompanyId);
+
+      return updatedSale;
     } finally {
       setIsSyncing(false);
     }

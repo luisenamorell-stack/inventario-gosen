@@ -1,5 +1,5 @@
 // Service Worker for Tienda Gosén PWA (Network-First to guarantee fresh UI updates)
-const CACHE_NAME = 'tienda-gosen-v6';
+const CACHE_NAME = 'tienda-gosen-v7';
 const STATIC_ASSETS = [
   '/manifest.json',
   '/favicon.png',
@@ -40,7 +40,14 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
 
-  if (url.origin !== self.origin || url.pathname.startsWith('/api/')) {
+  if (
+    url.origin !== self.origin ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/@vite/') ||
+    url.pathname.startsWith('/@react-refresh') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/')
+  ) {
     return;
   }
 

@@ -1913,7 +1913,7 @@ export function buildPurchaseInvoiceHtml(
                 <td><strong>${it.name}</strong>${it.size ? ` (${it.size})` : ''}${it.category ? ` <span style="color:#64748b;">• ${it.category}</span>` : ''}</td>
                 <td class="text-center font-bold">${it.quantity}</td>
                 <td class="text-right">${formatCurrencyL(it.cost)}</td>
-                <td class="text-right" style="color:#047857;">${formatCurrencyL(it.price || 0)}</td>
+                <td class="text-right" style="color:#047857;">${formatCurrencyL(it.salePrice || (it as any).price || 0)}</td>
                 <td class="text-right font-bold">${formatCurrencyL(it.subtotal)}</td>
               </tr>
             `
@@ -2020,7 +2020,7 @@ export async function downloadPurchaseInvoicePdf(
       [it.category, it.size ? `Talla ${it.size}` : ''].filter(Boolean).join(' • ') || 'General',
       String(it.quantity),
       formatCurrencyL(it.cost),
-      formatCurrencyL(it.price || 0),
+      formatCurrencyL(it.salePrice || (it as any).price || 0),
       formatCurrencyL(it.subtotal),
     ]),
     theme: 'grid',
@@ -2424,7 +2424,7 @@ export async function downloadShiftArqueoPdf(
     head: [['Concepto Financiero del Turno de Caja', 'Detalle Operativo', 'Monto Registrado']],
     body: [
       ['(+) Efectivo Inicial de Apertura', `Recibido por ${shift.openedBy}`, formatCurrencyL(shift.openingCash || 0)],
-      ['(+) Ventas Cobradas en Efectivo', `${shift.salesCount || 0} transacciones en el turno`, formatCurrencyL(shift.cashSalesTotal || 0)],
+      ['(+) Ventas Cobradas en Efectivo', `${(shift as any).salesCount || 0} transacciones en el turno`, formatCurrencyL(shift.cashSalesTotal || 0)],
       ['(+) Abonos de Cartera de Crédito en Efectivo', 'Recuperación de cartera en efectivo', formatCurrencyL(shift.creditAbonosCashTotal || 0)],
       ['(-) Salidas de Efectivo / Gastos Menores de Caja', `${(shift.cashMovements || []).length} salidas registradas`, `-${formatCurrencyL(shift.cashOutTotal || 0)}`],
       ['(=) EFECTIVO ESPERADO EN GAVETA', 'Total teórico en físico', formatCurrencyL(shift.expectedCashInDrawer || 0)],
@@ -2456,7 +2456,7 @@ export async function downloadShiftArqueoPdf(
       body: shift.cashMovements.map((m) => [
         m.dateFormatted,
         m.reason,
-        m.registeredBy,
+        m.user || shift.openedBy,
         `-${formatCurrencyL(m.amount)}`,
       ]),
       theme: 'grid',

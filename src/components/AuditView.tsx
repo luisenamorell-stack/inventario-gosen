@@ -62,6 +62,9 @@ export const AuditView: React.FC<AuditViewProps> = ({
   showToast,
   storeSettings,
 }) => {
+  const resolvedStoreSettings: StoreSettings = storeSettings || {
+    storeName: 'Tienda Gosén',
+  };
   const [isAuditing, setIsAuditing] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showMatchAllConfirm, setShowMatchAllConfirm] = useState(false);
@@ -2059,7 +2062,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
                         groupedItems,
                         aiSummary: summaryData.aiSummary,
                       },
-                      storeSettings
+                      resolvedStoreSettings
                     );
                     showToast('Reporte de auditoría descargado en PDF (.pdf)', 'success');
                   }}
@@ -2102,7 +2105,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
         onClose={() => setShowAuditPrintModal(false)}
         title="Imprimir / Exportar Reporte de Auditoría Física"
         subtitle={`Alcance: ${activeScope.description} (${groupedItems.length} grupos)`}
-        storeSettings={storeSettings}
+        storeSettings={resolvedStoreSettings}
         defaultFormat="letter"
         buildHtml={(fmt) =>
           buildAuditReportHtml(
@@ -2116,7 +2119,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
               groupedItems,
               aiSummary: summaryData.aiSummary,
             },
-            storeSettings,
+            resolvedStoreSettings,
             fmt
           )
         }
@@ -2132,7 +2135,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
               groupedItems,
               aiSummary: summaryData.aiSummary,
             },
-            storeSettings
+            resolvedStoreSettings
           )
         }
         showToast={showToast}
