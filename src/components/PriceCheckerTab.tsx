@@ -38,6 +38,22 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
+  const resultCardRef = useRef<HTMLDivElement | null>(null);
+  const scannerBoxRef = useRef<HTMLDivElement | null>(null);
+  const inventoryRef = useRef<Product[]>(inventory);
+
+  useEffect(() => {
+    inventoryRef.current = inventory;
+  }, [inventory]);
+
+  const scrollToResultCard = () => {
+    setTimeout(() => {
+      resultCardRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }, 80);
+  };
 
   // Live suggestions matching by SKU/code or Product Name
   const matchingSuggestions = useMemo(() => {
@@ -98,6 +114,10 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
     setSearchedCode(product.code);
     setInputCode('');
     setShowSuggestions(false);
+    if (isCameraActive) {
+      stopScanner();
+    }
+    scrollToResultCard();
   };
 
   const handleSearch = (queryToSearch: string, isVariantSwitch = false) => {
@@ -105,8 +125,10 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
     const normQuery = normalizeText(raw);
     if (!normQuery) return;
 
+    const currentInventory = inventoryRef.current;
+
     // 1. Exact SKU/Code or Name-Size match first (ideal for barcode scanners & variant buttons)
-    let found = inventory.find(
+    let found = currentInventory.find(
       (i) =>
         normalizeText(i.code) === normQuery ||
         (i.size && normalizeText(`${i.name}-${i.size}`) === normQuery) ||
@@ -115,7 +137,7 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
 
     // 2. Fallback to partial SKU or Product Name match
     if (!found) {
-      found = inventory.find(
+      found = currentInventory.find(
         (i) =>
           normalizeText(i.code).includes(normQuery) ||
           normalizeText(i.name).includes(normQuery) ||
@@ -137,11 +159,18 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
       playSound('error');
       setSelectedProduct(null);
     }
+
+    if (!isVariantSwitch) {
+      scrollToResultCard();
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (inputCode.trim()) {
+      if (isCameraActive) {
+        stopScanner();
+      }
       handleSearch(inputCode);
       setInputCode('');
     }
@@ -158,8 +187,12 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
       scannerRef.current = html5QrCode;
       setIsCameraActive(true);
 
+      setTimeout(() => {
+        scannerBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 60);
+
       const config = {
-        fps: 10,
+        fps: 12,
         qrbox: { width: 250, height: 160 },
         aspectRatio: 1.0,
       };
@@ -167,15 +200,11 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
       await html5QrCode.start(
         { facingMode: 'environment' },
         config,
-        (decodedText) => {
+        async (decodedText) => {
           if (scannerRef.current && scannerRef.current.getState() === Html5QrcodeScannerState.SCANNING) {
-            scannerRef.current.pause();
+            // Immediately stop and close the camera so the user sees the scanned product right away
+            await stopScanner();
             handleSearch(decodedText);
-            setTimeout(() => {
-              if (scannerRef.current && scannerRef.current.getState() === Html5QrcodeScannerState.PAUSED) {
-                scannerRef.current.resume();
-              }
-            }, 1200);
           }
         },
         () => {}
@@ -189,17 +218,17 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
   };
 
   const stopScanner = async () => {
-    if (scannerRef.current) {
+    const activeScanner = scannerRef.current;
+    scannerRef.current = null;
+    setIsCameraActive(false);
+    if (activeScanner) {
       try {
-        const state = scannerRef.current.getState();
+        const state = activeScanner.getState();
         if (state === Html5QrcodeScannerState.SCANNING || state === Html5QrcodeScannerState.PAUSED) {
-          await scannerRef.current.stop();
+          await activeScanner.stop();
         }
       } catch (err) {
         console.error('Error stopping scanner:', err);
-      } finally {
-        scannerRef.current = null;
-        setIsCameraActive(false);
       }
     }
   };
@@ -231,16 +260,19 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
 
   return (
     <div className="flex-1 min-h-0 h-full w-full p-3 sm:p-6 lg:p-8 bg-slate-100 overflow-y-auto scroll-container pb-36 md:pb-24">
-      <header className="mb-6 text-center max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold text-slate-800">Verificador de Precios</h1>
-        <p className="text-slate-500 mt-1">
-          Escanea el código de barras o busca por <strong>SKU / código</strong> o <strong>nombre del artículo</strong> para verificar su precio y stock al instante.
+      <header className="mb-4 text-center max-w-2xl mx-auto">
+        <h1 className="text-2xl sm:text-3xl font-bold text-slate-800">Verificador de Precios</h1>
+        <p className="text-slate-500 text-xs sm:text-sm mt-1">
+          Escanea el código de barras o busca por <strong>SKU / código</strong> o <strong>nombre del artículo</strong> para ver su precio al instante.
         </p>
       </header>
 
-      <div className="max-w-xl mx-auto w-full flex flex-col gap-6">
+      <div className="max-w-xl mx-auto w-full flex flex-col gap-4">
         {/* Input & Scanner Card */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col items-center relative">
+        <div
+          ref={scannerBoxRef}
+          className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col items-center relative"
+        >
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-emerald-400 rounded-t-2xl"></div>
 
           {/* Camera Viewport */}
@@ -392,158 +424,184 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
         </div>
 
         {/* Search Result Display */}
-        {selectedProduct ? (
-          <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-100 text-center animate-in fade-in zoom-in-95 duration-200">
-            {/* Image Preview */}
-            <div className="flex justify-center mb-4">
-              {selectedProduct.img ? (
-                <img
-                  src={selectedProduct.img}
-                  alt={selectedProduct.name}
-                  className="w-32 h-32 object-cover rounded-2xl shadow-sm border border-slate-200"
-                />
-              ) : (
-                <div className="w-32 h-32 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-300 border border-slate-200">
-                  <Box className="w-16 h-16" />
+        <div ref={resultCardRef} className="scroll-mt-3">
+          {selectedProduct ? (
+            <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-xl border-2 border-emerald-500/30 text-center animate-in fade-in zoom-in-95 duration-200">
+              {/* Quick Re-Scan Bar */}
+              <div className="flex items-center justify-between gap-2 mb-4 pb-3 border-b border-slate-100">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-lg">
+                  <Barcode className="w-3.5 h-3.5" />
+                  Artículo Escaneado
+                </span>
+                <button
+                  type="button"
+                  onClick={startScanner}
+                  className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Escanear Otro</span>
+                </button>
+              </div>
+
+              {/* Image Preview */}
+              <div className="flex justify-center mb-4">
+                {selectedProduct.img ? (
+                  <img
+                    src={selectedProduct.img}
+                    alt={selectedProduct.name}
+                    className="w-32 h-32 object-cover rounded-2xl shadow-sm border border-slate-200"
+                  />
+                ) : (
+                  <div className="w-32 h-32 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-300 border border-slate-200">
+                    <Box className="w-16 h-16" />
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs font-bold text-blue-500 uppercase tracking-widest mb-1">
+                {selectedProduct.category}
+              </p>
+              <h2 className="text-2xl sm:text-3xl font-black text-slate-800 mb-1 leading-tight">
+                {selectedProduct.name}
+              </h2>
+              <p className="text-slate-400 font-mono text-xs mb-5">
+                Cód: {selectedProduct.code}
+              </p>
+
+              {/* Price Box */}
+              {(() => {
+                const basePrice = Number(selectedProduct.price) || 0;
+                const disc = Math.min(basePrice, Math.max(0, Number(selectedProduct.discount) || 0));
+                const finalPrice = Math.max(0, basePrice - disc);
+
+                return (
+                  <div
+                    className={`rounded-2xl p-5 sm:p-6 border flex flex-col items-center justify-center mb-5 shadow-inner ${
+                      disc > 0
+                        ? 'bg-emerald-50/90 border-emerald-200'
+                        : 'bg-blue-50 border-blue-100'
+                    }`}
+                  >
+                    <p
+                      className={`text-xs font-semibold mb-1 uppercase tracking-wide ${
+                        disc > 0 ? 'text-emerald-700' : 'text-blue-600'
+                      }`}
+                    >
+                      {disc > 0 ? 'Precio Final con Descuento' : 'Precio de Venta'}{' '}
+                      {selectedProduct.size && (
+                        <span
+                          className={`px-2 py-0.5 rounded ml-1 font-bold ${
+                            disc > 0
+                              ? 'bg-emerald-200 text-emerald-900'
+                              : 'bg-blue-200 text-blue-800'
+                          }`}
+                        >
+                          Talla {selectedProduct.size}
+                        </span>
+                      )}
+                    </p>
+
+                    {disc > 0 && (
+                      <div className="flex items-center justify-center gap-2 my-1 flex-wrap">
+                        <span className="text-lg font-bold text-slate-400 line-through font-mono">
+                          Antes: L {basePrice.toFixed(2)}
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-rose-600 text-white shadow-xs">
+                          Descuento: -L {disc.toFixed(2)}
+                          {selectedProduct.discountType === 'percent' && selectedProduct.discountValue
+                            ? ` (${selectedProduct.discountValue}%)`
+                            : ''}
+                        </span>
+                      </div>
+                    )}
+
+                    <p
+                      className={`text-5xl sm:text-6xl font-black tracking-tight ${
+                        disc > 0 ? 'text-emerald-800' : 'text-blue-900'
+                      }`}
+                    >
+                      L {finalPrice.toFixed(2)}
+                    </p>
+                  </div>
+                );
+              })()}
+
+              {/* Global Stock Badge */}
+              <div
+                className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl ${stockBadgeColor} font-bold text-base mb-2`}
+              >
+                <Layers className="w-5 h-5" />
+                <span>Stock GLOBAL Total: {totalGlobalStock}</span>
+              </div>
+
+              {/* Size Variants Switcher */}
+              {relatedItems.length > 1 && (
+                <div className="mt-5 pt-5 border-t border-slate-100 w-full flex flex-col items-center">
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-3">
+                    Toca otra talla para ver su precio y stock
+                  </p>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {relatedItems.map((variant) => {
+                      const isSelected = variant.code === selectedProduct.code;
+                      const stockNum = Number(variant.stock) || 0;
+
+                      let btnStyle = 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700';
+                      if (isSelected) {
+                        btnStyle = 'ring-2 ring-blue-500 bg-blue-50 border-blue-200 text-blue-700 scale-105';
+                      } else if (stockNum <= 0) {
+                        btnStyle = 'bg-red-50 text-red-500 border-red-100 opacity-70';
+                      }
+
+                      return (
+                        <button
+                          key={variant.id}
+                          type="button"
+                          onClick={() => handleSearch(variant.code, true)}
+                          className={`px-4 py-2 font-bold text-sm rounded-xl border shadow-sm flex flex-col items-center transition-all cursor-pointer ${btnStyle}`}
+                        >
+                          <span>{variant.size || variant.code}</span>
+                          <span
+                            className={`text-[10px] font-normal uppercase ${
+                              isSelected
+                                ? 'text-blue-500'
+                                : stockNum > 0
+                                ? 'text-slate-500'
+                                : 'text-red-500'
+                            }`}
+                          >
+                            {stockNum} unids
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
-
-            <p className="text-xs font-bold text-blue-500 uppercase tracking-widest mb-1">
-              {selectedProduct.category}
-            </p>
-            <h2 className="text-3xl font-black text-slate-800 mb-1 leading-tight">
-              {selectedProduct.name}
-            </h2>
-            <p className="text-slate-400 font-mono text-xs mb-6">
-              Cód: {selectedProduct.code}
-            </p>
-
-            {/* Price Box */}
-            {(() => {
-              const basePrice = Number(selectedProduct.price) || 0;
-              const disc = Math.min(basePrice, Math.max(0, Number(selectedProduct.discount) || 0));
-              const finalPrice = Math.max(0, basePrice - disc);
-
-              return (
-                <div
-                  className={`rounded-2xl p-6 border flex flex-col items-center justify-center mb-6 shadow-inner ${
-                    disc > 0
-                      ? 'bg-emerald-50/90 border-emerald-200'
-                      : 'bg-blue-50 border-blue-100'
-                  }`}
-                >
-                  <p
-                    className={`text-xs font-semibold mb-1 uppercase tracking-wide ${
-                      disc > 0 ? 'text-emerald-700' : 'text-blue-600'
-                    }`}
-                  >
-                    {disc > 0 ? 'Precio Final con Descuento' : 'Precio de Venta'}{' '}
-                    {selectedProduct.size && (
-                      <span
-                        className={`px-2 py-0.5 rounded ml-1 font-bold ${
-                          disc > 0
-                            ? 'bg-emerald-200 text-emerald-900'
-                            : 'bg-blue-200 text-blue-800'
-                        }`}
-                      >
-                        Talla {selectedProduct.size}
-                      </span>
-                    )}
-                  </p>
-
-                  {disc > 0 && (
-                    <div className="flex items-center justify-center gap-2 my-1 flex-wrap">
-                      <span className="text-lg font-bold text-slate-400 line-through font-mono">
-                        Antes: L {basePrice.toFixed(2)}
-                      </span>
-                      <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-rose-600 text-white shadow-xs">
-                        Descuento: -L {disc.toFixed(2)}
-                        {selectedProduct.discountType === 'percent' && selectedProduct.discountValue
-                          ? ` (${selectedProduct.discountValue}%)`
-                          : ''}
-                      </span>
-                    </div>
-                  )}
-
-                  <p
-                    className={`text-5xl sm:text-6xl font-black tracking-tight ${
-                      disc > 0 ? 'text-emerald-800' : 'text-blue-900'
-                    }`}
-                  >
-                    L {finalPrice.toFixed(2)}
-                  </p>
-                </div>
-              );
-            })()}
-
-            {/* Global Stock Badge */}
-            <div
-              className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl ${stockBadgeColor} font-bold text-base mb-2`}
-            >
-              <Layers className="w-5 h-5" />
-              <span>Stock GLOBAL Total: {totalGlobalStock}</span>
-            </div>
-
-            {/* Size Variants Switcher */}
-            {relatedItems.length > 1 && (
-              <div className="mt-6 pt-5 border-t border-slate-100 w-full flex flex-col items-center">
-                <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-3">
-                  Toca otra talla para ver su precio y stock
-                </p>
-                <div className="flex flex-wrap justify-center gap-2">
-                  {relatedItems.map((variant) => {
-                    const isSelected = variant.code === selectedProduct.code;
-                    const stockNum = Number(variant.stock) || 0;
-
-                    let btnStyle = 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700';
-                    if (isSelected) {
-                      btnStyle = 'ring-2 ring-blue-500 bg-blue-50 border-blue-200 text-blue-700 scale-105';
-                    } else if (stockNum <= 0) {
-                      btnStyle = 'bg-red-50 text-red-500 border-red-100 opacity-70';
-                    }
-
-                    return (
-                      <button
-                        key={variant.id}
-                        type="button"
-                        onClick={() => handleSearch(variant.code, true)}
-                        className={`px-4 py-2 font-bold text-sm rounded-xl border shadow-sm flex flex-col items-center transition-all cursor-pointer ${btnStyle}`}
-                      >
-                        <span>{variant.size || variant.code}</span>
-                        <span
-                          className={`text-[10px] font-normal uppercase ${
-                            isSelected
-                              ? 'text-blue-500'
-                              : stockNum > 0
-                              ? 'text-slate-500'
-                              : 'text-red-500'
-                          }`}
-                        >
-                          {stockNum} unids
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+          ) : searchedCode ? (
+            <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-100 text-center animate-in fade-in zoom-in-95 duration-200">
+              <div className="w-20 h-20 rounded-full bg-rose-100 text-rose-500 flex items-center justify-center mx-auto mb-4">
+                <AlertCircle className="w-10 h-10" />
               </div>
-            )}
-          </div>
-        ) : searchedCode ? (
-          <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-100 text-center animate-in fade-in zoom-in-95 duration-200">
-            <div className="w-20 h-20 rounded-full bg-rose-100 text-rose-500 flex items-center justify-center mx-auto mb-4">
-              <AlertCircle className="w-10 h-10" />
+              <h2 className="text-2xl font-bold text-slate-800 mb-2">Producto no encontrado</h2>
+              <p className="text-slate-500 text-sm mb-5">
+                El SKU o nombre{' '}
+                <span className="font-mono font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded">
+                  {searchedCode}
+                </span>{' '}
+                no está registrado en el inventario.
+              </p>
+              <button
+                type="button"
+                onClick={startScanner}
+                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-bold inline-flex items-center gap-2 shadow-sm transition-colors cursor-pointer"
+              >
+                <Camera className="w-4 h-4 text-emerald-400" />
+                <span>Intentar Escanear de Nuevo</span>
+              </button>
             </div>
-            <h2 className="text-2xl font-bold text-slate-800 mb-2">Producto no encontrado</h2>
-            <p className="text-slate-500 text-sm mb-4">
-              El SKU o nombre{' '}
-              <span className="font-mono font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded">
-                {searchedCode}
-              </span>{' '}
-              no está registrado en el inventario.
-            </p>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </div>
     </div>
   );

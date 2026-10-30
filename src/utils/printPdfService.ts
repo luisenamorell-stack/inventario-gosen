@@ -2111,7 +2111,7 @@ export function buildSalesReportHtml(
         <div style="display:flex;justify-content:space-between;"><span>Costo Mercadería:</span><span>${formatCurrencyL(summary.totalCost)}</span></div>
         <div style="display:flex;justify-content:space-between;font-weight:900;border-top:1px dashed #000;padding-top:3px;margin-top:3px;">
           <span>GANANCIA BRUTA:</span>
-          <span>${formatCurrencyL(summary.profit)} (${summary.marginPct.toFixed(1)}%)</span>
+          <span>${formatCurrencyL(summary.profit)} (${(Number(summary.marginPct) || 0).toFixed(1)}%)</span>
         </div>
       </div>
       <div class="dashed-line"></div>
@@ -2170,7 +2170,7 @@ export function buildSalesReportHtml(
           <div class="kpi-value">${formatCurrencyL(summary.totalCost)}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-label">Ganancia Bruta (${summary.marginPct.toFixed(1)}%)</div>
+          <div class="kpi-label">Ganancia Bruta (${(Number(summary.marginPct) || 0).toFixed(1)}%)</div>
           <div class="kpi-value" style="color:#0f766e;">${formatCurrencyL(summary.profit)}</div>
         </div>
       </div>
@@ -2247,7 +2247,7 @@ export async function downloadSalesReportPdf(
     {
       label: 'Utilidad Bruta',
       value: formatCurrencyL(summary.profit),
-      subtext: `Margen rentable: ${summary.marginPct.toFixed(1)}%`,
+      subtext: `Margen rentable: ${(Number(summary.marginPct) || 0).toFixed(1)}%`,
       valueRgb: [13, 148, 136],
     },
   ]);
@@ -2666,7 +2666,7 @@ export function buildIncomeStatementHtml(
         <div style="display:flex;justify-content:space-between;margin:4px 0;border-top:1px dashed #64748b;padding-top:4px;font-weight:800;color:#047857;"><span>(=) UTILIDAD BRUTA DE VENTAS:</span><span>${formatCurrencyL(data.grossProfit)}</span></div>
         <div style="display:flex;justify-content:space-between;margin:4px 0;color:#e11d48;"><span>(-) Gastos Operativos del Local (${data.expenses.length}):</span><strong>-${formatCurrencyL(data.totalOperatingExpenses)}</strong></div>
         <div style="display:flex;justify-content:space-between;margin:6px 0;border-top:2px solid #0f172a;padding-top:6px;font-size:${isThermal ? '12.5px' : '15px'};font-weight:900;">
-          <span>(=) GANANCIA NETA LIBRE (${data.netMarginPct.toFixed(1)}%):</span>
+          <span>(=) GANANCIA NETA LIBRE (${(Number(data.netMarginPct) || 0).toFixed(1)}%):</span>
           <span>${formatCurrencyL(data.netFreeProfit)}</span>
         </div>
       </div>
@@ -2741,7 +2741,7 @@ export async function downloadIncomeStatementPdf(
     {
       label: 'Ganancia Neta Libre',
       value: formatCurrencyL(data.netFreeProfit),
-      subtext: `Margen Neto: ${data.netMarginPct.toFixed(1)}%`,
+      subtext: `Margen Neto: ${(Number(data.netMarginPct) || 0).toFixed(1)}%`,
       valueRgb: data.netFreeProfit >= 0 ? [4, 120, 87] : [220, 38, 38],
     },
   ]);
@@ -2754,7 +2754,7 @@ export async function downloadIncomeStatementPdf(
       ['(-) Costo de Mercadería Vendida (CMV)', `-${formatCurrencyL(data.totalCostOfGoods)}`],
       ['(=) UTILIDAD BRUTA EN VENTAS', formatCurrencyL(data.grossProfit)],
       [`(-) Gastos Operativos Administrativos y de Local (${data.expenses.length})`, `-${formatCurrencyL(data.totalOperatingExpenses)}`],
-      [`(=) UTILIDAD / GANANCIA NETA LIBRE (${data.netMarginPct.toFixed(1)}%)`, formatCurrencyL(data.netFreeProfit)],
+      [`(=) UTILIDAD / GANANCIA NETA LIBRE (${(Number(data.netMarginPct) || 0).toFixed(1)}%)`, formatCurrencyL(data.netFreeProfit)],
     ],
     theme: 'grid',
     headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 9 },
@@ -2964,14 +2964,74 @@ export interface InventoryValuationSummary {
   marginPct: number;
 }
 
+function computeInventoryValuationSummary(
+  items: Product[],
+  filterLabel: string = 'Todo el Catálogo'
+): InventoryValuationSummary {
+  const safeItems = Array.isArray(items) ? items : [];
+  let totalUnits = 0;
+  let totalCost = 0;
+  let totalRetail = 0;
+
+  safeItems.forEach((p) => {
+    const stock = Math.max(0, Number(p.stock) || 0);
+    const cost = Math.max(0, Number(p.cost) || 0);
+    const price = Math.max(0, Number(p.price) || 0);
+    totalUnits += stock;
+    totalCost += stock * cost;
+    totalRetail += stock * price;
+  });
+
+  const totalProfit = totalRetail - totalCost;
+  const marginPct = totalRetail > 0 ? (totalProfit / totalRetail) * 100 : 0;
+
+  return {
+    filterLabel: filterLabel || 'Todo el Catálogo',
+    totalModels: safeItems.length,
+    totalUnits,
+    totalCost,
+    totalRetail,
+    totalProfit,
+    marginPct,
+  };
+}
+
+function isInventorySummaryObject(arg: any): arg is InventoryValuationSummary {
+  return Boolean(
+    arg &&
+      typeof arg === 'object' &&
+      ('totalModels' in arg || 'totalRetail' in arg || 'marginPct' in arg)
+  );
+}
+
 export function buildInventoryReportHtml(
   items: Product[],
-  summary: InventoryValuationSummary,
-  storeSettings: StoreSettings,
-  format: PrinterPaperFormat
+  summaryOrSettings: InventoryValuationSummary | StoreSettings,
+  settingsOrFormat?: StoreSettings | PrinterPaperFormat,
+  formatOrFilterLabel?: PrinterPaperFormat | string
 ): string {
+  let summary: InventoryValuationSummary;
+  let storeSettings: StoreSettings;
+  let format: PrinterPaperFormat = 'letter';
+
+  if (isInventorySummaryObject(summaryOrSettings)) {
+    summary = {
+      ...computeInventoryValuationSummary(items, summaryOrSettings.filterLabel),
+      ...summaryOrSettings,
+    };
+    storeSettings = (settingsOrFormat as StoreSettings) || { storeName: 'Tienda Gosén' };
+    format = (formatOrFilterLabel as PrinterPaperFormat) || 'letter';
+  } else {
+    storeSettings = (summaryOrSettings as StoreSettings) || { storeName: 'Tienda Gosén' };
+    format = (settingsOrFormat as PrinterPaperFormat) || 'letter';
+    const filterLabel =
+      typeof formatOrFilterLabel === 'string' ? formatOrFilterLabel : 'Todo el Catálogo';
+    summary = computeInventoryValuationSummary(items, filterLabel);
+  }
+
   const isThermal = format === '80mm' || format === '58mm';
-  const storeName = storeSettings.storeName || 'Tienda Gosén';
+  const storeName = storeSettings?.storeName || 'Tienda Gosén';
+  const safeMargin = Number(summary.marginPct) || 0;
 
   return `
     <div>
@@ -2985,7 +3045,7 @@ export function buildInventoryReportHtml(
         <div class="kpi-box"><div class="kpi-label">Artículos / Stock</div><div class="kpi-value">${summary.totalModels} (${summary.totalUnits} uds)</div></div>
         <div class="kpi-box"><div class="kpi-label">Costo Inventario</div><div class="kpi-value">${formatCurrencyL(summary.totalCost)}</div></div>
         <div class="kpi-box"><div class="kpi-label">Valor Venta</div><div class="kpi-value" style="color:#047857;">${formatCurrencyL(summary.totalRetail)}</div></div>
-        <div class="kpi-box"><div class="kpi-label">Utilidad Potencial</div><div class="kpi-value" style="color:#0f766e;">${formatCurrencyL(summary.totalProfit)}</div></div>
+        <div class="kpi-box"><div class="kpi-label">Utilidad (${safeMargin.toFixed(1)}%)</div><div class="kpi-value" style="color:#0f766e;">${formatCurrencyL(summary.totalProfit)}</div></div>
       </div>
 
       <table style="border:1px solid #cbd5e1;font-size:${isThermal ? '9.5px' : '10.5px'};">
@@ -3000,7 +3060,7 @@ export function buildInventoryReportHtml(
           </tr>
         </thead>
         <tbody>
-          ${items
+          ${(items || [])
             .map(
               (p, i) => `
               <tr style="border-bottom:1px solid #e2e8f0;background:${i % 2 === 0 ? '#ffffff' : '#f8fafc'};">
@@ -3022,11 +3082,33 @@ export function buildInventoryReportHtml(
 
 export async function downloadInventoryReportPdf(
   items: Product[],
-  summary: InventoryValuationSummary,
-  storeSettings: StoreSettings
+  summaryOrSettings: InventoryValuationSummary | StoreSettings,
+  settingsOrFilterLabel?: StoreSettings | string
 ): Promise<void> {
-  await preloadStoreLogoForPdf(storeSettings.logoUrl);
+  let summary: InventoryValuationSummary;
+  let storeSettings: StoreSettings;
+
+  if (isInventorySummaryObject(summaryOrSettings)) {
+    summary = {
+      ...computeInventoryValuationSummary(items, summaryOrSettings.filterLabel),
+      ...summaryOrSettings,
+    };
+    storeSettings =
+      typeof settingsOrFilterLabel === 'object' && settingsOrFilterLabel
+        ? settingsOrFilterLabel
+        : { storeName: 'Tienda Gosén' };
+  } else {
+    storeSettings = (summaryOrSettings as StoreSettings) || { storeName: 'Tienda Gosén' };
+    const filterLabel =
+      typeof settingsOrFilterLabel === 'string'
+        ? settingsOrFilterLabel
+        : 'Todo el Catálogo';
+    summary = computeInventoryValuationSummary(items, filterLabel);
+  }
+
+  await preloadStoreLogoForPdf(storeSettings?.logoUrl);
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+  const safeMargin = Number(summary.marginPct) || 0;
 
   let y = drawExecutivePdfHeader(doc, {
     storeSettings,
@@ -3058,7 +3140,7 @@ export async function downloadInventoryReportPdf(
     {
       label: 'Ganancia Potencial',
       value: formatCurrencyL(summary.totalProfit),
-      subtext: `Margen proyectado: ${summary.marginPct.toFixed(1)}%`,
+      subtext: `Margen proyectado: ${safeMargin.toFixed(1)}%`,
       valueRgb: [13, 148, 136],
     },
   ]);
@@ -3068,7 +3150,7 @@ export async function downloadInventoryReportPdf(
     head: [
       ['Código / SKU', 'Descripción del Artículo', 'Categoría', 'Proveedor', 'Stock', 'Costo Unit.', 'Precio Venta', 'Valor Total'],
     ],
-    body: items.map((p) => [
+    body: (items || []).map((p) => [
       p.code,
       `${p.name}${p.size ? ` (Talla: ${p.size})` : ''}`,
       p.category || 'General',

@@ -325,21 +325,29 @@ export const App: React.FC = () => {
   const [openSupplierModalTrigger, setOpenSupplierModalTrigger] = useState<boolean>(false);
   const [inventorySearchQuery, setInventorySearchQuery] = useState<string>('');
 
-  const showToast = (
-    message: string,
-    type: 'success' | 'error' | 'warning' | 'info' = 'info'
-  ) => {
-    const newToast: ToastMessage = {
-      id: `toast_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      message,
-      type,
-    };
-    setToasts((prev) => [...prev, newToast]);
-  };
-
-  const handleDismissToast = (id: string) => {
+  const handleDismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
+  }, []);
+
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+      const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newToast: ToastMessage = {
+        id,
+        message,
+        type,
+      };
+      setToasts((prev) => {
+        const filtered = prev.filter((t) => t.message !== message);
+        return [...filtered.slice(-2), newToast];
+      });
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, 3400);
+    },
+    []
+  );
+
 
   // Switch active company context (from LoginView or from Super Admin panel)
   const handleSelectCompanyContext = useCallback((companySlug: string) => {
