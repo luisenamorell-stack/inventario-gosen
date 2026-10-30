@@ -67,6 +67,7 @@ import {
   fetchStoreSettingsOnce,
   fetchSuppliersOnce,
   fetchSalesOnce,
+  subscribeToSales,
   fetchPurchasesOnce,
   fetchAuditHistoryOnce,
   fetchUsersOnce,
@@ -89,6 +90,7 @@ import {
   logActivityInFirestore,
   getCachedPOSFinanceData,
   fetchPOSFinanceDataOnce,
+  subscribeToPOSFinanceData,
   savePOSFinanceDataToFirestore,
   seedInitialDataIfEmpty,
   pingFirestore
@@ -483,15 +485,18 @@ export const App: React.FC = () => {
       localStorage.removeItem('stockmaster_saas_owner_unlocked');
     } catch {}
 
+    // Always return the owner to Tienda Gosén when exiting the SaaS console
+    handleSelectCompanyContext('gosen');
+
     setUserSession((prev) => {
       if (!prev) return prev;
       const updated: UserSession = {
         ...prev,
+        companyId: 'gosen',
+        companyName: 'Tienda Gosén',
         isSuperAdmin: false,
-        userName:
-          activeCompanyId === 'gosen'
-            ? 'Administrador'
-            : `Admin ${storeSettings.storeName || activeCompanyId}`,
+        isStandaloneSaaS: false,
+        userName: 'Administrador Gosén',
         allowedTabs: (prev.allowedTabs || []).filter((t) => t !== 'companies'),
       };
       try {
@@ -507,7 +512,7 @@ export const App: React.FC = () => {
     if (activeTab === 'companies') {
       setActiveTab('dashboard');
     }
-    showToast('Panel SaaS ocultado. Ahora estás en vista normal de tienda.', 'info');
+    showToast('Panel SaaS cerrado. Has vuelto a Tienda Gosén.', 'info');
   };
 
   const handleLogout = () => {
@@ -530,6 +535,11 @@ export const App: React.FC = () => {
       localStorage.removeItem('stockmaster_user_session');
       sessionStorage.removeItem('stockmaster_user_session');
       localStorage.removeItem('stockmaster_saas_owner_unlocked');
+      const params = new URLSearchParams(window.location.search);
+      const urlCompany = params.get('empresa') || params.get('tienda') || params.get('cliente');
+      if (!urlCompany) {
+        handleSelectCompanyContext('gosen');
+      }
     } catch {}
     showToast('Sesión cerrada correctamente', 'info');
   };
@@ -703,11 +713,35 @@ export const App: React.FC = () => {
       setSaasGlobalConfig(liveCfg);
     });
 
+    let unsubscribeSales: (() => void) | undefined;
+    let unsubscribePosFinance: (() => void) | undefined;
+
+    if (!isPublicCatalogMode) {
+      unsubscribeSales = subscribeToSales(
+        (liveSales) => {
+          setSales(liveSales);
+        },
+        (err) => {
+          console.warn('Sales realtime listener warning:', err);
+        },
+        activeCompanyId
+      );
+
+      unsubscribePosFinance = subscribeToPOSFinanceData(
+        (liveFinance) => {
+          setPosFinanceData(liveFinance);
+        },
+        activeCompanyId
+      );
+    }
+
     return () => {
       unsubscribeComps();
       unsubscribeGlobal();
+      if (unsubscribeSales) unsubscribeSales();
+      if (unsubscribePosFinance) unsubscribePosFinance();
     };
-  }, [activeCompanyId]);
+  }, [activeCompanyId, isPublicCatalogMode]);
 
   // 2. Load Users on Login Screen (only if not in Public Catalog Mode)
   useEffect(() => {
@@ -1338,7 +1372,7 @@ export const App: React.FC = () => {
         cashierRole: activeCashierRole,
       };
 
-      const recorded = await recordSaleInFirestore(payload, inventory);
+      const recorded = await recordSaleInFirestore(payload, inventory, activeCompanyId);
 
       // Update local inventory stock & cache directly
       setInventory((prev) => {
@@ -1352,14 +1386,14 @@ export const App: React.FC = () => {
             stock: Math.max(0, (Number(prod.stock) || 0) - (Number(soldItem.quantity) || 1)),
           };
         });
-        setCachedInventory(nextInv, Date.now());
+        setCachedInventory(nextInv, Date.now(), activeCompanyId);
         return nextInv;
       });
 
-      // Prepend sale to local sales state & cache
+      // Prepend sale to local sales state & cache (deduplicated with real-time listener)
       setSales((prev) => {
-        const nextSales = [recorded, ...prev];
-        setCachedSales(nextSales);
+        const nextSales = [recorded, ...prev.filter((s) => s.id !== recorded.id)];
+        setCachedSales(nextSales, activeCompanyId);
         return nextSales;
       });
 
@@ -1371,7 +1405,7 @@ export const App: React.FC = () => {
         action: `Registró Venta N° ${saleData.saleNumber} (${saleData.totalItems} ítems)`,
         module: 'sales',
         details: `Total: L. ${saleData.total.toFixed(2)} (${saleData.paymentMethod.toUpperCase()}) - Cliente: ${saleData.customerName || 'Consumidor Final'}`,
-      });
+      }, activeCompanyId);
 
       return recorded;
     } finally {
@@ -1382,7 +1416,7 @@ export const App: React.FC = () => {
   const handleCancelSale = async (sale: SaleRecord) => {
     setIsSyncing(true);
     try {
-      await cancelSaleInFirestore(sale, inventory);
+      await cancelSaleInFirestore(sale, inventory, activeCompanyId);
 
       // Restore local inventory stock & cache directly
       setInventory((prev) => {
@@ -1396,13 +1430,13 @@ export const App: React.FC = () => {
             stock: (Number(prod.stock) || 0) + (Number(soldItem.quantity) || 1),
           };
         });
-        setCachedInventory(nextInv, Date.now());
+        setCachedInventory(nextInv, Date.now(), activeCompanyId);
         return nextInv;
       });
 
       setSales((prev) => {
         const nextSales = prev.map((s) => (s.id === sale.id ? { ...s, status: 'cancelled' as const } : s));
-        setCachedSales(nextSales);
+        setCachedSales(nextSales, activeCompanyId);
         return nextSales;
       });
 
@@ -1414,7 +1448,7 @@ export const App: React.FC = () => {
         action: `Anuló la Venta N° ${sale.saleNumber}`,
         module: 'sales',
         details: `Total devuelto al stock: L. ${sale.total.toFixed(2)}`,
-      });
+      }, activeCompanyId);
     } finally {
       setIsSyncing(false);
     }

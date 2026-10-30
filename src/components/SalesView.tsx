@@ -163,7 +163,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
   // ------------------ HISTORY STATE ------------------
   const [historySearch, setHistorySearch] = useState('');
-  const [historyDateFilter, setHistoryDateFilter] = useState<'today' | 'yesterday' | 'week' | 'month' | 'all'>('today');
+  const [historyDateFilter, setHistoryDateFilter] = useState<
+    'today' | 'yesterday' | 'today_yesterday' | 'week' | 'month' | 'all'
+  >('today_yesterday');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'completed' | 'cancelled'>('all');
   const [historyPaymentFilter, setHistoryPaymentFilter] = useState<'all' | 'cash' | 'card' | 'transfer' | 'credit'>('all');
   const [historySellerFilter, setHistorySellerFilter] = useState<'all' | 'admin' | 'collaborator'>('all');
@@ -854,24 +856,98 @@ export const SalesView: React.FC<SalesViewProps> = ({
   };
 
   // ------------------ HISTORIAL FILTERING & METRICS ------------------
+  const getHondurasDateStr = (ms: number): string => {
+    try {
+      return new Intl.DateTimeFormat('es-HN', {
+        timeZone: 'America/Tegucigalpa',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }).format(new Date(ms));
+    } catch {
+      const d = new Date(ms);
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      return `${dd}/${mm}/${d.getFullYear()}`;
+    }
+  };
+
+  const getLocalDateStr = (ms: number): string => {
+    const d = new Date(ms);
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mm}/${d.getFullYear()}`;
+  };
+
+  const isSaleMatchingDay = (s: SaleRecord, targetHnDate: string, targetLocalDate: string, startMs: number, endMs: number): boolean => {
+    const rawDatePrefix = (s.date || '').split(',')[0].trim();
+    if (rawDatePrefix && (rawDatePrefix === targetHnDate || rawDatePrefix === targetLocalDate)) {
+      return true;
+    }
+    if (s.timestamp) {
+      const saleHnDate = getHondurasDateStr(s.timestamp);
+      if (saleHnDate === targetHnDate) return true;
+      if (s.timestamp >= startMs && s.timestamp < endMs) return true;
+    }
+    return false;
+  };
+
+  const dateFilterCounts = useMemo(() => {
+    const now = new Date();
+    const nowMs = now.getTime();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const endOfToday = startOfToday + 24 * 60 * 60 * 1000;
+    const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+
+    const todayHn = getHondurasDateStr(nowMs);
+    const yesterdayHn = getHondurasDateStr(nowMs - 24 * 60 * 60 * 1000);
+    const todayLocal = getLocalDateStr(nowMs);
+    const yesterdayLocal = getLocalDateStr(startOfYesterday);
+
+    let todayCount = 0;
+    let yesterdayCount = 0;
+
+    sales.forEach((s) => {
+      if (isSaleMatchingDay(s, todayHn, todayLocal, startOfToday, endOfToday)) {
+        todayCount++;
+      } else if (isSaleMatchingDay(s, yesterdayHn, yesterdayLocal, startOfYesterday, startOfToday)) {
+        yesterdayCount++;
+      }
+    });
+
+    return {
+      today: todayCount,
+      yesterday: yesterdayCount,
+      today_yesterday: todayCount + yesterdayCount,
+      all: sales.length,
+    };
+  }, [sales]);
+
   const filteredSalesHistory = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
     const now = new Date();
+    const nowMs = now.getTime();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const endOfToday = startOfToday + 24 * 60 * 60 * 1000;
     const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
     const startOfWeek = startOfToday - 7 * 24 * 60 * 60 * 1000;
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
+    const todayHn = getHondurasDateStr(nowMs);
+    const yesterdayHn = getHondurasDateStr(nowMs - 24 * 60 * 60 * 1000);
+    const todayLocal = getLocalDateStr(nowMs);
+    const yesterdayLocal = getLocalDateStr(startOfYesterday);
+
     return sales.filter((s) => {
+      const isToday = isSaleMatchingDay(s, todayHn, todayLocal, startOfToday, endOfToday);
+      const isYesterday = !isToday && isSaleMatchingDay(s, yesterdayHn, yesterdayLocal, startOfYesterday, startOfToday);
+
       // Date filter
-      if (historyDateFilter === 'today' && s.timestamp < startOfToday) return false;
-      if (
-        historyDateFilter === 'yesterday' &&
-        (s.timestamp < startOfYesterday || s.timestamp >= startOfToday)
-      )
-        return false;
-      if (historyDateFilter === 'week' && s.timestamp < startOfWeek) return false;
-      if (historyDateFilter === 'month' && s.timestamp < startOfMonth) return false;
+      if (historyDateFilter === 'today' && !isToday) return false;
+      if (historyDateFilter === 'yesterday' && !isYesterday) return false;
+      if (historyDateFilter === 'today_yesterday' && !isToday && !isYesterday) return false;
+      if (historyDateFilter === 'week' && !isToday && !isYesterday && s.timestamp < startOfWeek) return false;
+      if (historyDateFilter === 'month' && !isToday && !isYesterday && s.timestamp < startOfMonth) return false;
 
       // Status filter
       if (historyStatusFilter !== 'all' && s.status !== historyStatusFilter) return false;
@@ -2170,7 +2246,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
             {/* Filter Pills */}
             <div className="flex flex-wrap items-center gap-2 text-xs">
               {/* Date Filters */}
-              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+              <div className="flex flex-wrap items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                <button
+                  onClick={() => setHistoryDateFilter('today_yesterday')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                    historyDateFilter === 'today_yesterday'
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Hoy y Ayer ({dateFilterCounts.today_yesterday})
+                </button>
                 <button
                   onClick={() => setHistoryDateFilter('today')}
                   className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
@@ -2179,7 +2265,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Hoy
+                  Hoy ({dateFilterCounts.today})
                 </button>
                 <button
                   onClick={() => setHistoryDateFilter('yesterday')}
@@ -2189,7 +2275,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Ayer
+                  Ayer ({dateFilterCounts.yesterday})
                 </button>
                 <button
                   onClick={() => setHistoryDateFilter('week')}
@@ -2219,7 +2305,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Todos
+                  Todos ({dateFilterCounts.all})
                 </button>
               </div>
 
@@ -3042,6 +3128,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   ? 'Hoy'
                   : historyDateFilter === 'yesterday'
                   ? 'Ayer'
+                  : historyDateFilter === 'today_yesterday'
+                  ? 'Hoy y Ayer'
                   : historyDateFilter === 'week'
                   ? 'Últimos 7 días'
                   : historyDateFilter === 'month'
@@ -3067,6 +3155,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   ? 'Hoy'
                   : historyDateFilter === 'yesterday'
                   ? 'Ayer'
+                  : historyDateFilter === 'today_yesterday'
+                  ? 'Hoy y Ayer'
                   : historyDateFilter === 'week'
                   ? 'Últimos 7 días'
                   : historyDateFilter === 'month'

@@ -99,7 +99,10 @@ export function normalizeCompanySlug(raw?: string | null): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9_-]/g, '');
-  return cleaned || 'gosen';
+  if (!cleaned || cleaned === 'tiendagosen' || cleaned === 'tienda-gosen' || cleaned === 'tienda_gosen') {
+    return 'gosen';
+  }
+  return cleaned;
 }
 
 function detectInitialCompanyId(): string {
@@ -580,14 +583,11 @@ export async function bulkSaveProductsToFirestore(
 // ----------------- SUPPLIERS (ON-DEMAND & REAL-TIME) -----------------
 
 export async function fetchSuppliersOnce(
-  forceRefresh = false,
+  _forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<Supplier[]> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedSuppliers(slug);
-  if (!forceRefresh && cached && cached.length > 0) {
-    return cached;
-  }
   try {
     const snapshot = await getDocs(collection(db, 'suppliers'));
     const suppliers: Supplier[] = [];
@@ -720,14 +720,11 @@ export async function deleteSupplierFromFirestore(
 // ----------------- AUDIT HISTORY & ATOMIC COMMIT -----------------
 
 export async function fetchAuditHistoryOnce(
-  forceRefresh = false,
+  _forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<AuditHistoryRecord[]> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedAuditHistory(slug);
-  if (!forceRefresh && cached && cached.length > 0) {
-    return cached;
-  }
   try {
     const snapshot = await getDocs(collection(db, 'audit_history'));
     const records: AuditHistoryRecord[] = [];
@@ -1145,14 +1142,11 @@ export async function saveStoreSettingsToFirestore(
 // ----------------- SALES & POS OPERATIONS -----------------
 
 export async function fetchSalesOnce(
-  forceRefresh = false,
+  _forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord[]> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedSales(slug);
-  if (!forceRefresh && cached && cached.length > 0) {
-    return cached;
-  }
   try {
     const snapshot = await getDocs(collection(db, 'sales'));
     const records: SaleRecord[] = [];
@@ -1343,12 +1337,14 @@ export async function recordSaleInFirestore(
 
   try {
     for (const item of saleData.items) {
-      const productDocId = getScopedDocId(item.code, slug);
+      const currentProd = currentInventory.find(
+        (p) =>
+          p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
+          p.id === item.productId
+      );
+      const productDocId = currentProd?.id || getScopedDocId(item.code, slug);
       const productRef = doc(db, 'inventory', productDocId);
 
-      const currentProd = currentInventory.find(
-        (p) => p.code.trim() === item.code.trim() || p.id === item.productId
-      );
       const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
       const newStock = Math.max(0, currentStock - (Number(item.quantity) || 1));
 
@@ -1502,14 +1498,11 @@ export async function deleteSaleFromFirestore(saleId: string): Promise<void> {
 // ----------------- PURCHASES / FACTURAS DE COMPRA -----------------
 
 export async function fetchPurchasesOnce(
-  forceRefresh = false,
+  _forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<PurchaseInvoice[]> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedPurchases(slug);
-  if (!forceRefresh && cached && cached.length > 0) {
-    return cached;
-  }
   try {
     const snapshot = await getDocs(collection(db, 'purchases'));
     const records: PurchaseInvoice[] = [];
@@ -1759,14 +1752,11 @@ export async function deletePurchaseFromFirestore(purchaseId: string): Promise<v
 // ----------------- COLLABORATORS & USERS MANAGEMENT -----------------
 
 export async function fetchUsersOnce(
-  forceRefresh = false,
+  _forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<UserAccount[]> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedUsers(slug);
-  if (!forceRefresh && cached && cached.length > 0) {
-    return cached;
-  }
   try {
     const snapshot = await getDocs(collection(db, 'users'));
     const records: UserAccount[] = [];
@@ -2057,12 +2047,8 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
   };
 }
 
-export async function fetchCompaniesOnce(forceRefresh = false): Promise<CompanyTenant[]> {
+export async function fetchCompaniesOnce(_forceRefresh = false): Promise<CompanyTenant[]> {
   const cached = getCachedCompanies();
-  if (!forceRefresh && cached && cached.length > 0) {
-    return cached;
-  }
-
   try {
     const snapshot = await getDocs(collection(db, 'companies'));
     const map = new Map<string, CompanyTenant>();

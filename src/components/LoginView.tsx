@@ -45,6 +45,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
+  React.useEffect(() => {
+    if (activeCompanyId) {
+      setCompanySlugInput(normalizeCompanySlug(activeCompanyId));
+    }
+  }, [activeCompanyId]);
+
   const normalizedSlug = normalizeCompanySlug(companySlugInput);
   const isGosenSelected = normalizedSlug === 'gosen';
 
@@ -131,7 +137,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       const saasAdminSession: UserSession = {
         userId: 'saas_super_admin',
-        companyId: targetSlug,
+        companyId: 'gosen',
         companyName: 'Panel Central SaaS',
         isSuperAdmin: true,
         isStandaloneSaaS: true,
@@ -166,7 +172,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       const saasAdminSession: UserSession = {
         userId: 'saas_super_admin',
-        companyId: targetSlug,
+        companyId: 'gosen',
         companyName: 'Panel Central SaaS',
         isSuperAdmin: true,
         isStandaloneSaaS: true,
@@ -224,14 +230,18 @@ export const LoginView: React.FC<LoginViewProps> = ({
             cleanInput.toUpperCase() === 'GOSEN2026' ||
             cleanInput.toUpperCase() === 'ADMIN2026'));
 
-      // Or if user left 'gosen' selected by default on a fresh link, check if password matches another client's unique password
+      // Or if user left another company selected, check if password matches Tienda Gosén or another client's unique password
       const matchedOtherClient =
         !matchesSelectedCompany &&
-        companies.find(
+        (companies.find(
           (c) =>
             c.slug !== targetSlug &&
             c.adminPassword.trim().toUpperCase() === cleanInput.toUpperCase()
-        );
+        ) ||
+          (targetSlug !== 'gosen' &&
+          cleanInput.toUpperCase() === 'GOSEN2026'
+            ? companies.find((c) => c.slug === 'gosen')
+            : undefined));
 
       if (matchedOtherClient) {
         if (matchedOtherClient.status === 'suspended') {
