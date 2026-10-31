@@ -11,6 +11,7 @@ import {
   Product,
   SubscriptionPaymentRecord,
   CompanyTenant,
+  ActivityLogRecord,
 } from '../types';
 import {
   getConnectedPrinter,
@@ -2651,48 +2652,91 @@ export function buildIncomeStatementHtml(
 ): string {
   const isThermal = format === '80mm' || format === '58mm';
   const storeName = storeSettings.storeName || 'Tienda Gosén';
+  const cellPad = isThermal ? '5px 4px' : '8px 12px';
 
   return `
-    <div>
-      <div class="text-center" style="border-bottom:2px solid #0f172a;padding-bottom:10px;margin-bottom:12px;">
-        <div style="font-size:${isThermal ? '14px' : '19px'};font-weight:900;text-transform:uppercase;">${storeName}</div>
-        <div style="font-size:${isThermal ? '11px' : '13px'};font-weight:800;color:#be123c;">ESTADO DE RESULTADOS Y GASTOS OPERATIVOS</div>
-        <div style="font-size:10.5px;color:#475569;">Período: <strong>${data.periodLabel}</strong></div>
+    <div style="font-variant-numeric:tabular-nums;">
+      <div class="text-center" style="border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:16px;">
+        <div style="font-size:${isThermal ? '15px' : '20px'};font-weight:900;text-transform:uppercase;letter-spacing:-0.01em;color:#0f172a;">${storeName}</div>
+        ${storeSettings.address || storeSettings.phone ? `<div style="font-size:10.5px;color:#64748b;margin-top:2px;">${[storeSettings.address, storeSettings.phone ? `Tel: ${storeSettings.phone}` : ''].filter(Boolean).join(' • ')}</div>` : ''}
+        <div style="font-size:${isThermal ? '11.5px' : '13.5px'};font-weight:800;color:#0f172a;margin-top:6px;">ESTADO DE RESULTADOS Y GASTOS OPERATIVOS</div>
+        <div style="font-size:11px;color:#475569;margin-top:2px;">Período evaluado: <strong>${data.periodLabel}</strong> • Emisión: ${new Date().toLocaleDateString('es-HN')}</div>
       </div>
 
-      <div style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 14px;background:#f8fafc;margin-bottom:14px;font-size:${isThermal ? '10.5px' : '12px'};">
-        <div style="display:flex;justify-content:space-between;margin:4px 0;"><span>(+) Ingresos por Ventas (${data.salesCount} ventas):</span><strong>${formatCurrencyL(data.grossSalesRevenue)}</strong></div>
-        <div style="display:flex;justify-content:space-between;margin:4px 0;"><span>(-) Costo de Mercadería Vendida:</span><span>-${formatCurrencyL(data.totalCostOfGoods)}</span></div>
-        <div style="display:flex;justify-content:space-between;margin:4px 0;border-top:1px dashed #64748b;padding-top:4px;font-weight:800;color:#047857;"><span>(=) UTILIDAD BRUTA DE VENTAS:</span><span>${formatCurrencyL(data.grossProfit)}</span></div>
-        <div style="display:flex;justify-content:space-between;margin:4px 0;color:#e11d48;"><span>(-) Gastos Operativos del Local (${data.expenses.length}):</span><strong>-${formatCurrencyL(data.totalOperatingExpenses)}</strong></div>
-        <div style="display:flex;justify-content:space-between;margin:6px 0;border-top:2px solid #0f172a;padding-top:6px;font-size:${isThermal ? '12.5px' : '15px'};font-weight:900;">
-          <span>(=) GANANCIA NETA LIBRE (${(Number(data.netMarginPct) || 0).toFixed(1)}%):</span>
-          <span>${formatCurrencyL(data.netFreeProfit)}</span>
+      ${
+        !isThermal
+          ? `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;background:#f8fafc;">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b;">1. Utilidad Bruta (${data.salesCount} ventas)</div>
+            <div style="font-size:16px;font-weight:900;color:#0f172a;margin-top:3px;">${formatCurrencyL(data.grossProfit)}</div>
+            <div style="font-size:10px;color:#64748b;margin-top:2px;">Ventas: ${formatCurrencyL(data.grossSalesRevenue)}</div>
+          </div>
+          <div style="border:1px solid #fecdd3;border-radius:8px;padding:10px 12px;background:#fff1f2;">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#be123c;">2. (−) Gastos Operativos (${data.expenses.length})</div>
+            <div style="font-size:16px;font-weight:900;color:#e11d48;margin-top:3px;">− ${formatCurrencyL(data.totalOperatingExpenses)}</div>
+            <div style="font-size:10px;color:#9f1239;margin-top:2px;">Gastos registrados del local</div>
+          </div>
+          <div style="border:1px solid ${data.netFreeProfit >= 0 ? '#a7f3d0' : '#fecdd3'};border-radius:8px;padding:10px 12px;background:${data.netFreeProfit >= 0 ? '#ecfdf5' : '#fff1f2'};">
+            <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:${data.netFreeProfit >= 0 ? '#065f46' : '#9f1239'};">3. (=) Ganancia Neta Libre</div>
+            <div style="font-size:16px;font-weight:900;color:${data.netFreeProfit >= 0 ? '#047857' : '#be123c'};margin-top:3px;">${formatCurrencyL(data.netFreeProfit)}</div>
+            <div style="font-size:10px;color:#475569;margin-top:2px;">Margen neto: ${(Number(data.netMarginPct) || 0).toFixed(1)}%</div>
+          </div>
+        </div>
+      `
+          : ''
+      }
+
+      <div style="border:1px solid #cbd5e1;border-radius:8px;padding:${isThermal ? '10px' : '14px 16px'};background:#ffffff;margin-bottom:18px;font-size:${isThermal ? '11px' : '12.5px'};">
+        <div style="font-weight:800;font-size:11px;text-transform:uppercase;color:#475569;margin-bottom:8px;border-bottom:1px solid #e2e8f0;padding-bottom:6px;">
+          Resumen Contable de Utilidad
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;gap:12px;">
+          <span style="color:#334155;">(+) Ingresos por Ventas (${data.salesCount} transacciones)</span>
+          <strong style="color:#0f172a;white-space:nowrap;">${formatCurrencyL(data.grossSalesRevenue)}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;gap:12px;">
+          <span style="color:#475569;">(−) Costo de Mercadería Vendida (CMV)</span>
+          <span style="color:#475569;white-space:nowrap;">− ${formatCurrencyL(data.totalCostOfGoods)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;margin:4px 0;border-top:1px dashed #94a3b8;border-bottom:1px dashed #94a3b8;font-weight:800;color:#047857;gap:12px;">
+          <span>(=) UTILIDAD BRUTA DE VENTAS</span>
+          <span style="white-space:nowrap;">${formatCurrencyL(data.grossProfit)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;color:#e11d48;gap:12px;">
+          <span>(−) Gastos Operativos del Local (${data.expenses.length} registros)</span>
+          <strong style="white-space:nowrap;">− ${formatCurrencyL(data.totalOperatingExpenses)}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;border-top:2px solid #0f172a;padding-top:10px;font-size:${isThermal ? '13px' : '15px'};font-weight:900;color:${data.netFreeProfit >= 0 ? '#047857' : '#be123c'};gap:12px;">
+          <span>(=) GANANCIA NETA LIBRE (${(Number(data.netMarginPct) || 0).toFixed(1)}%)</span>
+          <span style="white-space:nowrap;">${formatCurrencyL(data.netFreeProfit)}</span>
         </div>
       </div>
 
-      <div style="font-weight:800;font-size:11.5px;margin-bottom:6px;">DESGLOSE DE GASTOS OPERATIVOS:</div>
-      <table style="border:1px solid #cbd5e1;font-size:${isThermal ? '9.5px' : '11px'};">
+      <div style="font-weight:800;font-size:11.5px;text-transform:uppercase;color:#334155;margin-bottom:8px;">
+        Desglose de Gastos Operativos (${data.expenses.length})
+      </div>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:${isThermal ? '10px' : '11.5px'};">
         <thead>
           <tr style="background:#0f172a;color:#ffffff;">
-            <th>FECHA</th>
-            <th>CATEGORÍA</th>
-            <th>DESCRIPCIÓN</th>
-            <th class="text-right">MONTO</th>
+            <th style="padding:${cellPad};text-align:left;">FECHA</th>
+            <th style="padding:${cellPad};text-align:left;">CATEGORÍA</th>
+            <th style="padding:${cellPad};text-align:left;">DESCRIPCIÓN</th>
+            <th style="padding:${cellPad};text-align:right;">MONTO</th>
           </tr>
         </thead>
         <tbody>
           ${
             data.expenses.length === 0
-              ? `<tr><td colspan="4" class="text-center">No hay gastos registrados en este período.</td></tr>`
+              ? `<tr><td colspan="4" style="padding:16px;text-align:center;color:#64748b;">No hay gastos operativos registrados en este período.</td></tr>`
               : data.expenses
                   .map(
-                    (e) => `
-                    <tr style="border-bottom:1px solid #e2e8f0;">
-                      <td>${e.date}</td>
-                      <td><strong>${e.category}</strong></td>
-                      <td>${e.description}</td>
-                      <td class="text-right font-bold">-${formatCurrencyL(e.amount)}</td>
+                    (e, idx) => `
+                    <tr style="border-bottom:1px solid #e2e8f0;background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+                      <td style="padding:${cellPad};white-space:nowrap;color:#475569;">${e.date}</td>
+                      <td style="padding:${cellPad};font-weight:700;color:#0f172a;">${e.category}</td>
+                      <td style="padding:${cellPad};color:#334155;">${e.description}</td>
+                      <td style="padding:${cellPad};text-align:right;font-weight:800;color:#e11d48;white-space:nowrap;">− ${formatCurrencyL(e.amount)}</td>
                     </tr>
                   `
                   )
@@ -3512,3 +3556,238 @@ export async function downloadCreditPortfolioReportPdf(
   drawPdfPageFooters(doc, storeSettings, 'Cartera de Créditos');
   doc.save(`Cartera_Creditos_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
+
+// ============================================================================
+// 12. REPORTE DE REGISTRO DE MOVIMIENTOS DEL PERSONAL (HTML + PDF EJECUTIVO)
+// ============================================================================
+function getActivityModuleLabelEs(moduleKey: string): string {
+  switch (moduleKey) {
+    case 'sales':
+      return 'Ventas (POS)';
+    case 'inventory':
+      return 'Inventario';
+    case 'purchases':
+      return 'Compras';
+    case 'audit':
+      return 'Auditoría';
+    case 'users':
+      return 'Usuarios';
+    case 'suppliers':
+      return 'Proveedores';
+    case 'settings':
+      return 'Configuración';
+    case 'catalog':
+      return 'Catálogo';
+    default:
+      return moduleKey || 'General';
+  }
+}
+
+function splitActivityDateTime(rawDate: string): { fecha: string; hora: string } {
+  if (!rawDate) return { fecha: '-', hora: '-' };
+  if (rawDate.includes(',')) {
+    const [d, t] = rawDate.split(',');
+    return { fecha: d.trim(), hora: (t || '').trim() || '-' };
+  }
+  const parts = rawDate.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return { fecha: parts[0], hora: parts.slice(1).join(' ') };
+  }
+  return { fecha: rawDate.trim(), hora: '-' };
+}
+
+export function buildActivityLogReportHtml(
+  logs: ActivityLogRecord[],
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat,
+  filterSummary?: string
+): string {
+  const isThermal = format === '80mm' || format === '58mm';
+  const storeName = storeSettings.storeName || 'Tienda Gosén';
+  const cellPad = isThermal ? '5px 4px' : '9px 12px';
+  const adminCount = logs.filter((l) => l.userRole === 'admin').length;
+  const collabCount = logs.length - adminCount;
+  const salesActions = logs.filter((l) => l.module === 'sales').length;
+
+  return `
+    <div style="font-variant-numeric:tabular-nums;">
+      <div class="text-center" style="border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:16px;">
+        <div style="font-size:${isThermal ? '15px' : '20px'};font-weight:900;text-transform:uppercase;color:#0f172a;">${storeName}</div>
+        ${storeSettings.address || storeSettings.phone ? `<div style="font-size:10.5px;color:#64748b;margin-top:2px;">${[storeSettings.address, storeSettings.phone ? `Tel: ${storeSettings.phone}` : ''].filter(Boolean).join(' • ')}</div>` : ''}
+        <div style="font-size:${isThermal ? '11.5px' : '14px'};font-weight:800;color:#1e1b4b;margin-top:5px;">REPORTE DE AUDITORÍA Y MOVIMIENTOS DEL PERSONAL</div>
+        <div style="font-size:11px;color:#475569;margin-top:3px;">${filterSummary || 'Todos los movimientos'} • Emisión: ${new Date().toLocaleString('es-HN')}</div>
+      </div>
+
+      ${
+        !isThermal
+          ? `
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;">
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;background:#f8fafc;">
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#475569;">Total Movimientos</div>
+            <div style="font-size:16px;font-weight:900;color:#0f172a;margin-top:2px;">${logs.length}</div>
+          </div>
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;background:#f8fafc;">
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#475569;">Administradores</div>
+            <div style="font-size:16px;font-weight:900;color:#b45309;margin-top:2px;">${adminCount}</div>
+          </div>
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;background:#f8fafc;">
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#475569;">Colaboradores</div>
+            <div style="font-size:16px;font-weight:900;color:#047857;margin-top:2px;">${collabCount}</div>
+          </div>
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;background:#f8fafc;">
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#475569;">Operaciones Ventas</div>
+            <div style="font-size:16px;font-weight:900;color:#1d4ed8;margin-top:2px;">${salesActions}</div>
+          </div>
+        </div>
+      `
+          : ''
+      }
+
+      <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:${isThermal ? '9.5px' : '11px'};">
+        <thead>
+          <tr style="background:#0f172a;color:#ffffff;">
+            ${isThermal ? '' : `<th style="padding:${cellPad};text-align:center;width:36px;">N°</th>`}
+            <th style="padding:${cellPad};text-align:left;">FECHA</th>
+            ${isThermal ? '' : `<th style="padding:${cellPad};text-align:left;">HORA</th>`}
+            <th style="padding:${cellPad};text-align:left;">EMPLEADO</th>
+            ${isThermal ? '' : `<th style="padding:${cellPad};text-align:left;">CARGO</th>`}
+            ${isThermal ? '' : `<th style="padding:${cellPad};text-align:left;">MÓDULO</th>`}
+            <th style="padding:${cellPad};text-align:left;">ACCIÓN REALIZADA</th>
+            ${isThermal ? '' : `<th style="padding:${cellPad};text-align:left;">DETALLE OPERATIVO</th>`}
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            logs.length === 0
+              ? `<tr><td colspan="${isThermal ? 3 : 8}" style="padding:16px;text-align:center;color:#64748b;">No hay movimientos registrados con los filtros actuales.</td></tr>`
+              : logs
+                  .map((l, idx) => {
+                    const { fecha, hora } = splitActivityDateTime(l.date);
+                    return `
+                    <tr style="border-bottom:1px solid #e2e8f0;background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+                      ${isThermal ? '' : `<td style="padding:${cellPad};text-align:center;font-weight:700;color:#64748b;">${idx + 1}</td>`}
+                      <td style="padding:${cellPad};white-space:nowrap;font-weight:700;color:#0f172a;">
+                        ${fecha}
+                        ${isThermal && hora !== '-' ? `<div style="font-size:8.5px;color:#64748b;font-weight:500;">${hora}</div>` : ''}
+                      </td>
+                      ${isThermal ? '' : `<td style="padding:${cellPad};white-space:nowrap;color:#475569;">${hora}</td>`}
+                      <td style="padding:${cellPad};">
+                        <strong style="color:#0f172a;">${l.userName}</strong>
+                        ${isThermal ? `<div style="font-size:8.5px;color:#64748b;">${l.userRole === 'admin' ? 'Admin' : 'Colaborador'} • ${getActivityModuleLabelEs(l.module)}</div>` : ''}
+                      </td>
+                      ${
+                        isThermal
+                          ? ''
+                          : `<td style="padding:${cellPad};white-space:nowrap;color:#475569;">${l.userRole === 'admin' ? 'Administrador' : 'Colaborador'}</td>`
+                      }
+                      ${
+                        isThermal
+                          ? ''
+                          : `<td style="padding:${cellPad};font-weight:700;color:#334155;white-space:nowrap;">${getActivityModuleLabelEs(l.module)}</td>`
+                      }
+                      <td style="padding:${cellPad};">
+                        <div style="font-weight:700;color:#0f172a;">${l.action}</div>
+                        ${isThermal && l.details ? `<div style="font-size:9px;color:#475569;margin-top:2px;">${l.details}</div>` : ''}
+                      </td>
+                      ${
+                        isThermal
+                          ? ''
+                          : `<td style="padding:${cellPad};color:#334155;line-height:1.4;">${l.details || '-'}</td>`
+                      }
+                    </tr>
+                  `;
+                  })
+                  .join('')
+          }
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+export async function downloadActivityLogReportPdf(
+  logs: ActivityLogRecord[],
+  storeSettings: StoreSettings,
+  filterSummary?: string
+): Promise<void> {
+  await preloadStoreLogoForPdf(storeSettings.logoUrl);
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
+  const adminCount = logs.filter((l) => l.userRole === 'admin').length;
+  const collabCount = logs.length - adminCount;
+  const salesActions = logs.filter((l) => l.module === 'sales').length;
+
+  let y = drawExecutivePdfHeader(doc, {
+    storeSettings,
+    documentTitle: 'BITÁCORA DE MOVIMIENTOS DEL PERSONAL',
+    documentNumber: `${logs.length} REGISTROS`,
+    dateLabel: `Emitido: ${new Date().toLocaleString('es-HN')}`,
+    accentRgb: [49, 46, 129],
+  });
+
+  y = drawExecutiveKpiCards(doc, y, [
+    {
+      label: 'Total Movimientos',
+      value: `${logs.length}`,
+      subtext: filterSummary || 'Historial auditado',
+      valueRgb: [15, 23, 42],
+    },
+    {
+      label: 'Acciones Admin',
+      value: `${adminCount}`,
+      subtext: 'Rol Administrador',
+      valueRgb: [180, 83, 9],
+    },
+    {
+      label: 'Acciones Colaborador',
+      value: `${collabCount}`,
+      subtext: 'Operación de tienda',
+      valueRgb: [4, 120, 87],
+    },
+    {
+      label: 'Módulo de Ventas',
+      value: `${salesActions}`,
+      subtext: 'Facturación y caja',
+      valueRgb: [29, 78, 216],
+    },
+  ]);
+
+  autoTable(doc, {
+    startY: y,
+    head: [
+      ['N°', 'Fecha', 'Hora', 'Empleado / Usuario', 'Cargo / Rol', 'Módulo', 'Acción Realizada', 'Detalle Operativo'],
+    ],
+    body: logs.map((l, idx) => {
+      const { fecha, hora } = splitActivityDateTime(l.date);
+      return [
+        String(idx + 1),
+        fecha,
+        hora,
+        l.userName,
+        l.userRole === 'admin' ? 'Administrador' : 'Colaborador',
+        getActivityModuleLabelEs(l.module),
+        l.action,
+        l.details || '-',
+      ];
+    }),
+    theme: 'grid',
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 8.5, cellPadding: 3 },
+    bodyStyles: { fontSize: 8, cellPadding: 2.8 },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 11 },
+      1: { cellWidth: 23, fontStyle: 'bold' },
+      2: { cellWidth: 23 },
+      3: { cellWidth: 34, fontStyle: 'bold' },
+      4: { cellWidth: 25 },
+      5: { cellWidth: 26, fontStyle: 'bold' },
+      6: { cellWidth: 52 },
+      7: { cellWidth: 'auto' },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  drawPdfPageFooters(doc, storeSettings, 'Registro de Movimientos del Personal');
+  doc.save(`Bitacora_Movimientos_Personal_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+

@@ -21,6 +21,11 @@ import {
   buildSalesReportHtml,
   downloadSalesReportPdf,
 } from '../utils/printPdfService';
+import {
+  getBridgeConfig,
+  sendTicketToBridgeServer,
+  printTicketDomElementWithFallbackCss,
+} from '../utils/universalPrintBridge';
 import { PrintFormatModal, PrinterConnectionManager } from './PrintFormatModal';
 import {
   ShoppingCart,
@@ -61,7 +66,9 @@ import {
   ShieldCheck,
   Users,
   Wallet,
+  FileSpreadsheet,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { ConfirmDialog } from './ConfirmDialog';
 import { playSound } from '../utils/audio';
 import { PosProductGridSkeleton } from './SkeletonLoaders';
@@ -164,8 +171,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
   // ------------------ HISTORY STATE ------------------
   const [historySearch, setHistorySearch] = useState('');
   const [historyDateFilter, setHistoryDateFilter] = useState<
-    'today' | 'yesterday' | 'today_yesterday' | 'week' | 'month' | 'all'
+    'today' | 'yesterday' | 'today_yesterday' | 'week' | 'month' | 'all' | 'custom'
   >('today_yesterday');
+  const [historyYearFilter, setHistoryYearFilter] = useState<string>('all');
+  const [historyMonthFilter, setHistoryMonthFilter] = useState<string>('all');
+  const [historyDayFilter, setHistoryDayFilter] = useState<string>('all');
+  const [historyExactDate, setHistoryExactDate] = useState<string>('');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'completed' | 'cancelled'>('all');
   const [historyPaymentFilter, setHistoryPaymentFilter] = useState<'all' | 'cash' | 'card' | 'transfer' | 'credit'>('all');
   const [historySellerFilter, setHistorySellerFilter] = useState<'all' | 'admin' | 'collaborator'>('all');
@@ -669,14 +680,54 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
   };
 
-  // Print Receipt / Invoice handler (supports 58mm, 80mm, Half-Letter, Letter/A4 on any printer or connected Bluetooth/USB)
-  const handlePrintReceipt = (formatOverride?: PrinterPaperFormat, targetSaleOverride?: SaleRecord) => {
+  // Print Receipt / Invoice handler (supports PC Bridge POST /imprimir from DOM capture + automatic fallback to window.print() with thermal CSS)
+  const handlePrintReceipt = async (
+    formatOverride?: PrinterPaperFormat,
+    targetSaleOverride?: SaleRecord
+  ) => {
     const saleToPrint = targetSaleOverride || completedSale;
     if (!saleToPrint) return;
     const fmt = formatOverride || receiptPrinterFormat;
     setPreferredPrinterFormat(fmt);
+    const opt = PRINTER_FORMAT_OPTIONS.find((o) => o.id === fmt);
     const sellerInfo = getSaleSellerInfo(saleToPrint);
     const sellerStr = `${sellerInfo.name} (${sellerInfo.roleLabel})`;
+
+    // 1. Si hay un servidor puente en la PC de caja configurado y el contenedor del ticket está montado:
+    const bridgeCfg = getBridgeConfig();
+    if (bridgeCfg.enabled && bridgeCfg.pcIp && receiptPrintRef.current && !targetSaleOverride) {
+      showToast(
+        `Capturando ticket (${opt?.shortLabel || fmt}) y enviando a PC de Caja (${bridgeCfg.pcIp})...`,
+        'info'
+      );
+      const bridgeResult = await sendTicketToBridgeServer({
+        ticketElement: receiptPrintRef.current,
+        format: fmt,
+      });
+      if (bridgeResult.ok) {
+        showToast(
+          `¡Ticket impreso en "${bridgeResult.printerName || 'PC de Caja'}" (${opt?.shortLabel || fmt})!`,
+          'success'
+        );
+        return;
+      }
+      // Modo respaldo (Fallback): Si el celular o equipo no detecta la PC en la red local,
+      // imprime directamente con window.print() aplicando las reglas CSS térmicas sobre el contenedor del ticket.
+      showToast(
+        'PC de caja no detectada en red local. Abriendo impresión directa de respaldo...',
+        'warning'
+      );
+      if (fmt === '58mm' || fmt === '80mm') {
+        printTicketDomElementWithFallbackCss(
+          receiptPrintRef.current,
+          fmt,
+          `Factura ${saleToPrint.saleNumber}`
+        );
+        return;
+      }
+    }
+
+    // 2. Impresión directa / Respaldo universal (Bluetooth/USB/Sistema window.print con reglas @page térmicas)
     const html = buildSaleDocumentHtml(saleToPrint, storeSettings, fmt, sellerStr);
     printHtmlDocument(
       html,
@@ -686,7 +737,6 @@ export const SalesView: React.FC<SalesViewProps> = ({
       saleToPrint,
       sellerStr
     );
-    const opt = PRINTER_FORMAT_OPTIONS.find((o) => o.id === fmt);
     showToast(
       `Enviando comprobante a impresora en formato ${opt?.shortLabel || fmt}...`,
       'info'
@@ -892,6 +942,76 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return false;
   };
 
+  const MONTH_NAMES = [
+    { value: '1', label: 'Enero', short: 'Ene' },
+    { value: '2', label: 'Febrero', short: 'Feb' },
+    { value: '3', label: 'Marzo', short: 'Mar' },
+    { value: '4', label: 'Abril', short: 'Abr' },
+    { value: '5', label: 'Mayo', short: 'May' },
+    { value: '6', label: 'Junio', short: 'Jun' },
+    { value: '7', label: 'Julio', short: 'Jul' },
+    { value: '8', label: 'Agosto', short: 'Ago' },
+    { value: '9', label: 'Septiembre', short: 'Sep' },
+    { value: '10', label: 'Octubre', short: 'Oct' },
+    { value: '11', label: 'Noviembre', short: 'Nov' },
+    { value: '12', label: 'Diciembre', short: 'Dic' },
+  ];
+
+  // Extract Year, Month (1-12), Day (1-31), and YYYY-MM-DD in Honduras timezone or from sale.date
+  const getSaleCalendarParts = (s: SaleRecord): { year: number; month: number; day: number; isoDate: string } => {
+    const rawDatePrefix = (s.date || '').split(',')[0].trim();
+    const dmyMatch = rawDatePrefix.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (dmyMatch) {
+      const day = parseInt(dmyMatch[1], 10);
+      const month = parseInt(dmyMatch[2], 10);
+      const year = parseInt(dmyMatch[3], 10);
+      const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      return { year, month, day, isoDate };
+    }
+    const hnStr = getHondurasDateStr(s.timestamp || Date.now());
+    const hnMatch = hnStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (hnMatch) {
+      const day = parseInt(hnMatch[1], 10);
+      const month = parseInt(hnMatch[2], 10);
+      const year = parseInt(hnMatch[3], 10);
+      const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      return { year, month, day, isoDate };
+    }
+    const d = new Date(s.timestamp || Date.now());
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    return {
+      year,
+      month,
+      day,
+      isoDate: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    };
+  };
+
+  // Available years dynamically computed from sales + current year
+  const availableSalesYears = useMemo(() => {
+    const currentYr = new Date().getFullYear();
+    const yearsSet = new Set<number>([currentYr, currentYr - 1]);
+    sales.forEach((s) => {
+      const { year } = getSaleCalendarParts(s);
+      if (year >= 2020 && year <= 2100) yearsSet.add(year);
+    });
+    return Array.from(yearsSet).sort((a, b) => b - a);
+  }, [sales]);
+
+  // Count of sales per month (1..12) for the selected year (or all years)
+  const monthSalesCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (let m = 1; m <= 12; m++) counts[String(m)] = 0;
+    sales.forEach((s) => {
+      const parts = getSaleCalendarParts(s);
+      if (historyYearFilter !== 'all' && String(parts.year) !== historyYearFilter) return;
+      counts[String(parts.month)] = (counts[String(parts.month)] || 0) + 1;
+    });
+    return counts;
+  }, [sales, historyYearFilter]);
+
   const dateFilterCounts = useMemo(() => {
     const now = new Date();
     const nowMs = now.getTime();
@@ -923,6 +1043,30 @@ export const SalesView: React.FC<SalesViewProps> = ({
     };
   }, [sales]);
 
+  const activePeriodLabel = useMemo(() => {
+    if (historyDateFilter === 'today') return 'Hoy';
+    if (historyDateFilter === 'yesterday') return 'Ayer';
+    if (historyDateFilter === 'today_yesterday') return 'Hoy y Ayer';
+    if (historyDateFilter === 'week') return 'Últimos 7 días';
+    if (historyDateFilter === 'month') return 'Este mes';
+    if (historyDateFilter === 'custom') {
+      if (historyExactDate) {
+        const [y, m, d] = historyExactDate.split('-');
+        const mObj = MONTH_NAMES.find((item) => Number(item.value) === Number(m));
+        return `Fecha: ${d} de ${mObj?.label || m} de ${y}`;
+      }
+      const parts: string[] = [];
+      if (historyDayFilter !== 'all') parts.push(`Día ${historyDayFilter.padStart(2, '0')}`);
+      if (historyMonthFilter !== 'all') {
+        const mObj = MONTH_NAMES.find((item) => item.value === historyMonthFilter);
+        parts.push(mObj?.label || `Mes ${historyMonthFilter}`);
+      }
+      if (historyYearFilter !== 'all') parts.push(historyYearFilter);
+      return parts.length > 0 ? parts.join(' de ') : 'Filtro personalizado';
+    }
+    return 'Todo el historial';
+  }, [historyDateFilter, historyExactDate, historyYearFilter, historyMonthFilter, historyDayFilter]);
+
   const filteredSalesHistory = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
     const now = new Date();
@@ -948,6 +1092,13 @@ export const SalesView: React.FC<SalesViewProps> = ({
       if (historyDateFilter === 'today_yesterday' && !isToday && !isYesterday) return false;
       if (historyDateFilter === 'week' && !isToday && !isYesterday && s.timestamp < startOfWeek) return false;
       if (historyDateFilter === 'month' && !isToday && !isYesterday && s.timestamp < startOfMonth) return false;
+      if (historyDateFilter === 'custom') {
+        const cal = getSaleCalendarParts(s);
+        if (historyExactDate && cal.isoDate !== historyExactDate) return false;
+        if (historyYearFilter !== 'all' && String(cal.year) !== historyYearFilter) return false;
+        if (historyMonthFilter !== 'all' && String(cal.month) !== historyMonthFilter) return false;
+        if (historyDayFilter !== 'all' && String(cal.day) !== historyDayFilter) return false;
+      }
 
       // Status filter
       if (historyStatusFilter !== 'all' && s.status !== historyStatusFilter) return false;
@@ -977,7 +1128,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
       return true;
     }).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-  }, [sales, users, historySearch, historyDateFilter, historyStatusFilter, historyPaymentFilter, historySellerFilter]);
+  }, [
+    sales,
+    users,
+    historySearch,
+    historyDateFilter,
+    historyYearFilter,
+    historyMonthFilter,
+    historyDayFilter,
+    historyExactDate,
+    historyStatusFilter,
+    historyPaymentFilter,
+    historySellerFilter,
+  ]);
 
   // Sales History Pagination State
   const [historyPage, setHistoryPage] = useState<number>(1);
@@ -985,7 +1148,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
   useEffect(() => {
     setHistoryPage(1);
-  }, [historySearch, historyDateFilter, historyStatusFilter, historyPaymentFilter, historySellerFilter]);
+  }, [
+    historySearch,
+    historyDateFilter,
+    historyYearFilter,
+    historyMonthFilter,
+    historyDayFilter,
+    historyExactDate,
+    historyStatusFilter,
+    historyPaymentFilter,
+    historySellerFilter,
+  ]);
 
   const totalHistoryPages = Math.max(1, Math.ceil(filteredSalesHistory.length / HISTORY_PAGE_SIZE));
   const paginatedSalesHistory = useMemo(() => {
@@ -1070,70 +1243,139 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
   };
 
-  // Export Sales to CSV (includes Cost, Profit & Margin)
+  // Export Sales to organized Excel (.xlsx) (includes Cost, Profit & Margin)
   const handleExportCSV = () => {
     if (filteredSalesHistory.length === 0) {
       showToast('No hay ventas para exportar con los filtros seleccionados.', 'warning');
       return;
     }
 
-    const headers = [
-      'N° Venta',
-      'Fecha',
-      'Cliente',
-      'RTN/DNI',
-      'Vendedor / Usuario',
-      'Rol Vendedor',
-      'Método de Pago',
-      'Artículos (Cant)',
-      'Subtotal (L)',
-      'Descuento (L)',
-      'ISV (L)',
-      'Total Facturado (L)',
-      'Costo Total (L)',
-      'Ganancia Neta (L)',
-      'Margen (%)',
-      'Efectivo Recibido',
-      'Cambio',
-      'Estado',
-      'Detalle Productos',
+    const storeTitle = (storeSettings.storeName || 'Tienda Gosén').toUpperCase();
+    const emittedAt = new Date().toLocaleString('es-HN');
+
+    const sheetAoA: (string | number)[][] = [
+      [`${storeTitle} — REPORTE DETALLADO DE HISTORIAL DE VENTAS Y UTILIDADES`],
+      [`Fecha de Emisión: ${emittedAt}   |   Total de Transacciones: ${filteredSalesHistory.length}`],
+      [],
+      [
+        'N° VENTA',
+        'FECHA',
+        'HORA',
+        'CLIENTE',
+        'RTN / DNI',
+        'VENDEDOR / USUARIO',
+        'ROL VENDEDOR',
+        'MÉTODO DE PAGO',
+        'ARTÍCULOS (CANT)',
+        'SUBTOTAL (L)',
+        'DESCUENTO (L)',
+        'ISV (L)',
+        'TOTAL FACTURADO (L)',
+        'COSTO TOTAL (L)',
+        'GANANCIA NETA (L)',
+        'MARGEN (%)',
+        'EFECTIVO RECIBIDO (L)',
+        'CAMBIO (L)',
+        'ESTADO',
+        'DETALLE DE PRODUCTOS VENDIDOS',
+      ],
     ];
 
-    const rows = filteredSalesHistory.map((s) => {
+    filteredSalesHistory.forEach((s) => {
       const seller = getSaleSellerInfo(s);
       const fin = getSaleFinancials(s);
-      return [
-        `"${s.saleNumber}"`,
-        `"${s.date}"`,
-        `"${s.customerName || 'Consumidor Final'}"`,
-        `"${s.customerRtn || ''}"`,
-        `"${seller.name}"`,
-        `"${seller.roleLabel}"`,
-        `"${s.paymentMethod}"`,
-        s.totalItems,
-        s.subtotal.toFixed(2),
-        s.discount.toFixed(2),
-        s.tax.toFixed(2),
-        s.total.toFixed(2),
-        s.status === 'completed' ? fin.totalCost.toFixed(2) : '0.00',
-        s.status === 'completed' ? fin.profit.toFixed(2) : '0.00',
+      let fechaPart = s.date || '-';
+      let horaPart = '-';
+      if (s.date && s.date.includes(',')) {
+        const [d, t] = s.date.split(',');
+        fechaPart = d.trim();
+        horaPart = (t || '').trim() || '-';
+      }
+
+      const paymentLabel =
+        s.paymentMethod === 'cash'
+          ? 'Efectivo'
+          : s.paymentMethod === 'card'
+          ? 'Tarjeta POS'
+          : s.paymentMethod === 'transfer'
+          ? 'Transferencia'
+          : s.paymentMethod === 'credit'
+          ? 'Crédito Cliente'
+          : s.paymentMethod;
+
+      sheetAoA.push([
+        s.saleNumber,
+        fechaPart,
+        horaPart,
+        s.customerName || 'Consumidor Final',
+        s.customerRtn || '-',
+        seller.name,
+        seller.roleLabel,
+        paymentLabel,
+        Number(s.totalItems) || 0,
+        Number(s.subtotal.toFixed(2)),
+        Number(s.discount.toFixed(2)),
+        Number(s.tax.toFixed(2)),
+        Number(s.total.toFixed(2)),
+        s.status === 'completed' ? Number(fin.totalCost.toFixed(2)) : 0,
+        s.status === 'completed' ? Number(fin.profit.toFixed(2)) : 0,
         s.status === 'completed' ? `${fin.marginPct.toFixed(1)}%` : '0%',
-        s.amountPaid.toFixed(2),
-        s.change.toFixed(2),
-        `"${s.status === 'completed' ? 'Completada' : 'Anulada'}"`,
-        `"${s.items.map((it) => `${it.quantity}x ${it.name} (${it.code})`).join('; ')}"`,
-      ];
+        Number((s.amountPaid || 0).toFixed(2)),
+        Number((s.change || 0).toFixed(2)),
+        s.status === 'completed' ? 'Completada' : 'Anulada',
+        (s.items || []).map((it) => `${it.quantity}x ${it.name} (${it.code})`).join('   •   '),
+      ]);
     });
 
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `historial_ventas_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast('Reporte de ventas y ganancias exportado exitosamente a CSV.', 'success');
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetAoA);
+
+    worksheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 19 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 19 } },
+    ];
+
+    worksheet['!autofilter'] = {
+      ref: `A4:T${sheetAoA.length}`,
+    };
+
+    worksheet['!cols'] = [
+      { wch: 15 }, // N° VENTA
+      { wch: 14 }, // FECHA
+      { wch: 15 }, // HORA
+      { wch: 24 }, // CLIENTE
+      { wch: 16 }, // RTN / DNI
+      { wch: 22 }, // VENDEDOR / USUARIO
+      { wch: 16 }, // ROL VENDEDOR
+      { wch: 18 }, // MÉTODO DE PAGO
+      { wch: 16 }, // ARTÍCULOS (CANT)
+      { wch: 15 }, // SUBTOTAL (L)
+      { wch: 15 }, // DESCUENTO (L)
+      { wch: 13 }, // ISV (L)
+      { wch: 20 }, // TOTAL FACTURADO (L)
+      { wch: 16 }, // COSTO TOTAL (L)
+      { wch: 18 }, // GANANCIA NETA (L)
+      { wch: 13 }, // MARGEN (%)
+      { wch: 20 }, // EFECTIVO RECIBIDO (L)
+      { wch: 14 }, // CAMBIO (L)
+      { wch: 14 }, // ESTADO
+      { wch: 58 }, // DETALLE DE PRODUCTOS VENDIDOS
+    ];
+
+    worksheet['!rows'] = [
+      { hpt: 26 },
+      { hpt: 20 },
+      { hpt: 12 },
+      { hpt: 26 },
+      ...filteredSalesHistory.map(() => ({ hpt: 22 })),
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Historial Ventas');
+    XLSX.writeFile(
+      workbook,
+      `Historial_Ventas_${new Date().toISOString().slice(0, 10)}.xlsx`
+    );
+    showToast('Excel (.xlsx) de ventas exportado con todas las columnas organizadas.', 'success');
   };
 
   return (
@@ -2221,145 +2463,325 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
           </div>
 
-          {/* History Filters & Action Toolbar */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+          {/* History Filters & Action Toolbar (Organized in 2 Clean Rows) */}
+          <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-3.5">
+            {/* Top Row: Search Box + Export Excel & Print/PDF Action Buttons */}
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
               {/* Search Box */}
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Buscar por N° de venta, cliente, vendedor o producto..."
-                value={historySearch}
-                onChange={(e) => setHistorySearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-              {historySearch && (
-                <button
-                  onClick={() => setHistorySearch('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-
-            {/* Filter Pills */}
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              {/* Date Filters */}
-              <div className="flex flex-wrap items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-                <button
-                  onClick={() => setHistoryDateFilter('today_yesterday')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                    historyDateFilter === 'today_yesterday'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Hoy y Ayer ({dateFilterCounts.today_yesterday})
-                </button>
-                <button
-                  onClick={() => setHistoryDateFilter('today')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                    historyDateFilter === 'today'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Hoy ({dateFilterCounts.today})
-                </button>
-                <button
-                  onClick={() => setHistoryDateFilter('yesterday')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                    historyDateFilter === 'yesterday'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Ayer ({dateFilterCounts.yesterday})
-                </button>
-                <button
-                  onClick={() => setHistoryDateFilter('week')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                    historyDateFilter === 'week'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Últimos 7d
-                </button>
-                <button
-                  onClick={() => setHistoryDateFilter('month')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                    historyDateFilter === 'month'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Este mes
-                </button>
-                <button
-                  onClick={() => setHistoryDateFilter('all')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                    historyDateFilter === 'all'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Todos ({dateFilterCounts.all})
-                </button>
+              <div className="relative flex-1">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar por N° de venta, cliente, vendedor o producto..."
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  className="w-full pl-10 pr-9 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                {historySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setHistorySearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
-              {/* Seller Role Filter */}
-              <select
-                value={historySellerFilter}
-                onChange={(e) => setHistorySellerFilter(e.target.value as any)}
-                className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-                title="Filtrar por quién realizó la venta"
-              >
-                <option value="all">Vendedor: Todos</option>
-                <option value="admin">Administrador</option>
-                <option value="collaborator">Colaboradores</option>
-              </select>
+              {/* Action Buttons: Export Excel (.xlsx) & Imprimir / PDF */}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleExportCSV}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer shadow-2xs whitespace-nowrap"
+                  title="Exportar historial de ventas a Excel (.xlsx) ordenado por columnas"
+                >
+                  <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                  <span>Exportar Excel (.xlsx)</span>
+                </button>
 
-              {/* Status Filter */}
-              <select
-                value={historyStatusFilter}
-                onChange={(e) => setHistoryStatusFilter(e.target.value as any)}
-                className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-              >
-                <option value="all">Estado: Todos</option>
-                <option value="completed">Completadas</option>
-                <option value="cancelled">Anuladas</option>
-              </select>
-
-              {/* Print / PDF Report Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (filteredSalesHistory.length === 0) {
-                    showToast('No hay ventas en el filtro actual para imprimir o exportar.', 'warning');
-                    return;
-                  }
-                  setShowSalesReportPrintModal(true);
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg transition-colors cursor-pointer shadow-2xs"
-                title="Imprimir reporte de ventas en cualquier impresora o guardar como PDF"
-              >
-                <Printer className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Imprimir / PDF</span>
-              </button>
-
-              {/* Export CSV Button */}
-              <button
-                type="button"
-                onClick={handleExportCSV}
-                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg border border-slate-200 transition-colors cursor-pointer"
-                title="Exportar a CSV"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>CSV</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (filteredSalesHistory.length === 0) {
+                      showToast('No hay ventas en el filtro actual para imprimir o exportar.', 'warning');
+                      return;
+                    }
+                    setShowSalesReportPrintModal(true);
+                  }}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer shadow-2xs whitespace-nowrap"
+                  title="Imprimir reporte de ventas en cualquier impresora o guardar como PDF"
+                >
+                  <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>Imprimir / PDF</span>
+                </button>
+              </div>
             </div>
+
+            {/* Bottom Row: Clean, Compact Date / Calendar / Year-Month-Day & Status Filters */}
+            <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-2.5 pt-3 border-t border-slate-100 text-xs">
+              {/* Left Group: Quick Shortcuts + Calendar & Year/Month/Day Selectors */}
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Compact Quick Buttons */}
+                <div className="inline-flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistoryDateFilter('today_yesterday');
+                      setHistoryExactDate('');
+                      setHistoryYearFilter('all');
+                      setHistoryMonthFilter('all');
+                      setHistoryDayFilter('all');
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                      historyDateFilter === 'today_yesterday'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Hoy y Ayer ({dateFilterCounts.today_yesterday})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistoryDateFilter('today');
+                      setHistoryExactDate('');
+                      setHistoryYearFilter('all');
+                      setHistoryMonthFilter('all');
+                      setHistoryDayFilter('all');
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                      historyDateFilter === 'today'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Hoy ({dateFilterCounts.today})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistoryDateFilter('yesterday');
+                      setHistoryExactDate('');
+                      setHistoryYearFilter('all');
+                      setHistoryMonthFilter('all');
+                      setHistoryDayFilter('all');
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                      historyDateFilter === 'yesterday'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Ayer ({dateFilterCounts.yesterday})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistoryDateFilter('all');
+                      setHistoryExactDate('');
+                      setHistoryYearFilter('all');
+                      setHistoryMonthFilter('all');
+                      setHistoryDayFilter('all');
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                      historyDateFilter === 'all'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Todas ({dateFilterCounts.all})
+                  </button>
+                </div>
+
+                {/* Unified Calendar + Year + Month (Ene-Dic) + Day Bar */}
+                <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200">
+                  {/* Direct Calendar Date Picker */}
+                  <div className="relative flex items-center" title="Seleccionar fecha exacta en el calendario">
+                    <Calendar className="w-3.5 h-3.5 text-emerald-600 mr-1.5 shrink-0 pointer-events-none" />
+                    <input
+                      type="date"
+                      value={historyExactDate}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setHistoryExactDate(val);
+                        if (val) {
+                          const [y, m, d] = val.split('-');
+                          setHistoryYearFilter(String(Number(y)));
+                          setHistoryMonthFilter(String(Number(m)));
+                          setHistoryDayFilter(String(Number(d)));
+                          setHistoryDateFilter('custom');
+                        } else {
+                          setHistoryDayFilter('all');
+                          if (historyYearFilter === 'all' && historyMonthFilter === 'all') {
+                            setHistoryDateFilter('today_yesterday');
+                          }
+                        }
+                      }}
+                      className={`bg-white border rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer ${
+                        historyExactDate
+                          ? 'border-emerald-500 text-emerald-800 bg-emerald-50/40'
+                          : 'border-slate-200 text-slate-700'
+                      }`}
+                    />
+                  </div>
+
+                  {/* Year Selector */}
+                  <select
+                    value={historyYearFilter}
+                    onChange={(e) => {
+                      const yr = e.target.value;
+                      setHistoryYearFilter(yr);
+                      setHistoryExactDate('');
+                      if (yr === 'all' && historyMonthFilter === 'all' && historyDayFilter === 'all') {
+                        setHistoryDateFilter('all');
+                      } else {
+                        setHistoryDateFilter('custom');
+                      }
+                    }}
+                    className={`bg-white border rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer ${
+                      historyDateFilter === 'custom' && historyYearFilter !== 'all'
+                        ? 'border-emerald-500 text-emerald-800 bg-emerald-50/40'
+                        : 'border-slate-200 text-slate-700'
+                    }`}
+                    title="Filtrar por Año"
+                  >
+                    <option value="all">Año: Todos</option>
+                    {availableSalesYears.map((yr) => (
+                      <option key={yr} value={String(yr)}>
+                        Año {yr}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Month Selector (Enero - Diciembre) */}
+                  <select
+                    value={historyMonthFilter}
+                    onChange={(e) => {
+                      const mo = e.target.value;
+                      setHistoryMonthFilter(mo);
+                      setHistoryExactDate('');
+                      if (mo !== 'all' && historyYearFilter === 'all') {
+                        setHistoryYearFilter(String(new Date().getFullYear()));
+                      }
+                      if (mo === 'all' && historyYearFilter === 'all' && historyDayFilter === 'all') {
+                        setHistoryDateFilter('all');
+                      } else {
+                        setHistoryDateFilter('custom');
+                      }
+                    }}
+                    className={`bg-white border rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer ${
+                      historyDateFilter === 'custom' && historyMonthFilter !== 'all'
+                        ? 'border-emerald-500 text-emerald-800 bg-emerald-50/40'
+                        : 'border-slate-200 text-slate-700'
+                    }`}
+                    title="Filtrar por Mes (Enero a Diciembre)"
+                  >
+                    <option value="all">Mes: Todos (Ene - Dic)</option>
+                    {MONTH_NAMES.map((m) => {
+                      const count = monthSalesCounts[m.value] || 0;
+                      return (
+                        <option key={m.value} value={m.value}>
+                          {m.value.padStart(2, '0')} - {m.label} ({count})
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  {/* Day Selector (1 - 31) */}
+                  <select
+                    value={historyDayFilter}
+                    onChange={(e) => {
+                      const dy = e.target.value;
+                      setHistoryDayFilter(dy);
+                      setHistoryExactDate('');
+                      if (dy !== 'all') {
+                        if (historyYearFilter === 'all') {
+                          setHistoryYearFilter(String(new Date().getFullYear()));
+                        }
+                        if (historyMonthFilter === 'all') {
+                          setHistoryMonthFilter(String(new Date().getMonth() + 1));
+                        }
+                        setHistoryDateFilter('custom');
+                      } else if (historyYearFilter === 'all' && historyMonthFilter === 'all') {
+                        setHistoryDateFilter('all');
+                      } else {
+                        setHistoryDateFilter('custom');
+                      }
+                    }}
+                    className={`bg-white border rounded-lg px-2 py-1 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer ${
+                      historyDateFilter === 'custom' && historyDayFilter !== 'all'
+                        ? 'border-emerald-500 text-emerald-800 bg-emerald-50/40'
+                        : 'border-slate-200 text-slate-700'
+                    }`}
+                    title="Filtrar por Día del mes"
+                  >
+                    <option value="all">Día: Todos</option>
+                    {Array.from({ length: 31 }, (_, idx) => String(idx + 1)).map((d) => (
+                      <option key={d} value={d}>
+                        Día {d.padStart(2, '0')}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Reset custom date filter button */}
+                  {historyDateFilter === 'custom' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHistoryDateFilter('today_yesterday');
+                        setHistoryExactDate('');
+                        setHistoryYearFilter('all');
+                        setHistoryMonthFilter('all');
+                        setHistoryDayFilter('all');
+                      }}
+                      className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                      title="Quitar filtro de fecha personalizada"
+                    >
+                      <X className="w-3 h-3" />
+                      <span>Limpiar</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Group: Seller & Status Dropdowns */}
+              <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
+                <select
+                  value={historySellerFilter}
+                  onChange={(e) => setHistorySellerFilter(e.target.value as any)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                  title="Filtrar por quién realizó la venta"
+                >
+                  <option value="all">Vendedor: Todos</option>
+                  <option value="admin">Administrador</option>
+                  <option value="collaborator">Colaboradores</option>
+                </select>
+
+                <select
+                  value={historyStatusFilter}
+                  onChange={(e) => setHistoryStatusFilter(e.target.value as any)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                >
+                  <option value="all">Estado: Todos</option>
+                  <option value="completed">Completadas</option>
+                  <option value="cancelled">Anuladas</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Subtle Active Period Summary Pill when filtering by Calendar / Month / Year */}
+            {historyDateFilter === 'custom' && (
+              <div className="flex items-center justify-between px-3 py-1.5 bg-emerald-50/80 border border-emerald-200 rounded-xl text-xs text-emerald-900">
+                <div className="flex items-center gap-2 font-bold">
+                  <Calendar className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Mostrando ventas de: {activePeriodLabel}</span>
+                </div>
+                <span className="font-extrabold text-emerald-700">
+                  {filteredSalesHistory.length} {filteredSalesHistory.length === 1 ? 'venta encontrada' : 'ventas encontradas'}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Sales History Table */}
@@ -3020,18 +3442,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 compact
               />
 
-              {/* Multi-Printer Paper Format Selector inside Receipt Modal */}
-              <div className="bg-slate-100 border border-slate-200 rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
-                    <Printer className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>Formato de Impresora / Papel y PDF:</span>
-                  </span>
-                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
-                    Multi-Impresora + PDF
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-1.5">
+              {/* Compact Paper Format Selector inside Receipt Modal */}
+              <div className="bg-slate-100 border border-slate-200 rounded-xl p-2 space-y-1.5">
+                <span className="text-[11px] font-bold text-slate-600 px-1 block">
+                  Formato de papel / PDF:
+                </span>
+                <div className="grid grid-cols-4 gap-1">
                   {PRINTER_FORMAT_OPTIONS.map((opt) => {
                     const active = receiptPrinterFormat === opt.id;
                     return (
@@ -3042,23 +3458,13 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           setReceiptPrinterFormat(opt.id);
                           setPreferredPrinterFormat(opt.id);
                         }}
-                        className={`p-2 rounded-lg border text-left transition-all cursor-pointer ${
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold text-center transition-all cursor-pointer truncate ${
                           active
-                            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                            ? 'bg-slate-900 text-white shadow-2xs'
+                            : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
                         }`}
                       >
-                        <div className="text-[11px] font-extrabold leading-tight flex items-center justify-between">
-                          <span>{opt.shortLabel}</span>
-                          {active && <Check className="w-3 h-3 text-emerald-400 shrink-0" />}
-                        </div>
-                        <div
-                          className={`text-[9.5px] mt-0.5 truncate ${
-                            active ? 'text-slate-300' : 'text-slate-400'
-                          }`}
-                        >
-                          {opt.printerTypes}
-                        </div>
+                        {opt.shortLabel}
                       </button>
                     );
                   })}
@@ -3123,18 +3529,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
           buildSalesReportHtml(
             filteredSalesHistory,
             {
-              periodLabel:
-                historyDateFilter === 'today'
-                  ? 'Hoy'
-                  : historyDateFilter === 'yesterday'
-                  ? 'Ayer'
-                  : historyDateFilter === 'today_yesterday'
-                  ? 'Hoy y Ayer'
-                  : historyDateFilter === 'week'
-                  ? 'Últimos 7 días'
-                  : historyDateFilter === 'month'
-                  ? 'Este mes'
-                  : 'Todo el historial',
+              periodLabel: activePeriodLabel,
               count: salesMetrics.count,
               itemsSold: salesMetrics.itemsSold,
               revenue: salesMetrics.revenue,
@@ -3150,18 +3545,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
           downloadSalesReportPdf(
             filteredSalesHistory,
             {
-              periodLabel:
-                historyDateFilter === 'today'
-                  ? 'Hoy'
-                  : historyDateFilter === 'yesterday'
-                  ? 'Ayer'
-                  : historyDateFilter === 'today_yesterday'
-                  ? 'Hoy y Ayer'
-                  : historyDateFilter === 'week'
-                  ? 'Últimos 7 días'
-                  : historyDateFilter === 'month'
-                  ? 'Este mes'
-                  : 'Todo el historial',
+              periodLabel: activePeriodLabel,
               count: salesMetrics.count,
               itemsSold: salesMetrics.itemsSold,
               revenue: salesMetrics.revenue,

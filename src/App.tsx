@@ -38,6 +38,7 @@ import {
   getActiveCompanyId,
   setActiveCompanyId,
   normalizeCompanySlug,
+  getScopedDocId,
   getCachedInventory,
   setCachedInventory,
   getCachedSuppliers,
@@ -1121,29 +1122,38 @@ export const App: React.FC = () => {
 
     setIsSyncing(true);
     try {
+      const normalizedProduct: Product = {
+        ...product,
+        id: getScopedDocId(product.code, activeCompanyId),
+        companyId: activeCompanyId,
+      };
+
       setInventory((prev) => {
         const index = prev.findIndex((p) => p.code.toLowerCase() === (oldCode || product.code).toLowerCase());
         let next: Product[];
         if (index >= 0) {
           next = [...prev];
-          next[index] = product;
+          next[index] = normalizedProduct;
         } else {
-          next = [product, ...prev];
+          next = [normalizedProduct, ...prev];
         }
-        setCachedInventory(next, Date.now());
+        setCachedInventory(next, Date.now(), activeCompanyId);
         return next;
       });
 
-      await saveProductToFirestore(product, oldCode);
+      await saveProductToFirestore(normalizedProduct, oldCode, activeCompanyId);
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Usuario',
-        userRole: userSession?.role || 'collaborator',
-        action: `Guardó producto "${product.name}" (${product.code})`,
-        module: 'inventory',
-        details: `Stock: ${product.stock}, Precio: L. ${product.price.toFixed(2)}`,
-      });
+      logActivityInFirestore(
+        {
+          userName: userSession?.userName || 'Usuario',
+          userRole: userSession?.role || 'collaborator',
+          action: `Guardó producto "${product.name}" (${product.code})`,
+          module: 'inventory',
+          details: `Stock: ${product.stock}, Precio: L. ${product.price.toFixed(2)}`,
+        },
+        activeCompanyId
+      );
 
       showToast(`"${product.name}" guardado y sincronizado`, 'success');
     } catch (err: any) {
@@ -1173,11 +1183,17 @@ export const App: React.FC = () => {
 
     setIsSyncing(true);
     try {
+      const normalizedProducts = productsToSave.map((p) => ({
+        ...p,
+        id: getScopedDocId(p.code, activeCompanyId),
+        companyId: activeCompanyId,
+      }));
+
       // Optimistic local state & cache update
       if (newSuppliers.length > 0) {
         setSuppliers((prev) => {
           const nextSup = [...prev, ...newSuppliers];
-          setCachedSuppliers(nextSup);
+          setCachedSuppliers(nextSup, activeCompanyId);
           return nextSup;
         });
       }
@@ -1185,13 +1201,13 @@ export const App: React.FC = () => {
       setInventory((prev) => {
         const map = new Map<string, Product>();
         prev.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
-        productsToSave.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
+        normalizedProducts.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
         const nextInv = Array.from(map.values());
-        setCachedInventory(nextInv, Date.now());
+        setCachedInventory(nextInv, Date.now(), activeCompanyId);
         return nextInv;
       });
 
-      await bulkSaveProductsToFirestore(productsToSave, newSuppliers);
+      await bulkSaveProductsToFirestore(normalizedProducts, newSuppliers, activeCompanyId);
       setLastSyncTime(new Date());
 
       logActivityInFirestore({
@@ -2236,6 +2252,7 @@ export const App: React.FC = () => {
           {activeTabToRender === 'activity' && allowedTabsList.includes('activity') && (
             <ActivityLogView
               logs={activityLogs}
+              storeSettings={storeSettings}
               showToast={showToast}
             />
           )}

@@ -21,6 +21,13 @@ import {
   checkHardwareSupport,
 } from '../utils/printerHardwareService';
 import {
+  BridgePrinterInfo,
+  getBridgeConfig,
+  saveBridgeConfig,
+  fetchBridgePrinters,
+  downloadStandaloneBridgeScript,
+} from '../utils/universalPrintBridge';
+import {
   Printer,
   Download,
   FileText,
@@ -58,6 +65,7 @@ export const PrinterConnectionManager: React.FC<PrinterConnectionManagerProps> =
   const [connectedPrinter, setConnectedPrinter] = useState<ConnectedPrinterDevice | null>(null);
   const [isConnecting, setIsConnecting] = useState<string | null>(null);
   const [showCustomSetup, setShowCustomSetup] = useState<boolean>(false);
+  const [isExpanded, setIsExpanded] = useState<boolean>(!compact);
 
   // Custom Setup Form State
   const [selectedPresetId, setSelectedPresetId] = useState<string>('generic-bt-80');
@@ -66,6 +74,14 @@ export const PrinterConnectionManager: React.FC<PrinterConnectionManagerProps> =
     useState<PrinterConnectionType>('bluetooth');
   const [customIpAddress, setCustomIpAddress] = useState<string>('');
   const [customPort, setCustomPort] = useState<string>('9100');
+
+  // PC Bridge State (saved in localStorage: IP de PC de Caja + Impresora de Windows)
+  const initialBridge = getBridgeConfig();
+  const [bridgePcIp, setBridgePcIp] = useState<string>(initialBridge.pcIp);
+  const [bridgePrinterName, setBridgePrinterName] = useState<string>(initialBridge.printerName);
+  const [bridgeEnabled, setBridgeEnabled] = useState<boolean>(initialBridge.enabled);
+  const [bridgePrintersList, setBridgePrintersList] = useState<BridgePrinterInfo[]>([]);
+  const [isLoadingBridgePrinters, setIsLoadingBridgePrinters] = useState<boolean>(false);
 
   const hwSupport = checkHardwareSupport();
 
@@ -250,29 +266,96 @@ export const PrinterConnectionManager: React.FC<PrinterConnectionManagerProps> =
     }
   };
 
+  const handleFetchBridgePrinters = async () => {
+    setIsLoadingBridgePrinters(true);
+    try {
+      const res = await fetchBridgePrinters(bridgePcIp);
+      if (res.ok && res.printers.length > 0) {
+        setBridgePrintersList(res.printers);
+        const defaultP = res.printers.find((p) => p.isDefault) || res.printers[0];
+        const chosen = bridgePrinterName || defaultP.name;
+        setBridgePrinterName(chosen);
+        saveBridgeConfig({
+          pcIp: bridgePcIp,
+          printerName: chosen,
+          enabled: true,
+        });
+        setBridgeEnabled(true);
+        if (showToast) {
+          showToast(
+            `¡Conectado a PC de Caja! ${res.printers.length} impresora(s) detectada(s).`,
+            'success'
+          );
+        }
+      } else {
+        setBridgePrintersList([]);
+        if (showToast) {
+          showToast(
+            res.error ||
+              'No se detectó el servidor puente en esa IP. Se usará impresión nativa de respaldo.',
+            'warning'
+          );
+        }
+      }
+    } finally {
+      setIsLoadingBridgePrinters(false);
+    }
+  };
+
+  const handleSaveBridgeConfig = async () => {
+    const saved = saveBridgeConfig({
+      pcIp: bridgePcIp,
+      printerName: bridgePrinterName,
+      enabled: Boolean(bridgePcIp.trim() || bridgePrinterName.trim()),
+    });
+    setBridgeEnabled(saved.enabled);
+    await connectNetworkOrSystemPrinter({
+      customName: saved.printerName
+        ? `${saved.printerName} (PC Caja ${saved.pcIp || 'Local'})`
+        : `Puente PC Caja (${saved.pcIp || 'Local'})`,
+      ipAddress: saved.pcIp || undefined,
+      port: '4000',
+      paperWidth,
+      preferredFormat: selectedFormat,
+    });
+    if (showToast) {
+      showToast(
+        `Configuración guardada: PC (${saved.pcIp || 'Local'}) → ${saved.printerName || 'Impresora predeterminada'}`,
+        'success'
+      );
+    }
+  };
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2.5 shadow-2xs">
+    <div className="rounded-xl border border-slate-200 bg-white p-2.5 space-y-2 shadow-2xs">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 min-w-0">
           <PlugZap className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wide">
-            Conexión de Impresora POS / Oficina
+          <span className="text-xs font-bold text-slate-800 truncate">
+            {connectedPrinter ? connectedPrinter.name : 'Impresora POS / Oficina'}
           </span>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           {connectedPrinter?.status === 'connected' ? (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-300 text-[10px] font-extrabold text-emerald-800">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              CONECTADA
-            </span>
+            <span className="text-[10px] font-bold text-emerald-700">Conectada</span>
           ) : (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[10px] font-bold text-amber-800">
-              Sin Vincular
-            </span>
+            <span className="text-[10px] font-medium text-slate-500">Sistema</span>
+          )}
+          {compact && (
+            <button
+              type="button"
+              onClick={() => setIsExpanded((v) => !v)}
+              className="px-2 py-1 rounded-md border border-slate-200 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 cursor-pointer"
+            >
+              {isExpanded ? 'Ocultar' : 'Cambiar'}
+            </button>
           )}
           <button
             type="button"
-            onClick={() => setShowCustomSetup((v) => !v)}
+            onClick={() => {
+              setIsExpanded(true);
+              setShowCustomSetup((v) => !v);
+            }}
             className="p-1 rounded-md border border-slate-200 hover:bg-slate-100 text-slate-600 cursor-pointer"
             title="Configurar modelo, marca o dirección IP de la impresora"
           >
@@ -280,6 +363,9 @@ export const PrinterConnectionManager: React.FC<PrinterConnectionManagerProps> =
           </button>
         </div>
       </div>
+
+      {isExpanded && (
+        <>
 
       {/* Connected Printer Status Banner */}
       {connectedPrinter && (
@@ -432,6 +518,97 @@ export const PrinterConnectionManager: React.FC<PrinterConnectionManagerProps> =
         </button>
       </div>
 
+      {/* Puente Universal PC de Caja (IP LocalStorage + Selector de Impresora Windows) */}
+      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10.5px] font-extrabold text-slate-800 uppercase flex items-center gap-1.5">
+            <Wifi className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span>Puente PC de Caja (iPhone / Android / PC → Windows)</span>
+          </span>
+          <button
+            type="button"
+            onClick={downloadStandaloneBridgeScript}
+            className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 underline cursor-pointer shrink-0"
+            title="Descargar script Node.js (servidor-puente-impresora.cjs) para ejecutar en la PC Windows de caja"
+          >
+            Descargar Script PC
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-1.5 items-end">
+          <div className="sm:col-span-5">
+            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+              IP de la PC de Caja (Puerto 4000)
+            </label>
+            <input
+              type="text"
+              value={bridgePcIp}
+              onChange={(e) => setBridgePcIp(e.target.value)}
+              placeholder="Ej. 192.168.1.50:4000"
+              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            />
+          </div>
+
+          <div className="sm:col-span-5">
+            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+              Impresora Seleccionada en PC
+            </label>
+            {bridgePrintersList.length > 0 ? (
+              <select
+                value={bridgePrinterName}
+                onChange={(e) => setBridgePrinterName(e.target.value)}
+                className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-800 font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              >
+                {bridgePrintersList.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name} {p.isDefault ? '(Predeterminada)' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={bridgePrinterName}
+                onChange={(e) => setBridgePrinterName(e.target.value)}
+                placeholder="Nombre en Windows o Predeterminada"
+                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            )}
+          </div>
+
+          <div className="sm:col-span-2 flex gap-1">
+            <button
+              type="button"
+              onClick={handleFetchBridgePrinters}
+              disabled={isLoadingBridgePrinters}
+              className="flex-1 py-1.5 px-2 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-[10.5px] flex items-center justify-center gap-1 cursor-pointer transition-colors"
+              title="Consultar GET /impresoras en la PC de caja"
+            >
+              <RefreshCw className={`w-3 h-3 ${isLoadingBridgePrinters ? 'animate-spin' : ''}`} />
+              <span>Buscar</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveBridgeConfig}
+              className="flex-1 py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10.5px] flex items-center justify-center gap-1 cursor-pointer transition-colors"
+              title="Guardar IP de PC de caja e impresora en localStorage"
+            >
+              <Check className="w-3 h-3" />
+              <span>Guardar</span>
+            </button>
+          </div>
+        </div>
+
+        {bridgeEnabled && (bridgePcIp || bridgePrinterName) && (
+          <div className="text-[10px] text-emerald-800 font-semibold flex items-center justify-between bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-lg">
+            <span>
+              ✓ Activo: PC <strong>{bridgePcIp || 'localhost:4000'}</strong> →{' '}
+              <strong>{bridgePrinterName || 'Impresora Predeterminada'}</strong> (con respaldo automático window.print)
+            </span>
+          </div>
+        )}
+      </div>
+
       {/* Expandable Custom Printer Model / IP / Channel Configurator */}
       {showCustomSetup && (
         <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5 animate-in fade-in duration-150">
@@ -563,6 +740,8 @@ export const PrinterConnectionManager: React.FC<PrinterConnectionManagerProps> =
           <span>Enviar Página de Prueba a la Impresora</span>
         </button>
       )}
+        </>
+      )}
     </div>
   );
 };
@@ -593,31 +772,29 @@ export const PrintFormatModal: React.FC<PrintFormatModalProps> = ({
   const [selectedFormat, setSelectedFormat] = useState<PrinterPaperFormat>(() =>
     defaultFormat || getPreferredPrinterFormat(storeSettings)
   );
-  const [rememberChoice, setRememberChoice] = useState<boolean>(true);
+  const [showPrinterConfig, setShowPrinterConfig] = useState<boolean>(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
   const [isSharingToPrinter, setIsSharingToPrinter] = useState<boolean>(false);
 
   useEffect(() => {
     if (isOpen) {
       setSelectedFormat(defaultFormat || getPreferredPrinterFormat(storeSettings));
+      setShowPrinterConfig(false);
     }
   }, [isOpen, defaultFormat, storeSettings]);
 
   if (!isOpen) return null;
 
   const previewHtml = buildHtml(selectedFormat);
+  const isThermal = selectedFormat === '80mm' || selectedFormat === '58mm';
 
   const handleSelectFormat = (fmt: PrinterPaperFormat) => {
     setSelectedFormat(fmt);
-    if (rememberChoice) {
-      setPreferredPrinterFormat(fmt);
-    }
+    setPreferredPrinterFormat(fmt);
   };
 
   const handlePrintNow = () => {
-    if (rememberChoice) {
-      setPreferredPrinterFormat(selectedFormat);
-    }
+    setPreferredPrinterFormat(selectedFormat);
     printHtmlDocument(previewHtml, title, selectedFormat, storeSettings);
     if (showToast) {
       const opt = PRINTER_FORMAT_OPTIONS.find((o) => o.id === selectedFormat);
@@ -629,9 +806,7 @@ export const PrintFormatModal: React.FC<PrintFormatModalProps> = ({
   };
 
   const handleShareToPrinterApp = async () => {
-    if (rememberChoice) {
-      setPreferredPrinterFormat(selectedFormat);
-    }
+    setPreferredPrinterFormat(selectedFormat);
     setIsSharingToPrinter(true);
     try {
       const shared = await shareHtmlDocumentAsPdfToPrinterApp(
@@ -654,9 +829,7 @@ export const PrintFormatModal: React.FC<PrintFormatModalProps> = ({
   };
 
   const handleDownloadPdfNow = async () => {
-    if (rememberChoice) {
-      setPreferredPrinterFormat(selectedFormat);
-    }
+    setPreferredPrinterFormat(selectedFormat);
     setIsDownloadingPdf(true);
     try {
       await Promise.resolve(onDownloadPdf(selectedFormat));
@@ -670,177 +843,181 @@ export const PrintFormatModal: React.FC<PrintFormatModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-[80] animate-in fade-in duration-150">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full overflow-hidden flex flex-col max-h-[94dvh] border border-slate-200">
-        {/* Header */}
-        <div className="px-4 sm:px-6 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 flex items-center justify-center shrink-0">
-              <Printer className="w-5 h-5" />
-            </div>
+      <style>{`
+        .gosen-preview-sheet table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+        .gosen-preview-sheet th,
+        .gosen-preview-sheet td {
+          padding: ${isThermal ? '4px 3px' : '7px 10px'};
+          text-align: left;
+          vertical-align: top;
+        }
+        .gosen-preview-sheet .text-right { text-align: right; }
+        .gosen-preview-sheet .text-center { text-align: center; }
+        .gosen-preview-sheet .font-bold { font-weight: 700; }
+        .gosen-preview-sheet .font-black { font-weight: 900; }
+        .gosen-preview-sheet .dashed-line {
+          border-top: 1px dashed #334155;
+          margin: 6px 0;
+        }
+        .gosen-preview-sheet .solid-line {
+          border-top: 2px solid #0f172a;
+          margin: 8px 0;
+        }
+        .gosen-preview-sheet .kpi-grid {
+          display: grid;
+          grid-template-columns: repeat(${isThermal ? '2' : '4'}, 1fr);
+          gap: 8px;
+          margin: 12px 0;
+        }
+        .gosen-preview-sheet .kpi-box {
+          border: 1px solid #cbd5e1;
+          border-radius: 6px;
+          padding: 8px 10px;
+          background: #f8fafc;
+        }
+        .gosen-preview-sheet .kpi-label {
+          font-size: 9.5px;
+          text-transform: uppercase;
+          color: #475569;
+          font-weight: 700;
+        }
+        .gosen-preview-sheet .kpi-value {
+          font-size: ${isThermal ? '13px' : '15px'};
+          font-weight: 800;
+          color: #0f172a;
+          margin-top: 2px;
+        }
+        .gosen-preview-sheet .signatures {
+          display: flex;
+          justify-content: space-around;
+          gap: 20px;
+          margin-top: 28px;
+          padding-top: 14px;
+        }
+        .gosen-preview-sheet .sig-block {
+          flex: 1;
+          max-width: 220px;
+          text-align: center;
+        }
+        .gosen-preview-sheet .sig-line {
+          border-top: 1px solid #334155;
+          margin-bottom: 6px;
+        }
+      `}</style>
+
+      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full overflow-hidden flex flex-col h-[92dvh] max-h-[92dvh] border border-slate-200">
+        {/* Clean Header */}
+        <div className="px-4 sm:px-6 py-3 bg-slate-900 text-white flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Printer className="w-5 h-5 text-emerald-400 shrink-0" />
             <div className="min-w-0">
-              <h3 className="font-extrabold text-sm sm:text-base truncate">
-                Centro de Impresión, Conexión de Impresoras y PDF Ejecutivo
-              </h3>
-              <p className="text-[11px] text-slate-300 truncate">
-                {title} {subtitle ? `• ${subtitle}` : ''}
-              </p>
+              <h3 className="font-bold text-sm sm:text-base truncate">{title}</h3>
+              {subtitle && (
+                <p className="text-[11px] text-slate-300 truncate">{subtitle}</p>
+              )}
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Body */}
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
-          {/* Left Panel: Printer Connection + Format Selector */}
-          <div className="w-full lg:w-96 bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 p-3 sm:p-4 overflow-y-auto space-y-3.5 shrink-0">
-            {/* Hardware & System Printer Connection Card */}
+        {/* Compact Format & Optional Printer Setup Bar */}
+        <div className="px-3 sm:px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-1 bg-slate-200/80 p-1 rounded-xl overflow-x-auto max-w-full">
+            {PRINTER_FORMAT_OPTIONS.map((opt) => {
+              const isSelected = selectedFormat === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => handleSelectFormat(opt.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {opt.shortLabel}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowPrinterConfig((v) => !v)}
+            className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+              showPrinterConfig
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+            }`}
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+            <span>{showPrinterConfig ? 'Ocultar Impresora' : 'Conexión de Impresora'}</span>
+          </button>
+        </div>
+
+        {/* Collapsible Printer Connection Drawer (Hidden by Default for Cleanliness) */}
+        {showPrinterConfig && (
+          <div className="p-3 sm:p-4 bg-slate-100 border-b border-slate-200 max-h-60 overflow-y-auto shrink-0">
             <PrinterConnectionManager
               storeSettings={storeSettings}
               selectedFormat={selectedFormat}
               onSelectFormat={handleSelectFormat}
               showToast={showToast}
             />
-
-            <div>
-              <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 block">
-                Selecciona el Formato de Papel / PDF
-              </span>
-              <p className="text-[10.5px] text-slate-500 mt-0.5">
-                Ajusta automáticamente márgenes, columnas y diseño del PDF o impresora.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 lg:grid-cols-1 gap-2">
-              {PRINTER_FORMAT_OPTIONS.map((opt) => {
-                const isSelected = selectedFormat === opt.id;
-                const isThermal = opt.id === '80mm' || opt.id === '58mm';
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => handleSelectFormat(opt.id)}
-                    className={`text-left p-2.5 sm:p-3 rounded-xl border transition-all cursor-pointer flex items-start gap-2.5 ${
-                      isSelected
-                        ? 'bg-emerald-50/90 border-emerald-600 ring-2 ring-emerald-500/20 shadow-xs'
-                        : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-100/60'
-                    }`}
-                  >
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
-                        isSelected
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {isThermal ? (
-                        <Receipt className="w-4 h-4" />
-                      ) : (
-                        <FileText className="w-4 h-4" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-1">
-                        <span
-                          className={`text-xs font-extrabold truncate ${
-                            isSelected ? 'text-emerald-950' : 'text-slate-800'
-                          }`}
-                        >
-                          {opt.shortLabel}
-                        </span>
-                        {isSelected && (
-                          <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                        )}
-                      </div>
-                      <span className="text-[10px] font-mono text-slate-500 block">
-                        {opt.dimensions}
-                      </span>
-                      <span className="hidden sm:block text-[10px] text-slate-500 mt-0.5 leading-tight">
-                        {opt.description}
-                      </span>
-                      <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[9px] font-bold">
-                        {opt.printerTypes}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Remember checkbox */}
-            <label className="flex items-center gap-2 pt-1 text-xs text-slate-700 font-medium cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={rememberChoice}
-                onChange={(e) => setRememberChoice(e.target.checked)}
-                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-              />
-              <span>Recordar este formato como predeterminado</span>
-            </label>
           </div>
+        )}
 
-          {/* Right Panel: Live Document Preview */}
-          <div className="flex-1 min-h-0 bg-slate-200/70 p-3 sm:p-6 overflow-y-auto flex flex-col items-center">
-            <div className="mb-2.5 flex items-center justify-between w-full max-w-2xl text-xs text-slate-600 font-semibold">
-              <span>
-                Vista Previa en Vivo ({PRINTER_FORMAT_OPTIONS.find((o) => o.id === selectedFormat)?.label})
-              </span>
-              <span className="text-[11px] bg-white px-2.5 py-0.5 rounded-md border border-slate-300 font-mono text-slate-700">
-                {selectedFormat === '58mm'
-                  ? 'Rollo 58mm'
-                  : selectedFormat === '80mm'
-                  ? 'Rollo 80mm'
-                  : selectedFormat === 'half-letter'
-                  ? 'Media Carta'
-                  : 'Hoja Carta Ejecutiva'}
-              </span>
-            </div>
-
+        {/* Full-Height Scrollable Document Preview */}
+        <div className="flex-1 min-h-0 bg-slate-100 p-3 sm:p-6 overflow-y-auto overscroll-contain">
+          <div
+            className={`gosen-preview-sheet mx-auto bg-white shadow-sm border border-slate-200/90 rounded-xl transition-all duration-150 ${
+              selectedFormat === '58mm'
+                ? 'w-[260px] p-3.5 font-mono text-xs'
+                : selectedFormat === '80mm'
+                ? 'w-[340px] p-4 font-mono text-xs'
+                : selectedFormat === 'half-letter'
+                ? 'w-full max-w-2xl p-5 sm:p-6 text-xs'
+                : 'w-full max-w-3xl p-5 sm:p-8 text-xs'
+            }`}
+          >
             <div
-              className={`bg-white shadow-lg border border-slate-300 rounded-lg transition-all duration-200 overflow-x-auto ${
-                selectedFormat === '58mm'
-                  ? 'w-[245px] p-3 font-mono text-xs'
-                  : selectedFormat === '80mm'
-                  ? 'w-[320px] p-4 font-mono text-xs'
-                  : selectedFormat === 'half-letter'
-                  ? 'w-full max-w-2xl p-5 text-xs'
-                  : 'w-full max-w-2xl p-6 text-xs'
-              }`}
-            >
-              <div
-                dangerouslySetInnerHTML={{ __html: previewHtml }}
-                className="text-slate-900 leading-relaxed"
-              />
-            </div>
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
+              className="text-slate-900 leading-relaxed"
+            />
           </div>
         </div>
 
-        {/* Footer Actions */}
-        <div className="px-4 sm:px-6 py-3.5 bg-white border-t border-slate-200 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+        {/* Clean Footer Actions */}
+        <div className="px-4 sm:px-6 py-3 bg-white border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-colors"
+            className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-colors whitespace-nowrap shrink-0"
           >
             Cerrar
           </button>
 
-          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 ml-auto">
+          <div className="flex flex-wrap items-center gap-2 ml-auto">
             <button
               type="button"
               onClick={handleShareToPrinterApp}
               disabled={isSharingToPrinter}
-              className="px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all disabled:opacity-60"
-              title="Enviar a aplicación de impresora en Celular/Tablet (NokoPrint, RawBT, Epson iPrint, HP Smart, Canon)"
+              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-60 whitespace-nowrap shrink-0"
+              title="Compartir o enviar a App de Impresora móvil"
             >
-              <Share2 className="w-4 h-4 shrink-0" />
-              <span>
-                {isSharingToPrinter ? 'Abriendo App...' : 'Enviar a App Impresora'}
+              <Share2 className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">
+                {isSharingToPrinter ? 'Abriendo...' : 'App Móvil'}
               </span>
             </button>
 
@@ -848,25 +1025,19 @@ export const PrintFormatModal: React.FC<PrintFormatModalProps> = ({
               type="button"
               onClick={handleDownloadPdfNow}
               disabled={isDownloadingPdf}
-              className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs sm:text-sm flex items-center gap-2 cursor-pointer shadow-sm transition-all disabled:opacity-60"
-              title="Descargar documento con diseño corporativo ejecutivo como archivo .PDF"
+              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer shadow-xs transition-all disabled:opacity-60 whitespace-nowrap shrink-0"
             >
               <Download className="w-4 h-4 shrink-0" />
-              <span>
-                {isDownloadingPdf ? 'Generando PDF...' : 'Descargar PDF (.pdf)'}
-              </span>
+              <span>{isDownloadingPdf ? 'Generando PDF...' : 'Descargar PDF'}</span>
             </button>
 
             <button
               type="button"
               onClick={handlePrintNow}
-              className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs sm:text-sm flex items-center gap-2 cursor-pointer shadow-md transition-all"
-              title="Enviar a impresora conectada o abrir selector de impresoras del sistema"
+              className="px-4 sm:px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer shadow-xs transition-all whitespace-nowrap shrink-0"
             >
               <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>
-                Imprimir Ahora ({PRINTER_FORMAT_OPTIONS.find((o) => o.id === selectedFormat)?.shortLabel})
-              </span>
+              <span>Imprimir</span>
             </button>
           </div>
         </div>
@@ -874,3 +1045,4 @@ export const PrintFormatModal: React.FC<PrintFormatModalProps> = ({
     </div>
   );
 };
+

@@ -436,7 +436,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           minute: '2-digit',
         }),
         receivedBy: currentUserName,
-        notes: aboneNotes.trim() || undefined,
+        notes: aboneNotes.trim() || '',
       };
 
       const updatedSale = await onRecordCreditPayment(selectedSaleForAbone, newAbone);

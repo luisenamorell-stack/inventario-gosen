@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import { Product, Supplier, StoreSettings } from '../types';
 import {
   Plus,
@@ -383,10 +384,124 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     new Set(['Ropa', 'Calzado', 'Accesorios', ...inventory.map((i) => i.category)])
   ).filter(Boolean);
 
+  // Direct Export of Filtered Inventory to organized Excel (.xlsx)
+  const handleExportInventoryExcel = () => {
+    if (filteredInventory.length === 0) {
+      showToast?.('No hay productos con los filtros actuales para exportar a Excel.', 'warning');
+      return;
+    }
+
+    const storeTitle = (storeSettings?.storeName || 'Tienda Gosén').toUpperCase();
+    const emittedAt = new Date().toLocaleString('es-HN');
+
+    const sheetAoA: (string | number)[][] = [
+      [`${storeTitle} — REPORTE DE INVENTARIO VALORIZADO Y CATÁLOGO DE PRODUCTOS`],
+      [
+        `Fecha de Emisión: ${emittedAt}   |   Productos: ${filteredInventory.length}   |   Unidades Totales: ${inventoryFinancialSummary.totalUnits}`,
+      ],
+      [
+        `Costo Total Stock: L. ${inventoryFinancialSummary.totalCost.toFixed(2)}   |   Valor Venta Total: L. ${inventoryFinancialSummary.totalRetail.toFixed(2)}   |   Ganancia Potencial: L. ${inventoryFinancialSummary.totalProfit.toFixed(2)}`,
+      ],
+      [],
+      [
+        'N°',
+        'CÓDIGO / SKU',
+        'NOMBRE DEL ARTÍCULO',
+        'CATEGORÍA',
+        'TALLA / MEDIDA',
+        'PROVEEDOR',
+        'STOCK (UNIDS)',
+        'PRECIO COSTO (L)',
+        'PRECIO VENTA (L)',
+        'DESCUENTO (L)',
+        'PRECIO FINAL (L)',
+        'GANANCIA UNIT. (L)',
+        'MARGEN (%)',
+        'VALOR COSTO TOTAL (L)',
+        'VALOR VENTA TOTAL (L)',
+      ],
+    ];
+
+    filteredInventory.forEach((item, idx) => {
+      const stock = Math.max(0, Number(item.stock) || 0);
+      const cost = Number(item.cost) || 0;
+      const price = Number(item.price) || 0;
+      const discount = Math.min(price, Math.max(0, Number(item.discount) || 0));
+      const finalPrice = Math.max(0, price - discount);
+      const unitProfit = finalPrice - cost;
+      const margin = finalPrice > 0 ? (unitProfit / finalPrice) * 100 : 0;
+
+      sheetAoA.push([
+        idx + 1,
+        item.code || '-',
+        item.name || '-',
+        item.category || 'General',
+        item.size || '-',
+        item.supplier || '-',
+        stock,
+        Number(cost.toFixed(2)),
+        Number(price.toFixed(2)),
+        Number(discount.toFixed(2)),
+        Number(finalPrice.toFixed(2)),
+        Number(unitProfit.toFixed(2)),
+        `${margin.toFixed(1)}%`,
+        Number((stock * cost).toFixed(2)),
+        Number((stock * finalPrice).toFixed(2)),
+      ]);
+    });
+
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetAoA);
+
+    worksheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 14 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 14 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 14 } },
+    ];
+
+    worksheet['!autofilter'] = {
+      ref: `A5:O${sheetAoA.length}`,
+    };
+
+    worksheet['!cols'] = [
+      { wch: 6 },  // N°
+      { wch: 16 }, // CÓDIGO / SKU
+      { wch: 34 }, // NOMBRE DEL ARTÍCULO
+      { wch: 16 }, // CATEGORÍA
+      { wch: 14 }, // TALLA / MEDIDA
+      { wch: 24 }, // PROVEEDOR
+      { wch: 14 }, // STOCK (UNIDS)
+      { wch: 16 }, // PRECIO COSTO (L)
+      { wch: 16 }, // PRECIO VENTA (L)
+      { wch: 15 }, // DESCUENTO (L)
+      { wch: 16 }, // PRECIO FINAL (L)
+      { wch: 18 }, // GANANCIA UNIT. (L)
+      { wch: 13 }, // MARGEN (%)
+      { wch: 20 }, // VALOR COSTO TOTAL (L)
+      { wch: 20 }, // VALOR VENTA TOTAL (L)
+    ];
+
+    worksheet['!rows'] = [
+      { hpt: 26 },
+      { hpt: 20 },
+      { hpt: 20 },
+      { hpt: 12 },
+      { hpt: 26 },
+      ...filteredInventory.map(() => ({ hpt: 22 })),
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Inventario Valorizado');
+    XLSX.writeFile(
+      workbook,
+      `Inventario_Valorizado_${new Date().toISOString().slice(0, 10)}.xlsx`
+    );
+    showToast?.('Excel (.xlsx) de inventario exportado con todas las columnas ordenadas.', 'success');
+  };
+
   return (
     <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-3 sm:space-y-4 pb-20 md:pb-20">
       {/* Header */}
-      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5 sm:gap-4">
+      <header className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col xl:flex-row justify-between items-start xl:items-center gap-3.5">
         <div>
           <div className="flex items-center gap-2.5 flex-wrap">
             <h1 className="text-lg sm:text-2xl font-bold text-slate-800 leading-tight">Catálogo de Productos</h1>
@@ -402,13 +517,22 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               </span>
             )}
           </div>
-          <p className="text-xs sm:text-sm text-slate-500">Gestiona todos los artículos de la tienda.</p>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">Gestiona todos los artículos de la tienda.</p>
         </div>
-        <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full xl:w-auto">
+          <button
+            type="button"
+            onClick={handleExportInventoryExcel}
+            className="bg-emerald-600 text-white px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+            title="Descargar inventario actual en archivo Excel (.xlsx) con columnas ordenadas"
+          >
+            <Download className="w-4 h-4 shrink-0" />
+            <span>Exportar Excel (.xlsx)</span>
+          </button>
           <button
             type="button"
             onClick={() => setShowInventoryPrintModal(true)}
-            className="bg-white text-slate-800 px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-50 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-300 whitespace-nowrap"
+            className="bg-white text-slate-800 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-50 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-300 whitespace-nowrap"
             title="Imprimir catálogo o descargar PDF de inventario valorizado en cualquier impresora"
           >
             <Printer className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -428,7 +552,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               }
               setIsBulkImportOpen(true);
             }}
-            className="bg-slate-900 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer border border-slate-800 whitespace-nowrap"
+            className="bg-slate-900 text-white px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-800 whitespace-nowrap"
             title="Subir stock o catálogo masivamente desde Excel (.xlsx / .csv) o copiando y pegando"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -437,7 +561,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <button
             type="button"
             onClick={handleOpenCreate}
-            className="col-span-2 sm:col-span-1 bg-emerald-600 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer whitespace-nowrap"
+            className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-700 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
           >
             <Plus className="w-4 h-4 shrink-0" />
             <span>Nuevo Artículo</span>

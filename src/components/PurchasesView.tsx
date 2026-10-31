@@ -41,8 +41,10 @@ import {
   Info,
   Clock,
   ArrowUpRight,
-  Sparkles
+  Sparkles,
+  FileSpreadsheet,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { ConfirmDialog } from './ConfirmDialog';
 import { WhatsAppIcon } from './SalesView';
 
@@ -453,54 +455,96 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
     }
   };
 
-  // Export Purchases to CSV
+  // Export Purchases to organized Excel (.xlsx)
   const handleExportCSV = () => {
     if (filteredPurchases.length === 0) {
       showToast('No hay facturas de compra para exportar.', 'warning');
       return;
     }
 
-    const headers = [
-      'N° Factura',
-      'Proveedor',
-      'Fecha',
-      'Condición',
-      'Vencimiento',
-      'Artículos (Cant)',
-      'Subtotal (L)',
-      'Descuento (L)',
-      'ISV (L)',
-      'Total Factura (L)',
-      'Estado',
-      'Detalle Mercadería',
+    const storeTitle = (storeSettings.storeName || 'Tienda Gosén').toUpperCase();
+    const emittedAt = new Date().toLocaleString('es-HN');
+
+    const sheetAoA: (string | number)[][] = [
+      [`${storeTitle} — REPORTE DETALLADO DE FACTURAS DE COMPRA Y RECEPCIÓN DE MERCADERÍA`],
+      [`Fecha de Emisión: ${emittedAt}   |   Total de Facturas: ${filteredPurchases.length}`],
+      [],
+      [
+        'N° FACTURA',
+        'PROVEEDOR',
+        'FECHA EMISIÓN',
+        'CONDICIÓN PAGO',
+        'FECHA VENCIMIENTO',
+        'UNIDADES RECIBIDAS',
+        'SUBTOTAL (L)',
+        'DESCUENTO (L)',
+        'ISV (L)',
+        'TOTAL FACTURA (L)',
+        'ESTADO',
+        'DETALLE DE MERCADERÍA RECIBIDA',
+      ],
     ];
 
-    const rows = filteredPurchases.map((p) => [
-      `"${p.invoiceNumber}"`,
-      `"${p.supplierName}"`,
-      `"${p.date}"`,
-      `"${p.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}"`,
-      `"${p.dueDate || ''}"`,
-      p.totalItems,
-      p.subtotal.toFixed(2),
-      p.discount.toFixed(2),
-      p.tax.toFixed(2),
-      p.total.toFixed(2),
-      `"${p.status === 'completed' ? 'Ingresada' : 'Anulada'}"`,
-      `"${p.items.map((it) => `${it.quantity}x ${it.name} (${it.code}) @ L.${it.cost.toFixed(2)}`).join('; ')}"`,
-    ]);
+    filteredPurchases.forEach((p) => {
+      sheetAoA.push([
+        p.invoiceNumber,
+        p.supplierName,
+        p.date,
+        p.paymentCondition === 'credit' ? 'Crédito' : 'Contado',
+        p.dueDate || '-',
+        Number(p.totalItems) || 0,
+        Number(p.subtotal.toFixed(2)),
+        Number(p.discount.toFixed(2)),
+        Number(p.tax.toFixed(2)),
+        Number(p.total.toFixed(2)),
+        p.status === 'completed' ? 'Ingresada' : 'Anulada',
+        (p.items || [])
+          .map((it) => `${it.quantity}x ${it.name} (${it.code}) @ L.${it.cost.toFixed(2)}`)
+          .join('   •   '),
+      ]);
+    });
 
-    const csvContent =
-      'data:text/csv;charset=utf-8,\uFEFF' +
-      [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `facturas_compra_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast('Reporte de compras exportado a CSV.', 'success');
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetAoA);
+
+    worksheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 11 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 11 } },
+    ];
+
+    worksheet['!autofilter'] = {
+      ref: `A4:L${sheetAoA.length}`,
+    };
+
+    worksheet['!cols'] = [
+      { wch: 16 }, // N° FACTURA
+      { wch: 26 }, // PROVEEDOR
+      { wch: 16 }, // FECHA EMISIÓN
+      { wch: 16 }, // CONDICIÓN PAGO
+      { wch: 18 }, // FECHA VENCIMIENTO
+      { wch: 18 }, // UNIDADES RECIBIDAS
+      { wch: 15 }, // SUBTOTAL (L)
+      { wch: 15 }, // DESCUENTO (L)
+      { wch: 13 }, // ISV (L)
+      { wch: 18 }, // TOTAL FACTURA (L)
+      { wch: 14 }, // ESTADO
+      { wch: 60 }, // DETALLE DE MERCADERÍA RECIBIDA
+    ];
+
+    worksheet['!rows'] = [
+      { hpt: 26 },
+      { hpt: 20 },
+      { hpt: 12 },
+      { hpt: 26 },
+      ...filteredPurchases.map(() => ({ hpt: 22 })),
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Facturas Compra');
+    XLSX.writeFile(
+      workbook,
+      `Facturas_Compra_${new Date().toISOString().slice(0, 10)}.xlsx`
+    );
+    showToast('Excel (.xlsx) de compras exportado con todas las columnas ordenadas.', 'success');
   };
 
   // Print voucher on any selected printer format
@@ -1173,60 +1217,69 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
             </div>
           </div>
 
-          {/* Filter Bar */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-            {/* Search Input */}
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Buscar por N° Factura, proveedor o producto..."
-                value={historySearch}
-                onChange={(e) => setHistorySearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              {historySearch && (
+          {/* Filter & Action Toolbar (Organized in 2 Clean Rows) */}
+          <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-3.5">
+            {/* Top Row: Search Input + Export Excel & Print/PDF Action Buttons */}
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+              {/* Search Input */}
+              <div className="relative flex-1">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar por N° Factura, proveedor o producto..."
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  className="w-full pl-10 pr-9 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                {historySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setHistorySearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Action Buttons: Export Excel (.xlsx) & Imprimir / PDF */}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
-                  onClick={() => setHistorySearch('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+                  type="button"
+                  onClick={handleExportCSV}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer shadow-2xs whitespace-nowrap"
+                  title="Exportar facturas de compra a Excel (.xlsx) con columnas ordenadas"
                 >
-                  <X className="w-4 h-4" />
+                  <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                  <span>Exportar Excel (.xlsx)</span>
                 </button>
-              )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (filteredPurchases.length === 0) {
+                      showToast('No hay facturas de compra para imprimir o exportar.', 'warning');
+                      return;
+                    }
+                    setShowPurchasesReportPrintModal(true);
+                  }}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer shadow-2xs whitespace-nowrap"
+                  title="Imprimir reporte de compras en cualquier impresora o guardar en PDF"
+                >
+                  <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>Imprimir / PDF</span>
+                </button>
+              </div>
             </div>
 
-            {/* Filter Pills */}
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              {/* Supplier Filter */}
-              <select
-                value={historySupplierFilter}
-                onChange={(e) => setHistorySupplierFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                <option value="all">Todos los Proveedores</option>
-                {suppliers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-
-              {/* Status Filter */}
-              <select
-                value={historyStatusFilter}
-                onChange={(e) => setHistoryStatusFilter(e.target.value as any)}
-                className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                <option value="all">Estado: Todos</option>
-                <option value="completed">Ingresadas</option>
-                <option value="cancelled">Anuladas</option>
-              </select>
-
+            {/* Bottom Row: Date Period Filter & Supplier / Status Dropdowns */}
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 pt-3 border-t border-slate-100 text-xs">
               {/* Date Filter */}
-              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+              <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-xl border border-slate-200 gap-0.5">
                 <button
+                  type="button"
                   onClick={() => setHistoryDateFilter('today')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
                     historyDateFilter === 'today'
                       ? 'bg-white text-slate-900 shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -1235,8 +1288,9 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   Hoy
                 </button>
                 <button
+                  type="button"
                   onClick={() => setHistoryDateFilter('week')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
                     historyDateFilter === 'week'
                       ? 'bg-white text-slate-900 shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -1245,8 +1299,9 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   Semana
                 </button>
                 <button
+                  type="button"
                   onClick={() => setHistoryDateFilter('month')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
                     historyDateFilter === 'month'
                       ? 'bg-white text-slate-900 shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -1255,8 +1310,9 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   Este mes
                 </button>
                 <button
+                  type="button"
                   onClick={() => setHistoryDateFilter('all')}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
                     historyDateFilter === 'all'
                       ? 'bg-white text-slate-900 shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -1266,33 +1322,31 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                 </button>
               </div>
 
-              {/* Print / PDF Purchases Report */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (filteredPurchases.length === 0) {
-                    showToast('No hay facturas de compra para imprimir o exportar.', 'warning');
-                    return;
-                  }
-                  setShowPurchasesReportPrintModal(true);
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg transition-colors cursor-pointer shadow-2xs"
-                title="Imprimir reporte de compras en cualquier impresora o guardar en PDF"
-              >
-                <Printer className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Imprimir / PDF</span>
-              </button>
+              {/* Supplier & Status Filters */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex items-center gap-2">
+                <select
+                  value={historySupplierFilter}
+                  onChange={(e) => setHistorySupplierFilter(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="all">Proveedor: Todos</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
 
-              {/* Export to CSV */}
-              <button
-                type="button"
-                onClick={handleExportCSV}
-                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg border border-slate-200 transition-colors cursor-pointer"
-                title="Exportar compras a CSV"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>CSV</span>
-              </button>
+                <select
+                  value={historyStatusFilter}
+                  onChange={(e) => setHistoryStatusFilter(e.target.value as any)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="all">Estado: Todos</option>
+                  <option value="completed">Ingresadas</option>
+                  <option value="cancelled">Anuladas</option>
+                </select>
+              </div>
             </div>
           </div>
 

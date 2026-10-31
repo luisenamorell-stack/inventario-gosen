@@ -3,6 +3,8 @@ import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import os from 'os';
+import { execFile, exec } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,7 +12,18 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = parseInt(process.env.PORT || '3000', 10);
 
-app.use(express.json());
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
+app.use(express.json({ limit: '35mb' }));
 
 // Initialize Google GenAI
 const apiKey = process.env.GEMINI_API_KEY || '';
@@ -139,6 +152,228 @@ ${Array.isArray(discrepancies) ? discrepancies.join('\n') : 'Sin discrepancias i
     res.status(500).json({
       error: 'Error al generar el resumen financiero de GOSEN IA',
       message: error.message || 'Error desconocido',
+    });
+  }
+});
+
+// ============================================================================
+// PUENTE UNIVERSAL DE IMPRESIÓN (GET /impresoras & POST /imprimir)
+// ============================================================================
+function listSystemPrinters(): Promise<
+  Array<{ name: string; driverName: string; portName: string; isDefault: boolean; status: string }>
+> {
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      const psCmd =
+        'Get-Printer | Select-Object Name, DriverName, PortName, Default, PrinterStatus | ConvertTo-Json -Compress';
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psCmd],
+        { timeout: 8000, windowsHide: true },
+        (err, stdout) => {
+          if (!err && stdout && stdout.trim()) {
+            try {
+              const raw = JSON.parse(stdout.trim());
+              const list = Array.isArray(raw) ? raw : [raw];
+              const printers = list
+                .filter((p: any) => p && p.Name)
+                .map((p: any) => ({
+                  name: String(p.Name).trim(),
+                  driverName: String(p.DriverName || 'Driver de Windows').trim(),
+                  portName: String(p.PortName || '').trim(),
+                  isDefault: Boolean(p.Default),
+                  status: String(p.PrinterStatus ?? 'Normal'),
+                }));
+              if (printers.length > 0) return resolve(printers);
+            } catch {}
+          }
+          exec(
+            'wmic printer get Name,Default,DriverName /format:csv',
+            { timeout: 6000, windowsHide: true },
+            (wErr, wOut) => {
+              if (wErr || !wOut) return resolve([]);
+              const lines = wOut
+                .split(/\r?\n/)
+                .map((l) => l.trim())
+                .filter(Boolean);
+              const printers: Array<{
+                name: string;
+                driverName: string;
+                portName: string;
+                isDefault: boolean;
+                status: string;
+              }> = [];
+              for (let i = 1; i < lines.length; i++) {
+                const cols = lines[i].split(',');
+                if (cols.length >= 4) {
+                  const name = cols.slice(3).join(',').trim();
+                  if (name) {
+                    printers.push({
+                      name,
+                      driverName: cols[2] || 'Windows Spooler',
+                      portName: 'USB/LAN',
+                      isDefault: String(cols[1]).toLowerCase() === 'true',
+                      status: 'Lista',
+                    });
+                  }
+                }
+              }
+              resolve(printers);
+            }
+          );
+        }
+      );
+    } else {
+      exec('lpstat -p -d', { timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout) return resolve([]);
+        const lines = stdout.split(/\r?\n/);
+        const defLine = lines.find((l) => l.includes('system default destination:'));
+        const defPrinter = defLine ? defLine.split(':').pop()?.trim() || '' : '';
+        const printers = lines
+          .filter((l) => l.startsWith('printer '))
+          .map((l) => {
+            const name = l.split(/\s+/)[1] || 'Impresora';
+            return {
+              name,
+              driverName: 'CUPS Driver',
+              portName: 'Local/Network',
+              isDefault: name === defPrinter,
+              status: 'Lista',
+            };
+          });
+        resolve(printers);
+      });
+    }
+  });
+}
+
+app.get('/impresoras', async (_req, res) => {
+  try {
+    const printers = await listSystemPrinters();
+    res.json({
+      ok: true,
+      hostname: os.hostname(),
+      platform: process.platform,
+      printers,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || 'Error al listar impresoras', printers: [] });
+  }
+});
+
+app.post('/imprimir', async (req, res) => {
+  const { imageBase64, pdfBase64, printerName, format = '80mm', widthMm } = req.body || {};
+  if (!imageBase64 && !pdfBase64) {
+    return res.status(400).json({ ok: false, error: 'Se requiere imageBase64 o pdfBase64' });
+  }
+
+  const effectiveWidthMm =
+    Number(widthMm) || (format === '58mm' ? 58 : format === '80mm' ? 80 : 210);
+  const tmpDir = os.tmpdir();
+  const jobId = `ticket_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const tmpPngPath = path.join(tmpDir, `${jobId}.png`);
+  const tmpPdfPath = path.join(tmpDir, `${jobId}.pdf`);
+
+  try {
+    if (process.platform === 'win32' && imageBase64) {
+      const cleanPng = String(imageBase64).replace(/^data:image\/\w+;base64,/, '');
+      fs.writeFileSync(tmpPngPath, Buffer.from(cleanPng, 'base64'));
+      const widthHundredthsInch = Math.round((effectiveWidthMm / 25.4) * 100);
+      const escapedImgPath = tmpPngPath.replace(/'/g, "''");
+      const escapedPrinter = String(printerName || '').replace(/'/g, "''");
+
+      const psScript = `
+Add-Type -AssemblyName System.Drawing
+$img = [System.Drawing.Image]::FromFile('${escapedImgPath}')
+try {
+  $doc = New-Object System.Drawing.Printing.PrintDocument
+  if ('${escapedPrinter}' -ne '') {
+    $doc.PrinterSettings.PrinterName = '${escapedPrinter}'
+  }
+  $doc.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0, 0, 0, 0)
+  $targetW = ${widthHundredthsInch}
+  if ($doc.DefaultPageSettings.PrintableArea.Width -gt 10 -and $targetW -gt 350) {
+    $targetW = [int]$doc.DefaultPageSettings.PrintableArea.Width
+  }
+  $scale = $targetW / [double]$img.Width
+  $targetH = [int][Math]::Ceiling($img.Height * $scale)
+  $paperSize = New-Object System.Drawing.Printing.PaperSize('TicketPOS', $targetW, ($targetH + 20))
+  $doc.DefaultPageSettings.PaperSize = $paperSize
+  $doc.add_PrintPage({
+    param($sender, $e)
+    $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $rect = New-Object System.Drawing.Rectangle(0, 0, $targetW, $targetH)
+    $e.Graphics.DrawImage($img, $rect)
+    $e.HasMorePages = $false
+  })
+  $doc.Print()
+} finally {
+  $img.Dispose()
+}
+`;
+      await new Promise<void>((resolve, reject) => {
+        execFile(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
+          { timeout: 20000, windowsHide: true },
+          (err, _stdout, stderr) => {
+            if (err) return reject(new Error(stderr || err.message));
+            resolve();
+          }
+        );
+      });
+      setTimeout(() => fs.unlink(tmpPngPath, () => {}), 10000);
+      return res.json({
+        ok: true,
+        method: 'windows-gdi-spooler',
+        printerName: printerName || 'Predeterminada de Windows',
+      });
+    }
+
+    if (pdfBase64) {
+      const cleanPdf = String(pdfBase64).replace(/^data:application\/pdf;base64,/, '');
+      fs.writeFileSync(tmpPdfPath, Buffer.from(cleanPdf, 'base64'));
+      if (process.platform === 'win32') {
+        const escapedPdf = tmpPdfPath.replace(/'/g, "''");
+        const escapedPrinter = String(printerName || '').replace(/'/g, "''");
+        const cmd = escapedPrinter
+          ? `Start-Process -FilePath '${escapedPdf}' -Verb PrintTo -ArgumentList '"${escapedPrinter}"' -WindowStyle Hidden`
+          : `Start-Process -FilePath '${escapedPdf}' -Verb Print -WindowStyle Hidden`;
+        await new Promise<void>((resolve, reject) => {
+          execFile(
+            'powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', cmd],
+            { timeout: 15000, windowsHide: true },
+            (err, _stdout, stderr) => {
+              if (err) return reject(new Error(stderr || err.message));
+              resolve();
+            }
+          );
+        });
+      } else {
+        const lpCmd = printerName
+          ? `lp -d "${String(printerName).replace(/"/g, '\\"')}" "${tmpPdfPath}"`
+          : `lp "${tmpPdfPath}"`;
+        await new Promise<void>((resolve, reject) => {
+          exec(lpCmd, { timeout: 10000 }, (err, _stdout, stderr) => {
+            if (err) return reject(new Error(stderr || err.message));
+            resolve();
+          });
+        });
+      }
+      setTimeout(() => fs.unlink(tmpPdfPath, () => {}), 15000);
+      return res.json({
+        ok: true,
+        method: 'os-pdf-spooler',
+        printerName: printerName || 'Predeterminada del Sistema',
+      });
+    }
+
+    return res.status(400).json({ ok: false, error: 'Formato no soportado en este entorno.' });
+  } catch (err: any) {
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || 'No se pudo enviar el trabajo a la cola de impresión.',
     });
   }
 });

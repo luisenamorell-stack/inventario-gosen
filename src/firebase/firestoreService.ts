@@ -89,6 +89,22 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefinedDeep(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const cleaned: Record<string, any> = {};
+    for (const [key, val] of Object.entries(value as Record<string, any>)) {
+      if (val !== undefined) {
+        cleaned[key] = stripUndefinedDeep(val);
+      }
+    }
+    return cleaned as T;
+  }
+  return value;
+}
+
 // ----------------- MULTI-TENANT COMPANY CONTEXT -----------------
 
 export function normalizeCompanySlug(raw?: string | null): string {
@@ -161,7 +177,7 @@ export function belongsToCompany(docCompanyId: string | undefined, targetCompany
  * Generates a collision-free Firestore Document ID scoped to the active company.
  * For 'gosen', preserves legacy document IDs so existing records update in-place.
  */
-function getScopedDocId(rawId: string, companyId = getActiveCompanyId()): string {
+export function getScopedDocId(rawId: string, companyId = getActiveCompanyId()): string {
   const cleanId = rawId.trim().replace(/\//g, '_');
   const slug = normalizeCompanySlug(companyId);
   if (slug === 'gosen') {
@@ -1331,89 +1347,128 @@ export async function recordSaleInFirestore(
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord> {
   const slug = normalizeCompanySlug(companyId);
-  const batch = writeBatch(db);
   const saleId = getScopedDocId(`${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, slug);
   const saleRef = doc(db, 'sales', saleId);
 
+  const isCredit = saleData.paymentMethod === 'credit';
+  const totalVal = Number(saleData.total) || 0;
+  const paidVal = Number(saleData.amountPaid) || 0;
+  const computedBalanceDue = isCredit
+    ? Math.max(0, saleData.balanceDue !== undefined ? Number(saleData.balanceDue) : totalVal - paidVal)
+    : 0;
+
+  const payload: any = {
+    companyId: slug,
+    saleNumber: String(saleData.saleNumber || `VTA-${Date.now().toString().slice(-6)}`).slice(0, 50),
+    timestamp: Number(saleData.timestamp) || Date.now(),
+    date: String(saleData.date || new Date().toLocaleString()).slice(0, 100),
+    items: (saleData.items || []).map((it) => ({
+      productId: String(it.productId || ''),
+      code: String(it.code || '').trim(),
+      name: String(it.name || '').trim(),
+      category: String(it.category || 'General').trim(),
+      size: String(it.size || '').trim(),
+      originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+      unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
+      price: Number(it.price) || 0,
+      cost: Number(it.cost) || 0,
+      quantity: Number(it.quantity) || 1,
+      subtotal: Number(it.subtotal) || 0,
+    })),
+    totalItems: Math.round(Number(saleData.totalItems) || 0),
+    subtotal: Number(saleData.subtotal) || 0,
+    discount: Number(saleData.discount) || 0,
+    tax: Number(saleData.tax) || 0,
+    total: totalVal,
+    paymentMethod: String(saleData.paymentMethod || 'cash').slice(0, 50),
+    amountPaid: paidVal,
+    change: Number(saleData.change) || 0,
+    balanceDue: computedBalanceDue,
+    creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
+    creditDueDate: String(saleData.creditDueDate || '').trim().slice(0, 50),
+    creditPayments: Array.isArray(saleData.creditPayments) ? saleData.creditPayments : [],
+    customerName: String(saleData.customerName || 'Consumidor Final').trim().slice(0, 200),
+    customerPhone: String(saleData.customerPhone || '').trim().slice(0, 50),
+    customerRtn: String(saleData.customerRtn || '').trim().slice(0, 50),
+    notes: String(saleData.notes || '').trim().slice(0, 500),
+    status: 'completed',
+    cashier: String(saleData.cashier || 'Administrador').trim().slice(0, 100),
+    cashierRole:
+      saleData.cashierRole === 'admin' || saleData.cashierRole === 'collaborator'
+        ? saleData.cashierRole
+        : (saleData.cashier || '').toLowerCase().includes('admin')
+        ? 'admin'
+        : 'collaborator',
+  };
+
   try {
-    for (const item of saleData.items) {
-      const currentProd = currentInventory.find(
-        (p) =>
-          p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
-          p.id === item.productId
-      );
-      const productDocId = currentProd?.id || getScopedDocId(item.code, slug);
-      const productRef = doc(db, 'inventory', productDocId);
-
-      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
-      const newStock = Math.max(0, currentStock - (Number(item.quantity) || 1));
-
-      batch.update(productRef, { stock: newStock });
-    }
-
-    const isCredit = saleData.paymentMethod === 'credit';
-    const totalVal = Number(saleData.total) || 0;
-    const paidVal = Number(saleData.amountPaid) || 0;
-    const computedBalanceDue = isCredit
-      ? Math.max(0, saleData.balanceDue !== undefined ? Number(saleData.balanceDue) : totalVal - paidVal)
-      : 0;
-
-    const payload: any = {
-      companyId: slug,
-      saleNumber: saleData.saleNumber || `VTA-${Date.now().toString().slice(-6)}`,
-      timestamp: saleData.timestamp || Date.now(),
-      date: saleData.date || new Date().toLocaleString(),
-      items: saleData.items.map((it) => ({
-        productId: it.productId || '',
-        code: it.code.trim(),
-        name: it.name.trim(),
-        category: (it.category || '').trim(),
-        size: (it.size || '').trim(),
-        originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
-        unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
-        price: Number(it.price) || 0,
-        cost: Number(it.cost) || 0,
-        quantity: Number(it.quantity) || 1,
-        subtotal: Number(it.subtotal) || 0,
-      })),
-      totalItems: Number(saleData.totalItems) || 0,
-      subtotal: Number(saleData.subtotal) || 0,
-      discount: Number(saleData.discount) || 0,
-      tax: Number(saleData.tax) || 0,
-      total: totalVal,
-      paymentMethod: saleData.paymentMethod || 'cash',
-      amountPaid: paidVal,
-      change: Number(saleData.change) || 0,
-      balanceDue: computedBalanceDue,
-      creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
-      creditDueDate: (saleData.creditDueDate || '').trim(),
-      creditPayments: Array.isArray(saleData.creditPayments) ? saleData.creditPayments : [],
-      customerName: (saleData.customerName || 'Consumidor Final').trim(),
-      customerPhone: (saleData.customerPhone || '').trim(),
-      customerRtn: (saleData.customerRtn || '').trim(),
-      notes: (saleData.notes || '').trim(),
-      status: 'completed',
-      cashier: (saleData.cashier || 'Administrador').trim(),
-      cashierRole:
-        saleData.cashierRole === 'admin' || saleData.cashierRole === 'collaborator'
-          ? saleData.cashierRole
-          : (saleData.cashier || '').toLowerCase().includes('admin')
-          ? 'admin'
-          : 'collaborator',
-    };
-
-    batch.set(saleRef, payload);
-    await touchInventorySyncStamp(batch, slug);
-
-    await batch.commit();
-
-    return {
-      id: saleId,
-      ...payload,
-    };
+    // 1. Save the sale document first so billing never fails due to an inventory doc ID mismatch
+    await setDoc(saleRef, stripUndefinedDeep(payload));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `sales/${saleId}`);
   }
+
+  // 2. Deduct stock in inventory using setDoc(..., { merge: true }) with complete valid Product fields
+  try {
+    const invBatch = writeBatch(db);
+    const qtyByCode = new Map<string, { qty: number; item: SaleRecord['items'][number] }>();
+
+    for (const item of saleData.items || []) {
+      const codeKey = item.code.trim().toLowerCase();
+      if (!codeKey) continue;
+      const prev = qtyByCode.get(codeKey);
+      if (prev) {
+        prev.qty += Number(item.quantity) || 1;
+      } else {
+        qtyByCode.set(codeKey, { qty: Number(item.quantity) || 1, item });
+      }
+    }
+
+    for (const [, { qty, item }] of qtyByCode.entries()) {
+      const currentProd = currentInventory.find(
+        (p) =>
+          p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
+          (item.productId && p.id === item.productId)
+      );
+      const canonicalDocId = getScopedDocId(currentProd?.code || item.code, slug);
+      const productRef = doc(db, 'inventory', canonicalDocId);
+
+      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
+      const newStock = Math.max(0, Math.round(currentStock - qty));
+
+      const productPayload: Record<string, any> = {
+        companyId: slug,
+        code: (currentProd?.code || item.code).trim().slice(0, 100),
+        name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
+        category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
+        price: Number(currentProd?.price ?? item.originalPrice ?? item.price) || 0,
+        cost: Number(currentProd?.cost ?? item.cost) || 0,
+        stock: newStock,
+      };
+
+      invBatch.set(productRef, productPayload, { merge: true });
+
+      // If the product was loaded from Firestore under a different non-numeric doc ID, keep it updated too
+      if (
+        currentProd?.id &&
+        currentProd.id !== canonicalDocId &&
+        !/^\d+$/.test(currentProd.id)
+      ) {
+        const altRef = doc(db, 'inventory', currentProd.id);
+        invBatch.set(altRef, productPayload, { merge: true });
+      }
+    }
+
+    await touchInventorySyncStamp(invBatch, slug);
+    await invBatch.commit();
+  } catch (invError) {
+    console.warn('Warning updating inventory stock after sale:', invError);
+  }
+
+  return {
+    id: saleId,
+    ...payload,
+  };
 }
 
 export async function recordCreditPaymentInFirestore(
@@ -1423,9 +1478,32 @@ export async function recordCreditPaymentInFirestore(
 ): Promise<SaleRecord> {
   const slug = normalizeCompanySlug(companyId);
   const saleRef = doc(db, 'sales', sale.id);
-  const existingPayments = Array.isArray(sale.creditPayments) ? sale.creditPayments : [];
-  const updatedPayments = [...existingPayments, newAbone];
-  const newAmountPaid = Math.min(sale.total, (Number(sale.amountPaid) || 0) + Number(newAbone.amount));
+  const cleanAbone: CreditPaymentAbone = {
+    id: String(newAbone.id || `abn_${Date.now()}`),
+    amount: Number(newAbone.amount) || 0,
+    paymentMethod: ['cash', 'transfer', 'card'].includes(newAbone.paymentMethod)
+      ? newAbone.paymentMethod
+      : 'cash',
+    timestamp: Number(newAbone.timestamp) || Date.now(),
+    date: String(newAbone.date || new Date().toLocaleString()),
+    receivedBy: String(newAbone.receivedBy || 'Administrador'),
+    notes: newAbone.notes ? String(newAbone.notes).trim() : '',
+  };
+  const existingPayments = Array.isArray(sale.creditPayments)
+    ? sale.creditPayments.map((cp) => ({
+        id: String(cp.id || `abn_${Date.now()}`),
+        amount: Number(cp.amount) || 0,
+        paymentMethod: (['cash', 'transfer', 'card'].includes(cp.paymentMethod)
+          ? cp.paymentMethod
+          : 'cash') as 'cash' | 'transfer' | 'card',
+        timestamp: Number(cp.timestamp) || Date.now(),
+        date: String(cp.date || ''),
+        receivedBy: String(cp.receivedBy || 'Administrador'),
+        notes: cp.notes ? String(cp.notes).trim() : '',
+      }))
+    : [];
+  const updatedPayments = [...existingPayments, cleanAbone];
+  const newAmountPaid = Math.min(sale.total, (Number(sale.amountPaid) || 0) + Number(cleanAbone.amount));
   const newBalanceDue = Math.max(0, Number((sale.total - newAmountPaid).toFixed(2)));
   const newCreditStatus: 'pending' | 'paid' = newBalanceDue <= 0.01 ? 'paid' : 'pending';
 
@@ -1441,12 +1519,18 @@ export async function recordCreditPaymentInFirestore(
   try {
     await setDoc(
       saleRef,
-      {
+      stripUndefinedDeep({
+        saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
+        timestamp: Number(sale.timestamp) || Date.now(),
+        date: String(sale.date || '').slice(0, 100),
+        items: Array.isArray(sale.items) ? sale.items : [],
+        total: Number(sale.total) || 0,
+        status: sale.status === 'cancelled' ? 'cancelled' : 'completed',
         amountPaid: updatedSale.amountPaid,
         balanceDue: updatedSale.balanceDue,
         creditStatus: updatedSale.creditStatus,
         creditPayments: updatedSale.creditPayments,
-      },
+      }),
       { merge: true }
     );
     return updatedSale;
@@ -1461,29 +1545,58 @@ export async function cancelSaleInFirestore(
   companyId = getActiveCompanyId()
 ): Promise<void> {
   const slug = normalizeCompanySlug(companyId);
-  const batch = writeBatch(db);
   const saleRef = doc(db, 'sales', sale.id);
 
   try {
-    for (const item of sale.items) {
-      const productDocId = getScopedDocId(item.code, slug);
-      const productRef = doc(db, 'inventory', productDocId);
-
-      const currentProd = currentInventory.find(
-        (p) => p.code.trim() === item.code.trim() || p.id === item.productId
-      );
-      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
-      const restoredStock = currentStock + (Number(item.quantity) || 1);
-
-      batch.update(productRef, { stock: restoredStock });
-    }
-
-    batch.update(saleRef, { status: 'cancelled' });
-    await touchInventorySyncStamp(batch, slug);
-
-    await batch.commit();
+    await setDoc(
+      saleRef,
+      stripUndefinedDeep({
+        saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
+        timestamp: Number(sale.timestamp) || Date.now(),
+        date: String(sale.date || '').slice(0, 100),
+        items: Array.isArray(sale.items) ? sale.items : [],
+        total: Number(sale.total) || 0,
+        status: 'cancelled',
+      }),
+      { merge: true }
+    );
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+  }
+
+  try {
+    const batch = writeBatch(db);
+    for (const item of sale.items || []) {
+      const currentProd = currentInventory.find(
+        (p) =>
+          p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
+          p.id === item.productId
+      );
+      const productDocId = getScopedDocId(currentProd?.code || item.code, slug);
+      const productRef = doc(db, 'inventory', productDocId);
+
+      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
+      const restoredStock = Math.max(0, Math.round(currentStock + (Number(item.quantity) || 1)));
+
+      batch.set(
+        productRef,
+        {
+          companyId: slug,
+          code: (currentProd?.code || item.code).trim().slice(0, 100),
+          name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
+          category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
+          price: Number(currentProd?.price ?? item.price) || 0,
+          cost: Number(currentProd?.cost ?? item.cost) || 0,
+          stock: restoredStock,
+        },
+        { merge: true }
+      );
+    }
+
+    await touchInventorySyncStamp(batch, slug);
+    await batch.commit();
+  } catch (invError) {
+    console.warn('Warning restoring stock on sale cancel:', invError);
   }
 }
 
@@ -1615,12 +1728,48 @@ export async function recordPurchaseInFirestore(
   companyId = getActiveCompanyId()
 ): Promise<PurchaseInvoice> {
   const slug = normalizeCompanySlug(companyId);
-  const batch = writeBatch(db);
   const purchaseId = getScopedDocId(`${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, slug);
   const purchaseRef = doc(db, 'purchases', purchaseId);
 
+  const invoicePayload: any = {
+    companyId: slug,
+    invoiceNumber: String(purchaseData.invoiceNumber || `FAC-${Date.now().toString().slice(-6)}`).trim().slice(0, 100),
+    supplierId: String(purchaseData.supplierId || 'sup_default').trim().slice(0, 128),
+    supplierName: String(purchaseData.supplierName || 'Proveedor').trim().slice(0, 200),
+    date: String(purchaseData.date || new Date().toLocaleDateString()).trim().slice(0, 100),
+    timestamp: Number(purchaseData.timestamp) || Date.now(),
+    paymentCondition: purchaseData.paymentCondition || 'cash',
+    dueDate: String(purchaseData.dueDate || '').trim().slice(0, 50),
+    items: (purchaseData.items || []).map((it) => ({
+      productId: String(it.productId || ''),
+      code: String(it.code || '').trim(),
+      name: String(it.name || '').trim(),
+      category: String(it.category || '').trim(),
+      size: String(it.size || '').trim(),
+      cost: Number(it.cost) || 0,
+      salePrice: it.salePrice ? Number(it.salePrice) : null,
+      quantity: Number(it.quantity) || 1,
+      subtotal: Number(it.subtotal) || 0,
+    })),
+    totalItems: Math.round(Number(purchaseData.totalItems) || 0),
+    subtotal: Number(purchaseData.subtotal) || 0,
+    tax: Number(purchaseData.tax) || 0,
+    discount: Number(purchaseData.discount) || 0,
+    total: Number(purchaseData.total) || 0,
+    notes: String(purchaseData.notes || '').trim().slice(0, 500),
+    status: 'completed',
+    receivedBy: String(purchaseData.receivedBy || 'Administrador').trim().slice(0, 100),
+  };
+
   try {
-    for (const item of purchaseData.items) {
+    await setDoc(purchaseRef, invoicePayload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `purchases/${purchaseId}`);
+  }
+
+  try {
+    const batch = writeBatch(db);
+    for (const item of purchaseData.items || []) {
       const productDocId = getScopedDocId(item.code, slug);
       const productRef = doc(db, 'inventory', productDocId);
 
@@ -1630,82 +1779,54 @@ export async function recordPurchaseInFirestore(
 
       if (existing) {
         const currentStock = Number(existing.stock) || 0;
-        const newStock = currentStock + (Number(item.quantity) || 0);
+        const newStock = Math.max(0, Math.round(currentStock + (Number(item.quantity) || 0)));
 
         const updatePayload: Record<string, any> = {
+          companyId: slug,
+          code: existing.code.trim().slice(0, 100),
+          name: existing.name.trim().slice(0, 200),
+          category: (existing.category || 'General').trim().slice(0, 100),
           stock: newStock,
-          cost: Number(item.cost) || existing.cost,
+          cost: Number(item.cost) || existing.cost || 0,
+          price:
+            item.salePrice && item.salePrice > 0
+              ? Number(item.salePrice)
+              : Number(existing.price) || 0,
         };
 
-        if (item.salePrice && item.salePrice > 0) {
-          updatePayload.price = Number(item.salePrice);
-        }
-
         if (purchaseData.supplierName && !existing.supplier) {
-          updatePayload.supplier = purchaseData.supplierName;
+          updatePayload.supplier = purchaseData.supplierName.trim().slice(0, 200);
         }
 
-        batch.update(productRef, updatePayload);
+        batch.set(productRef, updatePayload, { merge: true });
       } else {
         const newProductPayload: Record<string, any> = {
           companyId: slug,
-          code: item.code.trim(),
-          name: item.name.trim(),
-          category: item.category?.trim() || 'General',
-          size: item.size?.trim() || '',
-          supplier: purchaseData.supplierName.trim(),
+          code: item.code.trim().slice(0, 100),
+          name: item.name.trim().slice(0, 200),
+          category: (item.category?.trim() || 'General').slice(0, 100),
+          size: (item.size?.trim() || '').slice(0, 50),
+          supplier: purchaseData.supplierName.trim().slice(0, 200),
           cost: Number(item.cost) || 0,
           price: item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : (Number(item.cost) || 0) * 1.35,
-          stock: Number(item.quantity) || 0,
+          stock: Math.max(0, Math.round(Number(item.quantity) || 0)),
           img: '',
         };
 
-        batch.set(productRef, newProductPayload);
+        batch.set(productRef, newProductPayload, { merge: true });
       }
     }
 
-    const invoicePayload: any = {
-      companyId: slug,
-      invoiceNumber: purchaseData.invoiceNumber.trim(),
-      supplierId: purchaseData.supplierId.trim(),
-      supplierName: purchaseData.supplierName.trim(),
-      date: purchaseData.date.trim(),
-      timestamp: purchaseData.timestamp || Date.now(),
-      paymentCondition: purchaseData.paymentCondition || 'cash',
-      dueDate: (purchaseData.dueDate || '').trim(),
-      items: purchaseData.items.map((it) => ({
-        productId: it.productId || '',
-        code: it.code.trim(),
-        name: it.name.trim(),
-        category: (it.category || '').trim(),
-        size: (it.size || '').trim(),
-        cost: Number(it.cost) || 0,
-        salePrice: it.salePrice ? Number(it.salePrice) : null,
-        quantity: Number(it.quantity) || 1,
-        subtotal: Number(it.subtotal) || 0,
-      })),
-      totalItems: Number(purchaseData.totalItems) || 0,
-      subtotal: Number(purchaseData.subtotal) || 0,
-      tax: Number(purchaseData.tax) || 0,
-      discount: Number(purchaseData.discount) || 0,
-      total: Number(purchaseData.total) || 0,
-      notes: (purchaseData.notes || '').trim(),
-      status: 'completed',
-      receivedBy: (purchaseData.receivedBy || 'Administrador').trim(),
-    };
-
-    batch.set(purchaseRef, invoicePayload);
     await touchInventorySyncStamp(batch, slug);
-
     await batch.commit();
-
-    return {
-      id: purchaseId,
-      ...invoicePayload,
-    };
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `purchases/${purchaseId}`);
+  } catch (invError) {
+    console.warn('Warning updating inventory stock after purchase:', invError);
   }
+
+  return {
+    id: purchaseId,
+    ...invoicePayload,
+  };
 }
 
 export async function cancelPurchaseInFirestore(
@@ -1714,11 +1835,30 @@ export async function cancelPurchaseInFirestore(
   companyId = getActiveCompanyId()
 ): Promise<void> {
   const slug = normalizeCompanySlug(companyId);
-  const batch = writeBatch(db);
   const purchaseRef = doc(db, 'purchases', purchase.id);
 
   try {
-    for (const item of purchase.items) {
+    await setDoc(
+      purchaseRef,
+      {
+        invoiceNumber: String(purchase.invoiceNumber || 'FAC').slice(0, 100),
+        supplierId: String(purchase.supplierId || 'sup').slice(0, 128),
+        supplierName: String(purchase.supplierName || 'Proveedor').slice(0, 200),
+        date: String(purchase.date || '').slice(0, 100),
+        timestamp: Number(purchase.timestamp) || Date.now(),
+        items: Array.isArray(purchase.items) ? purchase.items : [],
+        total: Number(purchase.total) || 0,
+        status: 'cancelled',
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `purchases/${purchase.id}`);
+  }
+
+  try {
+    const batch = writeBatch(db);
+    for (const item of purchase.items || []) {
       const productDocId = getScopedDocId(item.code, slug);
       const productRef = doc(db, 'inventory', productDocId);
 
@@ -1727,17 +1867,27 @@ export async function cancelPurchaseInFirestore(
       );
 
       const currentStock = existing ? Number(existing.stock) || 0 : 0;
-      const newStock = Math.max(0, currentStock - (Number(item.quantity) || 0));
+      const newStock = Math.max(0, Math.round(currentStock - (Number(item.quantity) || 0)));
 
-      batch.update(productRef, { stock: newStock });
+      batch.set(
+        productRef,
+        {
+          companyId: slug,
+          code: (existing?.code || item.code).trim().slice(0, 100),
+          name: (existing?.name || item.name || 'Producto').trim().slice(0, 200),
+          category: (existing?.category || item.category || 'General').trim().slice(0, 100),
+          price: Number(existing?.price ?? item.salePrice ?? item.cost) || 0,
+          cost: Number(existing?.cost ?? item.cost) || 0,
+          stock: newStock,
+        },
+        { merge: true }
+      );
     }
 
-    batch.update(purchaseRef, { status: 'cancelled' });
     await touchInventorySyncStamp(batch, slug);
-
     await batch.commit();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, `purchases/${purchase.id}`);
+  } catch (invError) {
+    console.warn('Warning reverting inventory stock on purchase cancel:', invError);
   }
 }
 
@@ -2509,13 +2659,13 @@ export async function savePOSFinanceDataToFirestore(
   try {
     await setDoc(
       docRef,
-      {
+      stripUndefinedDeep({
         storeName: `Finanzas POS ${slug}`.slice(0, 190), // satisfies isValidStoreSettings
         companyId: slug,
         shifts: normalized.shifts,
         expenses: normalized.expenses,
         updatedAt: normalized.updatedAt,
-      },
+      }),
       { merge: true }
     );
     setCachedPOSFinanceData(normalized, slug);
