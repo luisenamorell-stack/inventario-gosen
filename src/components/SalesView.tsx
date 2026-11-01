@@ -10,7 +10,13 @@ import {
   POSFinanceStoreData,
   CreditPaymentAbone,
   PrinterPaperFormat,
+  StoreWarehousesData,
+  WarehouseLocation,
 } from '../types';
+import {
+  getProductStockInWarehouse,
+  getDefaultWarehousesForStore,
+} from '../firebase/firestoreService';
 import {
   PRINTER_FORMAT_OPTIONS,
   getPreferredPrinterFormat,
@@ -70,6 +76,7 @@ import {
   FileSpreadsheet,
   Edit2,
   Lock,
+  Boxes,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -99,6 +106,7 @@ interface SalesViewProps {
   inventory: Product[];
   sales: SaleRecord[];
   storeSettings: StoreSettings;
+  warehousesData?: StoreWarehousesData;
   userSession?: UserSession | null;
   users?: UserAccount[];
   isLoading?: boolean;
@@ -116,6 +124,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   inventory,
   sales,
   storeSettings,
+  warehousesData,
   userSession,
   users = [],
   isLoading = false,
@@ -159,6 +168,57 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [mobilePosTab, setMobilePosTab] = useState<'catalog' | 'cart'>('catalog');
 
   // ------------------ POS STATE ------------------
+  const activeWarehouses = useMemo<WarehouseLocation[]>(() => {
+    const list =
+      warehousesData?.warehouses && warehousesData.warehouses.length > 0
+        ? warehousesData.warehouses
+        : getDefaultWarehousesForStore();
+    const active = list.filter((w) => w.isActive !== false);
+    return active.length > 0 ? active : list;
+  }, [warehousesData]);
+
+  const defaultMainWarehouse = useMemo<WarehouseLocation>(() => {
+    return activeWarehouses.find((w) => w.isMainSalesFloor) || activeWarehouses[0];
+  }, [activeWarehouses]);
+
+  const companyKey = (storeSettings.companyId || 'gosen').toLowerCase();
+
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(`stockmaster_pos_warehouse_${companyKey}`);
+      if (saved) return saved;
+    } catch {}
+    return 'principal';
+  });
+
+  // Ensure selectedWarehouseId always points to an active warehouse of the current store
+  useEffect(() => {
+    if (!activeWarehouses.some((w) => w.id === selectedWarehouseId)) {
+      setSelectedWarehouseId(defaultMainWarehouse?.id || 'principal');
+    }
+  }, [activeWarehouses, selectedWarehouseId, defaultMainWarehouse]);
+
+  const selectedWarehouse = useMemo<WarehouseLocation>(() => {
+    return (
+      activeWarehouses.find((w) => w.id === selectedWarehouseId) ||
+      defaultMainWarehouse || {
+        id: 'principal',
+        code: 'PRINCIPAL',
+        name: 'Tienda Principal (Sala de Ventas)',
+        isMainSalesFloor: true,
+        isActive: true,
+        createdAt: Date.now(),
+      }
+    );
+  }, [activeWarehouses, selectedWarehouseId, defaultMainWarehouse]);
+
+  // Helper to get available stock of a product in the currently selected POS warehouse
+  const getPosWarehouseStock = (product: Product | undefined, whIdOverride?: string): number => {
+    if (!product) return 0;
+    const targetWhId = whIdOverride || selectedWarehouse.id;
+    return getProductStockInWarehouse(product, targetWhId, activeWarehouses);
+  };
+
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -174,6 +234,53 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [saleNotes, setSaleNotes] = useState<string>('');
   const [isSubmittingSale, setIsSubmittingSale] = useState<boolean>(false);
+
+  const handleSelectPosWarehouse = (newWhId: string) => {
+    const targetWh = activeWarehouses.find((w) => w.id === newWhId);
+    if (!targetWh) return;
+    setSelectedWarehouseId(newWhId);
+    try {
+      localStorage.setItem(`stockmaster_pos_warehouse_${companyKey}`, newWhId);
+    } catch {}
+
+    // If cart has items, validate their quantities against the newly selected warehouse stock
+    if (cart.length > 0) {
+      let adjustedCount = 0;
+      setCart((prevCart) => {
+        const nextCart: SaleItem[] = [];
+        for (const item of prevCart) {
+          const prod = inventory.find((p) => p.code === item.code);
+          const availInNewWh = getPosWarehouseStock(prod, newWhId);
+          if (availInNewWh <= 0) {
+            adjustedCount++;
+            continue;
+          }
+          if (item.quantity > availInNewWh) {
+            adjustedCount++;
+            nextCart.push({
+              ...item,
+              quantity: availInNewWh,
+              subtotal: availInNewWh * item.price,
+            });
+          } else {
+            nextCart.push(item);
+          }
+        }
+        return nextCart;
+      });
+
+      if (adjustedCount > 0) {
+        showToast(
+          `Bodega cambiada a "${targetWh.name}". Se ajustaron ${adjustedCount} artículo(s) del ticket según la existencia en esta bodega.`,
+          'warning'
+        );
+      } else {
+        showToast(`Vendiendo desde: ${targetWh.name}`, 'info');
+      }
+    } else {
+      showToast(`Bodega seleccionada para venta: ${targetWh.name}`, 'info');
+    }
+  };
 
   // Completed sale receipt modal
   const [completedSale, setCompletedSale] = useState<SaleRecord | null>(null);
@@ -399,11 +506,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
   };
 
-  // Add product to cart with stock validation & automatic per-article discount
+  // Add product to cart with stock validation in the selected warehouse & automatic per-article discount
   const addToCart = (product: Product) => {
-    const availableStock = Number(product.stock) || 0;
+    const availableStock = getPosWarehouseStock(product);
+    const totalGlobalStock = Math.max(0, Number(product.stock) || 0);
     if (availableStock <= 0) {
-      showToast(`El producto "${product.name}" está agotado (Stock 0)`, 'error');
+      if (totalGlobalStock > 0) {
+        showToast(
+          `"${product.name}" tiene 0 uds en ${selectedWarehouse.name} (hay ${totalGlobalStock} uds en otra bodega). Cambia la bodega arriba si deseas venderlo desde allá.`,
+          'warning'
+        );
+      } else {
+        showToast(`El producto "${product.name}" está agotado (Stock 0)`, 'error');
+      }
       return;
     }
 
@@ -420,7 +535,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
         const currentQty = prevCart[existingIndex].quantity;
         if (currentQty + 1 > availableStock) {
           showToast(
-            `Stock máximo alcanzado para "${product.name}". Disponible: ${availableStock}`,
+            `Stock máximo alcanzado en ${selectedWarehouse.name} para "${product.name}". Disponible: ${availableStock}`,
             'warning'
           );
           return prevCart;
@@ -457,7 +572,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   // Update item quantity in cart
   const updateCartQuantity = (code: string, newQty: number) => {
     const product = inventory.find((p) => p.code === code);
-    const availableStock = product ? Number(product.stock) || 0 : 9999;
+    const availableStock = product ? getPosWarehouseStock(product) : 9999;
 
     if (newQty <= 0) {
       removeFromCart(code);
@@ -466,7 +581,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
     if (newQty > availableStock) {
       showToast(
-        `No puedes agregar más de ${availableStock} unidades disponibles en stock.`,
+        `No puedes agregar más de ${availableStock} unidades disponibles en ${selectedWarehouse.name}.`,
         'warning'
       );
       newQty = availableStock;
@@ -587,14 +702,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
       return;
     }
 
-    // Verify stock availability once more right before saving
+    // Verify stock availability in the selected warehouse right before saving
     for (const item of cart) {
       const liveProduct = inventory.find((p) => p.code === item.code);
-      const currentStock = liveProduct ? Number(liveProduct.stock) || 0 : 0;
+      const currentStock = getPosWarehouseStock(liveProduct);
       if (item.quantity > currentStock) {
         playSound('error');
         showToast(
-          `Stock insuficiente para "${item.name}". Solo hay ${currentStock} unidades disponibles.`,
+          `Stock insuficiente en "${selectedWarehouse.name}" para "${item.name}". Solo hay ${currentStock} unidades disponibles en esa bodega.`,
           'error'
         );
         return;
@@ -686,6 +801,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
         customerPhone: customerPhone.trim() || undefined,
         notes: saleNotes.trim() || undefined,
         status: 'completed',
+        warehouseId: selectedWarehouse.id,
+        warehouseName: selectedWarehouse.name,
         cashier: userSession?.userName || 'Administrador',
         cashierRole: userSession?.role || 'admin',
       };
@@ -702,8 +819,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
       clearCart();
       showToast(
         isCredit
-          ? `¡Venta al Crédito ${saleNumber} registrada! Saldo pendiente: L. ${computedBalanceDue.toFixed(2)}`
-          : `¡Venta ${saleNumber} registrada con éxito! El inventario ha sido actualizado.`,
+          ? `¡Venta al Crédito ${saleNumber} registrada desde ${selectedWarehouse.name}! Saldo pendiente: L. ${computedBalanceDue.toFixed(2)}`
+          : `¡Venta ${saleNumber} registrada con éxito desde ${selectedWarehouse.name}!`,
         'success'
       );
     } catch (err: any) {
@@ -1589,8 +1706,63 @@ export const SalesView: React.FC<SalesViewProps> = ({
               mobilePosTab === 'cart' ? 'hidden lg:flex' : 'flex'
             }`}
           >
-            {/* Search and Category Filter Toolbar */}
-            <div className="p-2.5 sm:p-4 bg-white border-b border-slate-200 space-y-2 sm:space-y-3 shrink-0">
+            {/* Search, Warehouse Selector and Category Filter Toolbar */}
+            <div className="p-2.5 sm:p-4 bg-white border-b border-slate-200 space-y-2 sm:space-y-2.5 shrink-0">
+              {/* Selector de Bodega de Venta / Despacho */}
+              <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-teal-50/80 border border-teal-200/90">
+                <div className="flex items-center gap-1.5 text-xs font-extrabold text-teal-900">
+                  <Boxes className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>Bodega de Venta:</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap flex-1 sm:flex-initial justify-end">
+                  {activeWarehouses.length <= 4 ? (
+                    <div className="flex items-center gap-1 flex-wrap justify-end">
+                      {activeWarehouses.map((wh) => {
+                        const isSelected = wh.id === selectedWarehouse.id;
+                        return (
+                          <button
+                            key={wh.id}
+                            type="button"
+                            onClick={() => handleSelectPosWarehouse(wh.id)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer flex items-center gap-1 ${
+                              isSelected
+                                ? 'bg-teal-700 text-white shadow-2xs ring-2 ring-teal-500/30'
+                                : 'bg-white text-slate-700 border border-teal-200 hover:bg-teal-100/60'
+                            }`}
+                            title={`Vender y descontar existencias de: ${wh.name}`}
+                          >
+                            <span>{wh.name}</span>
+                            {wh.isMainSalesFloor && (
+                              <span
+                                className={`text-[9px] px-1 py-0.2 rounded font-black uppercase ${
+                                  isSelected
+                                    ? 'bg-teal-900/60 text-teal-100'
+                                    : 'bg-emerald-100 text-emerald-800'
+                                }`}
+                              >
+                                POS
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedWarehouse.id}
+                      onChange={(e) => handleSelectPosWarehouse(e.target.value)}
+                      className="px-2.5 py-1 rounded-lg bg-white border border-teal-300 text-xs font-extrabold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                    >
+                      {activeWarehouses.map((wh) => (
+                        <option key={wh.id} value={wh.id}>
+                          {wh.name} ({wh.code})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+
               <div className="space-y-1.5">
                 <div className="relative">
                   <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -1678,7 +1850,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3">
                     {displayedCatalog.map((product) => {
-                      const stock = Number(product.stock) || 0;
+                      const stock = getPosWarehouseStock(product);
+                      const totalGlobalStock = Math.max(0, Number(product.stock) || 0);
+                      const otherWhStock = Math.max(0, totalGlobalStock - stock);
                       const isOutOfStock = stock <= 0;
                       const qtyInCart = cartQtyMap.get(product.code) || 0;
                       const basePrice = Number(product.price) || 0;
@@ -1692,10 +1866,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       return (
                         <div
                           key={product.code}
-                          onClick={() => !isOutOfStock && addToCart(product)}
+                          onClick={() => addToCart(product)}
                           className={`group relative flex flex-col justify-between p-3 rounded-xl border bg-white transition-all text-left select-none ${
                             isOutOfStock
-                              ? 'opacity-60 bg-slate-100/70 border-slate-200 cursor-not-allowed'
+                              ? otherWhStock > 0
+                                ? 'opacity-80 bg-amber-50/40 border-amber-200 cursor-pointer'
+                                : 'opacity-60 bg-slate-100/70 border-slate-200 cursor-not-allowed'
                               : 'border-slate-200/90 hover:border-emerald-500 hover:shadow-md cursor-pointer hover:-translate-y-0.5'
                           }`}
                         >
@@ -1704,13 +1880,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             <span
                               className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                                 isOutOfStock
-                                  ? 'bg-rose-100 text-rose-700'
+                                  ? otherWhStock > 0
+                                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                    : 'bg-rose-100 text-rose-700'
                                   : stock <= 3
                                   ? 'bg-amber-100 text-amber-800'
                                   : 'bg-emerald-100 text-emerald-800'
                               }`}
                             >
-                              {isOutOfStock ? 'Agotado' : `Stock: ${stock}`}
+                              {isOutOfStock
+                                ? otherWhStock > 0
+                                  ? `0 aquí (${otherWhStock} en otra)`
+                                  : 'Agotado'
+                                : `Stock: ${stock}`}
                             </span>
 
                             <div className="flex items-center gap-1 ml-auto">
@@ -1864,26 +2046,48 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
 
             {/* Cart Header */}
-            <div className="px-3.5 py-2.5 sm:p-3.5 border-b border-slate-200 bg-slate-50/80 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
-                <h2 className="font-bold text-slate-900 text-sm sm:text-base">Ticket de Venta</h2>
-                <span className="text-[11px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
-                  {totalCartItemsCount} {totalCartItemsCount === 1 ? 'artículo' : 'artículos'}
-                </span>
+            <div className="px-3.5 py-2.5 sm:p-3.5 border-b border-slate-200 bg-slate-50/80 space-y-2 shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
+                  <h2 className="font-bold text-slate-900 text-sm sm:text-base">Ticket de Venta</h2>
+                  <span className="text-[11px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                    {totalCartItemsCount} {totalCartItemsCount === 1 ? 'artículo' : 'artículos'}
+                  </span>
+                </div>
+
+                {cart.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearCart}
+                    className="text-xs text-rose-600 hover:text-rose-800 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                    title="Vaciar carrito"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Vaciar</span>
+                  </button>
+                )}
               </div>
 
-              {cart.length > 0 && (
-                <button
-                  type="button"
-                  onClick={clearCart}
-                  className="text-xs text-rose-600 hover:text-rose-800 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                  title="Vaciar carrito"
+              {/* Compact Warehouse Selector inside the Ticket panel */}
+              <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-teal-50/90 border border-teal-200 text-xs">
+                <span className="font-bold text-teal-900 flex items-center gap-1 shrink-0">
+                  <Boxes className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                  <span>Descontar de:</span>
+                </span>
+                <select
+                  value={selectedWarehouse.id}
+                  onChange={(e) => handleSelectPosWarehouse(e.target.value)}
+                  className="bg-white border border-teal-300 rounded-md px-2 py-0.5 text-[11px] font-extrabold text-teal-950 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer truncate max-w-[220px]"
+                  title="Seleccionar de qué bodega se descontará esta venta"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Vaciar</span>
-                </button>
-              )}
+                  {activeWarehouses.map((wh) => (
+                    <option key={wh.id} value={wh.id}>
+                      {wh.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* Unified Scrollable Ticket Body: Items + Customer + Payment + Totals */}
@@ -1901,7 +2105,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 ) : (
                   cart.map((item) => {
                     const productInStore = inventory.find((p) => p.code === item.code);
-                    const maxStock = productInStore ? Number(productInStore.stock) || 0 : 0;
+                    const maxStock = getPosWarehouseStock(productInStore);
                     const basePrice =
                       item.originalPrice !== undefined
                         ? Number(item.originalPrice)
@@ -2913,6 +3117,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             {sellerInfo.roleLabel}
                           </span>
                         </div>
+                        {sale.warehouseName && (
+                          <div className="flex items-center gap-1.5 text-[11px] font-bold text-teal-800 bg-teal-50/80 border border-teal-200/80 px-2.5 py-1 rounded-lg">
+                            <Boxes className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                            <span>Bodega: {sale.warehouseName}</span>
+                          </div>
+                        )}
 
                         {/* Preview of sold items inside the mobile card */}
                         {sale.items && sale.items.length > 0 && (
@@ -3085,10 +3295,18 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             </div>
                           </td>
                           <td className="py-3 px-4">
-                            <span className="inline-flex items-center gap-1 font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full text-xs">
-                              <Package className="w-3 h-3 text-slate-500" />
-                              {sale.totalItems} {sale.totalItems === 1 ? 'ítem' : 'ítems'}
-                            </span>
+                            <div className="flex flex-col items-start gap-1">
+                              <span className="inline-flex items-center gap-1 font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full text-xs">
+                                <Package className="w-3 h-3 text-slate-500" />
+                                {sale.totalItems} {sale.totalItems === 1 ? 'ítem' : 'ítems'}
+                              </span>
+                              {sale.warehouseName && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-teal-800 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded-md">
+                                  <Boxes className="w-2.5 h-2.5 text-teal-600" />
+                                  {sale.warehouseName}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3 px-4">
                             <span className="capitalize text-slate-600">

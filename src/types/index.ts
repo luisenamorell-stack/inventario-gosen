@@ -12,6 +12,7 @@ export interface Product {
   discountType?: 'fixed' | 'percent';
   discountValue?: number;
   stock: number;
+  warehouseStocks?: Record<string, number>;
   img?: string;
 }
 
@@ -65,6 +66,7 @@ export interface AuditHistoryRecord {
 export type ActiveTab =
   | 'dashboard'
   | 'inventory'
+  | 'warehouses'
   | 'sales'
   | 'purchases'
   | 'audit'
@@ -80,6 +82,7 @@ export const ALL_COMPANY_MODULES: ActiveTab[] = [
   'dashboard',
   'sales',
   'inventory',
+  'warehouses',
   'price-checker',
   'catalog',
   'purchases',
@@ -219,8 +222,55 @@ export interface ActivityLogRecord {
   userName: string;
   userRole: UserRole;
   action: string;
-  module: 'sales' | 'inventory' | 'purchases' | 'audit' | 'suppliers' | 'settings' | 'users' | 'catalog';
+  module: 'sales' | 'inventory' | 'warehouses' | 'purchases' | 'audit' | 'suppliers' | 'settings' | 'users' | 'catalog';
   details?: string;
+}
+
+export interface WarehouseLocation {
+  id: string;
+  code: string;
+  name: string;
+  address?: string;
+  manager?: string;
+  phone?: string;
+  isMainSalesFloor?: boolean;
+  isActive: boolean;
+  createdAt: number;
+}
+
+export interface WarehouseTransferItem {
+  productId: string;
+  code: string;
+  name: string;
+  category?: string;
+  size?: string;
+  quantity: number;
+  cost?: number;
+  price?: number;
+}
+
+export interface WarehouseTransferRecord {
+  id: string;
+  transferNumber: string;
+  companyId?: string;
+  fromWarehouseId: string;
+  fromWarehouseName: string;
+  toWarehouseId: string;
+  toWarehouseName: string;
+  items: WarehouseTransferItem[];
+  totalUnits: number;
+  notes?: string;
+  createdBy: string;
+  receivedBy?: string;
+  timestamp: number;
+  dateFormatted: string;
+}
+
+export interface StoreWarehousesData {
+  companyId: string;
+  warehouses: WarehouseLocation[];
+  transfers: WarehouseTransferRecord[];
+  updatedAt: number;
 }
 
 export interface SaleItem {
@@ -271,6 +321,8 @@ export interface SaleRecord {
   customerRtn?: string;
   notes?: string;
   status: 'completed' | 'cancelled';
+  warehouseId?: string;
+  warehouseName?: string;
   cashier?: string;
   cashierRole?: UserRole;
   lastEditedBy?: string;

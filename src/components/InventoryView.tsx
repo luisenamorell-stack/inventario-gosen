@@ -1,6 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { Product, Supplier, StoreSettings } from '../types';
+import { Product, Supplier, StoreSettings, StoreWarehousesData } from '../types';
+import {
+  getDefaultWarehousesForStore,
+  getProductStockInWarehouse,
+} from '../firebase/firestoreService';
 import {
   Plus,
   Search,
@@ -21,7 +25,8 @@ import {
   Check,
   TrendingUp,
   Printer,
-  Download
+  Download,
+  Boxes
 } from 'lucide-react';
 
 import { ConfirmDialog } from './ConfirmDialog';
@@ -39,6 +44,7 @@ interface InventoryViewProps {
   inventory: Product[];
   suppliers: Supplier[];
   storeSettings?: StoreSettings;
+  warehousesData?: StoreWarehousesData;
   isLoading?: boolean;
   initialSearchCode?: string;
   maxProducts?: number;
@@ -47,7 +53,14 @@ interface InventoryViewProps {
   onBulkSaveProducts?: (
     products: Product[],
     newSuppliers: Supplier[],
-    summary: { createdCount: number; updatedCount: number; totalUnitsProcessed: number; mode: StockUpdateMode }
+    summary: {
+      createdCount: number;
+      updatedCount: number;
+      totalUnitsProcessed: number;
+      mode: StockUpdateMode;
+      targetWarehouseId?: string;
+      targetWarehouseName?: string;
+    }
   ) => Promise<void>;
   onDeleteProduct: (id: string) => void;
   onOpenSupplierModal: () => void;
@@ -60,6 +73,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   inventory,
   suppliers,
   storeSettings,
+  warehousesData,
   isLoading = false,
   initialSearchCode = '',
   maxProducts = 0,
@@ -105,6 +119,20 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [quickDiscountType, setQuickDiscountType] = useState<'fixed' | 'percent'>('fixed');
   const [quickDiscountValue, setQuickDiscountValue] = useState<string>('');
 
+  const activeWarehouses = useMemo(() => {
+    const raw =
+      Array.isArray(warehousesData?.warehouses) && warehousesData!.warehouses.length > 0
+        ? warehousesData!.warehouses
+        : getDefaultWarehousesForStore();
+    const active = raw.filter((w) => w.isActive !== false);
+    return active.length > 0 ? active : getDefaultWarehousesForStore();
+  }, [warehousesData]);
+
+  const mainWarehouse = useMemo(
+    () => activeWarehouses.find((w) => w.isMainSalesFloor) || activeWarehouses[0],
+    [activeWarehouses]
+  );
+
   // Form State
   const [formData, setFormData] = useState({
     code: '',
@@ -112,6 +140,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     category: 'Ropa',
     size: '',
     stock: 0,
+    targetWarehouseId: mainWarehouse?.id || 'principal',
     supplier: '',
     cost: 0,
     price: 0,
@@ -151,6 +180,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       category: 'Ropa',
       size: '',
       stock: 0,
+      targetWarehouseId: mainWarehouse?.id || 'principal',
       supplier: suppliers.length > 0 ? suppliers[0].name : '',
       cost: 0,
       price: 0,
@@ -175,6 +205,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       category: product.category || 'Otros',
       size: product.size || '',
       stock: product.stock,
+      targetWarehouseId: mainWarehouse?.id || 'principal',
       supplier: product.supplier || '',
       cost: product.cost,
       price: product.price,
@@ -258,13 +289,47 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     e.preventDefault();
     if (!formData.name.trim() || !formData.code.trim()) return;
 
+    const enteredStock = Math.max(0, Math.round(Number(formData.stock) || 0));
+    const targetWhId = formData.targetWarehouseId || mainWarehouse?.id || 'principal';
+
+    let nextWarehouseStocks: Record<string, number> | undefined = editingProduct?.warehouseStocks;
+    let finalTotalStock = enteredStock;
+
+    if (!editingProduct) {
+      // Creating a brand-new product: assign initial stock to the selected target warehouse
+      const whMap: Record<string, number> = {};
+      activeWarehouses.forEach((w) => {
+        whMap[w.id] = w.id === targetWhId ? enteredStock : 0;
+      });
+      nextWarehouseStocks = whMap;
+      finalTotalStock = enteredStock;
+    } else if (editingProduct.warehouseStocks && Object.keys(editingProduct.warehouseStocks).length > 0) {
+      // If editing an existing product that has multi-warehouse stock and total stock was changed in the form,
+      // apply the difference to the selected warehouse so warehouseStocks stays synchronized
+      const oldTotal = Math.max(0, Math.round(Number(editingProduct.stock) || 0));
+      const delta = enteredStock - oldTotal;
+      if (delta !== 0) {
+        const whMap: Record<string, number> = { ...editingProduct.warehouseStocks };
+        activeWarehouses.forEach((w) => {
+          whMap[w.id] = getProductStockInWarehouse(editingProduct, w.id, activeWarehouses);
+        });
+        whMap[targetWhId] = Math.max(0, (whMap[targetWhId] || 0) + delta);
+        finalTotalStock = Object.values(whMap).reduce(
+          (acc, v) => acc + Math.max(0, Math.round(Number(v) || 0)),
+          0
+        );
+        nextWarehouseStocks = whMap;
+      }
+    }
+
     const savedItem: Product = {
       id: editingProduct ? editingProduct.id : Date.now().toString(),
       code: formData.code.trim(),
       name: formData.name.trim(),
       category: formData.category,
       size: formData.size.trim(),
-      stock: Number(formData.stock) || 0,
+      stock: finalTotalStock,
+      warehouseStocks: nextWarehouseStocks,
       supplier: formData.supplier,
       cost: Number(formData.cost) || 0,
       price: Number(formData.price) || 0,
@@ -1349,6 +1414,29 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       </div>
                     </div>
 
+                    {/* Bodega de Ingreso Selector for New/Edited Article */}
+                    {!editingProduct && activeWarehouses.length > 0 && (
+                      <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200/80 space-y-1.5">
+                        <label className="text-[11px] font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                          <Boxes className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>¿En qué Bodega ingresar este artículo nuevo?</span>
+                        </label>
+                        <select
+                          value={formData.targetWarehouseId}
+                          onChange={(e) =>
+                            setFormData({ ...formData, targetWarehouseId: e.target.value })
+                          }
+                          className="w-full p-2 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold bg-white text-slate-800"
+                        >
+                          {activeWarehouses.map((wh) => (
+                            <option key={wh.id} value={wh.id}>
+                              {wh.name} ({wh.code}){wh.isMainSalesFloor ? ' — Sala de Ventas' : ' — Almacén'}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
                     <div>
                       <div className="flex justify-between items-center mb-1">
                         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -1856,6 +1944,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         onClose={() => setIsBulkImportOpen(false)}
         inventory={inventory}
         suppliers={suppliers}
+        warehouses={warehousesData?.warehouses}
         onConfirmBulkImport={async (finalProducts, newSuppliers, summary) => {
           if (onBulkSaveProducts) {
             await onBulkSaveProducts(finalProducts, newSuppliers, summary);

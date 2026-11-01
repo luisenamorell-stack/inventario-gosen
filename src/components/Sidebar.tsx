@@ -128,6 +128,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       activeColor: 'bg-emerald-600 text-white',
     },
     {
+      id: 'warehouses' as ActiveTab,
+      label: 'Bodegas / Traslados',
+      icon: Boxes,
+      activeColor: 'bg-teal-600 text-white',
+    },
+    {
       id: 'price-checker' as ActiveTab,
       label: 'Consultar Precio',
       icon: Tag,

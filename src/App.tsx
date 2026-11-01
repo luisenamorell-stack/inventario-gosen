@@ -15,12 +15,14 @@ import {
   ALL_COMPANY_MODULES,
   SaaSGlobalConfig,
   POSFinanceStoreData,
-  CreditPaymentAbone
+  CreditPaymentAbone,
+  StoreWarehousesData
 } from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
 import { InventoryView } from './components/InventoryView';
+import { WarehousesView } from './components/WarehousesView';
 import { AuditView } from './components/AuditView';
 import { PriceCheckerTab } from './components/PriceCheckerTab';
 import { SuppliersView } from './components/SuppliersView';
@@ -94,6 +96,11 @@ import {
   fetchPOSFinanceDataOnce,
   subscribeToPOSFinanceData,
   savePOSFinanceDataToFirestore,
+  getCachedStoreWarehouses,
+  fetchStoreWarehousesOnce,
+  subscribeToStoreWarehouses,
+  saveStoreWarehousesToFirestore,
+  applyWarehouseStockDelta,
   seedInitialDataIfEmpty,
   pingFirestore
 } from './firebase/firestoreService';
@@ -196,6 +203,9 @@ export const App: React.FC = () => {
   const [activityLogs, setActivityLogs] = useState<ActivityLogRecord[]>([]);
   const [posFinanceData, setPosFinanceData] = useState<POSFinanceStoreData>(() =>
     getCachedPOSFinanceData(getActiveCompanyId())
+  );
+  const [warehousesData, setWarehousesData] = useState<StoreWarehousesData>(() =>
+    getCachedStoreWarehouses(getActiveCompanyId())
   );
   const [salesSubTab, setSalesSubTab] = useState<SalesSubTab>('pos');
 
@@ -404,6 +414,7 @@ export const App: React.FC = () => {
     setAuditHistory(getCachedAuditHistory(cleanSlug) || []);
     setUsers(getCachedUsers(cleanSlug) || []);
     setPosFinanceData(getCachedPOSFinanceData(cleanSlug));
+    setWarehousesData(getCachedStoreWarehouses(cleanSlug));
     setActivityLogs([]);
   }, [companies]);
 
@@ -445,16 +456,18 @@ export const App: React.FC = () => {
       setActiveTab(firstAdminTab);
     }
 
-    logActivityInFirestore(
-      {
-        companyId: sessionCompany,
-        userName: session.userName,
-        userRole: session.role,
-        action: `Inició sesión en la plataforma (${session.role === 'admin' ? 'Administrador' : 'Colaborador'})`,
-        module: 'users',
-      },
-      sessionCompany
-    );
+    if (!session.isSuperAdmin) {
+      logActivityInFirestore(
+        {
+          companyId: sessionCompany,
+          userName: session.userName,
+          userRole: session.role,
+          action: `Inició sesión en la plataforma (${session.role === 'admin' ? 'Administrador' : 'Colaborador'})`,
+          module: 'users',
+        },
+        sessionCompany
+      );
+    }
 
     showToast(`¡Bienvenido ${session.userName}!`, 'success');
   };
@@ -533,7 +546,7 @@ export const App: React.FC = () => {
 
   const handleLogout = () => {
     const wasSuperAdmin = Boolean(userSession?.isSuperAdmin);
-    if (userSession) {
+    if (userSession && !wasSuperAdmin) {
       logActivityInFirestore(
         {
           companyId: activeCompanyId,
@@ -732,6 +745,7 @@ export const App: React.FC = () => {
 
     let unsubscribeSales: (() => void) | undefined;
     let unsubscribePosFinance: (() => void) | undefined;
+    let unsubscribeWarehouses: (() => void) | undefined;
 
     if (!isPublicCatalogMode) {
       unsubscribeSales = subscribeToSales(
@@ -750,6 +764,13 @@ export const App: React.FC = () => {
         },
         activeCompanyId
       );
+
+      unsubscribeWarehouses = subscribeToStoreWarehouses(
+        (liveWarehouses) => {
+          setWarehousesData(liveWarehouses);
+        },
+        activeCompanyId
+      );
     }
 
     return () => {
@@ -757,6 +778,7 @@ export const App: React.FC = () => {
       unsubscribeGlobal();
       if (unsubscribeSales) unsubscribeSales();
       if (unsubscribePosFinance) unsubscribePosFinance();
+      if (unsubscribeWarehouses) unsubscribeWarehouses();
     };
   }, [activeCompanyId, isPublicCatalogMode]);
 
@@ -800,7 +822,24 @@ export const App: React.FC = () => {
             loadedModulesRef.current[`posfinance${keySuffix}`] = true;
             fetchPOSFinanceDataOnce(activeCompanyId).then(setPosFinanceData).catch(console.warn);
           }
+          if (!loadedModulesRef.current[`warehouses${keySuffix}`]) {
+            loadedModulesRef.current[`warehouses${keySuffix}`] = true;
+            fetchStoreWarehousesOnce(activeCompanyId).then(setWarehousesData).catch(console.warn);
+          }
         } else if (activeTab === 'inventory') {
+          if (!loadedModulesRef.current[`suppliers${keySuffix}`]) {
+            loadedModulesRef.current[`suppliers${keySuffix}`] = true;
+            fetchSuppliersOnce(false, activeCompanyId).then(setSuppliers).catch(console.warn);
+          }
+          if (!loadedModulesRef.current[`warehouses${keySuffix}`]) {
+            loadedModulesRef.current[`warehouses${keySuffix}`] = true;
+            fetchStoreWarehousesOnce(activeCompanyId).then(setWarehousesData).catch(console.warn);
+          }
+        } else if (activeTab === 'warehouses') {
+          if (!loadedModulesRef.current[`warehouses${keySuffix}`]) {
+            loadedModulesRef.current[`warehouses${keySuffix}`] = true;
+            fetchStoreWarehousesOnce(activeCompanyId).then(setWarehousesData).catch(console.warn);
+          }
           if (!loadedModulesRef.current[`suppliers${keySuffix}`]) {
             loadedModulesRef.current[`suppliers${keySuffix}`] = true;
             fetchSuppliersOnce(false, activeCompanyId).then(setSuppliers).catch(console.warn);
@@ -901,7 +940,18 @@ export const App: React.FC = () => {
         setPurchases(freshPurchases);
         setSuppliers(freshSuppliers);
       } else if (activeTab === 'suppliers' || activeTab === 'inventory') {
-        const freshSuppliers = await fetchSuppliersOnce(true, activeCompanyId);
+        const [freshSuppliers, freshWarehouses] = await Promise.all([
+          fetchSuppliersOnce(true, activeCompanyId),
+          fetchStoreWarehousesOnce(activeCompanyId),
+        ]);
+        setSuppliers(freshSuppliers);
+        setWarehousesData(freshWarehouses);
+      } else if (activeTab === 'warehouses') {
+        const [freshWarehouses, freshSuppliers] = await Promise.all([
+          fetchStoreWarehousesOnce(activeCompanyId),
+          fetchSuppliersOnce(true, activeCompanyId),
+        ]);
+        setWarehousesData(freshWarehouses);
         setSuppliers(freshSuppliers);
       } else if (activeTab === 'audit') {
         const freshAudit = await fetchAuditHistoryOnce(true, activeCompanyId);
@@ -1183,7 +1233,14 @@ export const App: React.FC = () => {
   const handleBulkSaveProducts = async (
     productsToSave: Product[],
     newSuppliers: Supplier[],
-    summary: { createdCount: number; updatedCount: number; totalUnitsProcessed: number; mode: 'add' | 'replace' }
+    summary: {
+      createdCount: number;
+      updatedCount: number;
+      totalUnitsProcessed: number;
+      mode: 'add' | 'replace';
+      targetWarehouseId?: string;
+      targetWarehouseName?: string;
+    }
   ) => {
     const activeComp = companies.find(
       (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
@@ -1226,14 +1283,20 @@ export const App: React.FC = () => {
       await bulkSaveProductsToFirestore(normalizedProducts, newSuppliers, activeCompanyId);
       setLastSyncTime(new Date());
 
+      const whLabel = summary.targetWarehouseName
+        ? ` en Bodega: "${summary.targetWarehouseName}"`
+        : '';
+
       logActivityInFirestore(
         {
           companyId: activeCompanyId,
           userName: userSession?.userName || 'Usuario',
           userRole: userSession?.role || 'admin',
-          action: `Carga masiva Excel (${productsToSave.length} artículos procesados)`,
+          action: `Carga masiva Excel (${productsToSave.length} artículos procesados)${whLabel}`,
           module: 'inventory',
-          details: `Nuevos: ${summary.createdCount}, Actualizados: ${summary.updatedCount}, Modo: ${
+          details: `Bodega Destino: ${summary.targetWarehouseName || 'Tienda Principal'} | Nuevos: ${
+            summary.createdCount
+          }, Actualizados: ${summary.updatedCount}, Modo: ${
             summary.mode === 'add' ? 'Sumar al stock' : 'Reemplazar stock'
           }`,
         },
@@ -1241,7 +1304,7 @@ export const App: React.FC = () => {
       );
 
       showToast(
-        `¡Carga masiva exitosa! ${summary.createdCount} nuevos y ${summary.updatedCount} actualizados en Firebase.`,
+        `¡Carga masiva exitosa${whLabel}! ${summary.createdCount} nuevos y ${summary.updatedCount} actualizados en Firebase.`,
         'success'
       );
     } catch (err: any) {
@@ -1428,16 +1491,23 @@ export const App: React.FC = () => {
 
       const recorded = await recordSaleInFirestore(payload, inventory, activeCompanyId);
 
-      // Update local inventory stock & cache directly
+      // Update local inventory stock & warehouseStocks & cache directly
       setInventory((prev) => {
         const nextInv = prev.map((prod) => {
           const soldItem = saleData.items.find(
             (it) => it.code.trim().toLowerCase() === prod.code.trim().toLowerCase() || it.productId === prod.id
           );
           if (!soldItem) return prod;
+          const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+            prod,
+            -(Number(soldItem.quantity) || 1),
+            saleData.warehouseId,
+            warehousesData.warehouses
+          );
           return {
             ...prod,
-            stock: Math.max(0, (Number(prod.stock) || 0) - (Number(soldItem.quantity) || 1)),
+            stock: newStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           };
         });
         setCachedInventory(nextInv, Date.now(), activeCompanyId);
@@ -1456,9 +1526,9 @@ export const App: React.FC = () => {
       logActivityInFirestore({
         userName: activeCashier,
         userRole: userSession?.role || 'collaborator',
-        action: `Registró Venta N° ${saleData.saleNumber} (${saleData.totalItems} ítems)`,
+        action: `Registró Venta N° ${saleData.saleNumber} (${saleData.totalItems} ítems)${saleData.warehouseName ? ` desde ${saleData.warehouseName}` : ''}`,
         module: 'sales',
-        details: `Total: L. ${saleData.total.toFixed(2)} (${saleData.paymentMethod.toUpperCase()}) - Cliente: ${saleData.customerName || 'Consumidor Final'}`,
+        details: `Total: L. ${saleData.total.toFixed(2)} (${saleData.paymentMethod.toUpperCase()}) - Cliente: ${saleData.customerName || 'Consumidor Final'}${saleData.warehouseName ? ` - Bodega: ${saleData.warehouseName}` : ''}`,
       }, activeCompanyId);
 
       return recorded;
@@ -1472,16 +1542,23 @@ export const App: React.FC = () => {
     try {
       await cancelSaleInFirestore(sale, inventory, activeCompanyId);
 
-      // Restore local inventory stock & cache directly
+      // Restore local inventory stock & warehouseStocks & cache directly
       setInventory((prev) => {
         const nextInv = prev.map((prod) => {
           const soldItem = sale.items.find(
             (it) => it.code.trim().toLowerCase() === prod.code.trim().toLowerCase() || it.productId === prod.id
           );
           if (!soldItem) return prod;
+          const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+            prod,
+            Number(soldItem.quantity) || 1,
+            sale.warehouseId,
+            warehousesData.warehouses
+          );
           return {
             ...prod,
-            stock: (Number(prod.stock) || 0) + (Number(soldItem.quantity) || 1),
+            stock: newStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           };
         });
         setCachedInventory(nextInv, Date.now(), activeCompanyId);
@@ -1501,7 +1578,7 @@ export const App: React.FC = () => {
         userRole: userSession?.role || 'admin',
         action: `Anuló la Venta N° ${sale.saleNumber}`,
         module: 'sales',
-        details: `Total devuelto al stock: L. ${sale.total.toFixed(2)}`,
+        details: `Total devuelto al stock: L. ${sale.total.toFixed(2)}${sale.warehouseName ? ` (${sale.warehouseName})` : ''}`,
       }, activeCompanyId);
     } finally {
       setIsSyncing(false);
@@ -1526,6 +1603,8 @@ export const App: React.FC = () => {
         if (k) newQtyByCode.set(k, (newQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
       }
 
+      const targetWhId = updatedSale.warehouseId || originalSale.warehouseId;
+
       setInventory((prev) => {
         const nextInv = prev.map((prod) => {
           const k = prod.code.trim().toLowerCase();
@@ -1533,9 +1612,16 @@ export const App: React.FC = () => {
           const newQ = newQtyByCode.get(k) || 0;
           const delta = oldQ - newQ;
           if (delta === 0) return prod;
+          const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+            prod,
+            delta,
+            targetWhId,
+            warehousesData.warehouses
+          );
           return {
             ...prod,
-            stock: Math.max(0, Math.round((Number(prod.stock) || 0) + delta)),
+            stock: newStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           };
         });
         setCachedInventory(nextInv, Date.now(), activeCompanyId);
@@ -1574,6 +1660,56 @@ export const App: React.FC = () => {
     } finally {
       setIsSyncing(false);
     }
+  };
+
+  const handleSaveWarehousesData = async (nextData: StoreWarehousesData) => {
+    setIsSyncing(true);
+    try {
+      const saved = await saveStoreWarehousesToFirestore(nextData, activeCompanyId);
+      setWarehousesData(saved);
+      setLastSyncTime(new Date());
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleBulkSaveWarehouseProducts = async (productsToSave: Product[]) => {
+    setIsSyncing(true);
+    try {
+      const normalizedProducts = productsToSave.map((p) => ({
+        ...p,
+        id: getScopedDocId(p.code, activeCompanyId),
+        companyId: activeCompanyId,
+      }));
+
+      setInventory((prev) => {
+        const map = new Map<string, Product>();
+        prev.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
+        normalizedProducts.forEach((p) => map.set(p.code.trim().toLowerCase(), p));
+        const nextInv = Array.from(map.values());
+        setCachedInventory(nextInv, Date.now(), activeCompanyId);
+        return nextInv;
+      });
+
+      await bulkSaveProductsToFirestore(normalizedProducts, [], activeCompanyId);
+      setLastSyncTime(new Date());
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleLogWarehouseActivity = (action: string, details?: string) => {
+    logActivityInFirestore(
+      {
+        companyId: activeCompanyId,
+        userName: userSession?.userName || 'Administrador',
+        userRole: userSession?.role || 'admin',
+        action,
+        module: 'warehouses',
+        details,
+      },
+      activeCompanyId
+    );
   };
 
   const handleRecordCreditPayment = async (sale: SaleRecord, abone: CreditPaymentAbone) => {
@@ -2098,6 +2234,9 @@ export const App: React.FC = () => {
               <span className="truncate text-slate-300">
                 Viendo tienda: <strong className="text-white">{storeSettings.storeName || activeCompanyId.toUpperCase()}</strong>
               </span>
+              <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 text-emerald-400 border border-emerald-500/30 font-bold text-[10px] shrink-0">
+                🔒 Modo Invisible (No deja rastro en Movimientos)
+              </span>
             </div>
             <button
               type="button"
@@ -2350,6 +2489,7 @@ export const App: React.FC = () => {
               inventory={inventory}
               sales={sales}
               storeSettings={storeSettings}
+              warehousesData={warehousesData}
               userSession={userSession}
               users={users}
               isLoading={isInventoryLoading}
@@ -2369,6 +2509,7 @@ export const App: React.FC = () => {
               inventory={inventory}
               suppliers={suppliers}
               storeSettings={storeSettings}
+              warehousesData={warehousesData}
               isLoading={isInventoryLoading}
               initialSearchCode={inventorySearchQuery}
               maxProducts={companyMaxProducts}
@@ -2382,6 +2523,22 @@ export const App: React.FC = () => {
               }}
               showModalInitially={openProductModalTrigger}
               onCloseInitialModal={() => setOpenProductModalTrigger(false)}
+              showToast={showToast}
+            />
+          )}
+
+          {activeTabToRender === 'warehouses' && allowedTabsList.includes('warehouses') && (
+            <WarehousesView
+              inventory={inventory}
+              suppliers={suppliers}
+              warehousesData={warehousesData}
+              storeSettings={storeSettings}
+              userSession={userSession}
+              onSaveWarehousesData={handleSaveWarehousesData}
+              onBulkSaveProducts={handleBulkSaveWarehouseProducts}
+              onBulkImportWithSummary={handleBulkSaveProducts}
+              onSaveProduct={handleSaveProduct}
+              onRecordActivity={handleLogWarehouseActivity}
               showToast={showToast}
             />
           )}

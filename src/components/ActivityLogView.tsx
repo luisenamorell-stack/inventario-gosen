@@ -74,19 +74,32 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({
     storeName: 'Tienda Gosén',
   };
 
+  // Exclude any SaaS Super-Admin inspection entries so client stores never see supervision traces
+  const visibleStoreLogs = useMemo(() => {
+    return logs.filter((l) => {
+      const lower = (l.userName || '').trim().toLowerCase();
+      return (
+        !lower.includes('administrador saas') &&
+        !lower.includes('admin saas') &&
+        !lower.includes('superadmin') &&
+        !lower.includes('consola saas')
+      );
+    });
+  }, [logs]);
+
   // Unique users list for filtering dropdown
   const uniqueUsers = useMemo(() => {
     const set = new Set<string>();
-    logs.forEach((l) => {
+    visibleStoreLogs.forEach((l) => {
       if (l.userName) set.add(l.userName.trim());
     });
     return Array.from(set).sort();
-  }, [logs]);
+  }, [visibleStoreLogs]);
 
   // Filtered Activity Logs
   const filteredLogs = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return logs.filter((log) => {
+    return visibleStoreLogs.filter((log) => {
       if (userFilter !== 'all' && log.userName !== userFilter) return false;
       if (moduleFilter !== 'all' && log.module !== moduleFilter) return false;
 
@@ -98,7 +111,7 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({
         log.date.toLowerCase().includes(q)
       );
     });
-  }, [logs, searchQuery, userFilter, moduleFilter]);
+  }, [visibleStoreLogs, searchQuery, userFilter, moduleFilter]);
 
   // Summary metrics for clean KPI strip
   const summaryStats = useMemo(() => {
@@ -124,6 +137,12 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({
           label: 'Inventario',
           color: 'bg-blue-50 text-blue-800 border-blue-200',
           icon: List,
+        };
+      case 'warehouses':
+        return {
+          label: 'Bodegas / Traslados',
+          color: 'bg-teal-50 text-teal-800 border-teal-200',
+          icon: Truck,
         };
       case 'purchases':
         return {

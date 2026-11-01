@@ -1,6 +1,10 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Product, Supplier } from '../types';
+import { Product, Supplier, WarehouseLocation } from '../types';
+import {
+  getDefaultWarehousesForStore,
+  getProductStockInWarehouse,
+} from '../firebase/firestoreService';
 import {
   FileSpreadsheet,
   Upload,
@@ -18,7 +22,9 @@ import {
   Replace,
   FileDown,
   Info,
-  Search
+  Search,
+  Boxes,
+  Store
 } from 'lucide-react';
 
 export type StockUpdateMode = 'add' | 'replace';
@@ -40,10 +46,19 @@ interface BulkStockImportModalProps {
   onClose: () => void;
   inventory: Product[];
   suppliers: Supplier[];
+  warehouses?: WarehouseLocation[];
+  initialWarehouseId?: string;
   onConfirmBulkImport: (
     finalProducts: Product[],
     newSuppliers: Supplier[],
-    summary: { createdCount: number; updatedCount: number; totalUnitsProcessed: number; mode: StockUpdateMode }
+    summary: {
+      createdCount: number;
+      updatedCount: number;
+      totalUnitsProcessed: number;
+      mode: StockUpdateMode;
+      targetWarehouseId?: string;
+      targetWarehouseName?: string;
+    }
   ) => Promise<void>;
   showToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
@@ -74,6 +89,8 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
   onClose,
   inventory,
   suppliers,
+  warehouses,
+  initialWarehouseId,
   onConfirmBulkImport,
   showToast,
 }) => {
@@ -86,6 +103,37 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [filterPreview, setFilterPreview] = useState<'all' | 'new' | 'existing' | 'invalid'>('all');
   const [searchPreview, setSearchPreview] = useState<string>('');
+
+  const effectiveWarehouses = useMemo(() => {
+    const raw =
+      Array.isArray(warehouses) && warehouses.length > 0
+        ? warehouses
+        : getDefaultWarehousesForStore();
+    const active = raw.filter((w) => w.isActive !== false);
+    return active.length > 0 ? active : getDefaultWarehousesForStore();
+  }, [warehouses]);
+
+  const mainWarehouse = useMemo(
+    () => effectiveWarehouses.find((w) => w.isMainSalesFloor) || effectiveWarehouses[0],
+    [effectiveWarehouses]
+  );
+
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>(
+    () => initialWarehouseId || mainWarehouse?.id || 'principal'
+  );
+
+  useEffect(() => {
+    if (initialWarehouseId && effectiveWarehouses.some((w) => w.id === initialWarehouseId)) {
+      setSelectedWarehouseId(initialWarehouseId);
+    } else if (!effectiveWarehouses.some((w) => w.id === selectedWarehouseId)) {
+      setSelectedWarehouseId(mainWarehouse?.id || 'principal');
+    }
+  }, [effectiveWarehouses, initialWarehouseId, mainWarehouse, selectedWarehouseId]);
+
+  const selectedWarehouseObj = useMemo(
+    () => effectiveWarehouses.find((w) => w.id === selectedWarehouseId) || mainWarehouse,
+    [effectiveWarehouses, selectedWarehouseId, mainWarehouse]
+  );
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -477,18 +525,28 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
     }
   };
 
-  // Enrich rows with status (existing vs new vs invalid)
+  // Enrich rows with status (existing vs new vs invalid) and target warehouse stock calculation
   const enrichedRows = useMemo(() => {
+    const targetWhId = selectedWarehouseObj?.id || 'principal';
     return rows.map((row) => {
       const cleanCode = row.code.trim();
       const existing = cleanCode ? inventoryByCode.get(cleanCode.toLowerCase()) : undefined;
-      const currentStock = existing ? Number(existing.stock) || 0 : 0;
-      const qty = Number(row.excelQuantity) || 0;
-      const finalStock = existing
+      const currentTotalStock = existing ? Math.max(0, Math.round(Number(existing.stock) || 0)) : 0;
+      const currentWhStock = existing
+        ? getProductStockInWarehouse(existing, targetWhId, effectiveWarehouses)
+        : 0;
+      const otherWarehousesStock = Math.max(0, currentTotalStock - currentWhStock);
+      const qty = Math.max(0, Math.round(Number(row.excelQuantity) || 0));
+
+      const finalWhStock = existing
         ? stockMode === 'add'
-          ? Math.max(0, currentStock + qty)
+          ? Math.max(0, currentWhStock + qty)
           : Math.max(0, qty)
         : Math.max(0, qty);
+
+      const finalTotalStock = existing
+        ? otherWarehousesStock + finalWhStock
+        : finalWhStock;
 
       const isValid = Boolean(cleanCode && row.name.trim());
 
@@ -496,12 +554,15 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
         ...row,
         existing,
         isExisting: Boolean(existing),
-        currentStock,
-        finalStock,
+        currentStock: currentWhStock,
+        currentTotalStock,
+        otherWarehousesStock,
+        finalStock: finalWhStock,
+        finalTotalStock,
         isValid,
       };
     });
-  }, [rows, inventoryByCode, stockMode]);
+  }, [rows, inventoryByCode, stockMode, selectedWarehouseObj, effectiveWarehouses]);
 
   const stats = useMemo(() => {
     const validRows = enrichedRows.filter((r) => r.isValid);
@@ -537,13 +598,16 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
     });
   }, [enrichedRows, filterPreview, searchPreview]);
 
-  // Final save handler -> Consolidates duplicate codes in the sheet & commits to Firestore
+  // Final save handler -> Consolidates duplicate codes in the sheet & commits to Firestore into the selected warehouse
   const handleConfirmSave = async () => {
     const validRows = enrichedRows.filter((r) => r.isValid);
     if (validRows.length === 0) {
       showToast?.('No hay filas completas para importar. Asegúrate de que tengan Código y Nombre.', 'warning');
       return;
     }
+
+    const targetWhId = selectedWarehouseObj?.id || 'principal';
+    const targetWhName = selectedWarehouseObj?.name || 'Tienda Principal';
 
     setIsSaving(true);
     try {
@@ -556,13 +620,24 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
         const key = row.code.trim().toLowerCase();
         const existingInDb = inventoryByCode.get(key);
         const alreadyInBatch = consolidatedMap.get(key);
+        const incomingQty = Math.max(0, Math.round(Number(row.excelQuantity) || 0));
 
         if (alreadyInBatch) {
-          // If same SKU appears twice in the Excel file, accumulate or overwrite
-          const nextStock =
-            stockMode === 'add'
-              ? alreadyInBatch.stock + (Number(row.excelQuantity) || 0)
-              : Number(row.excelQuantity) || 0;
+          // If same SKU appears twice in the Excel file, accumulate or overwrite in targetWhId
+          const whMap: Record<string, number> = { ...(alreadyInBatch.warehouseStocks || {}) };
+          effectiveWarehouses.forEach((w) => {
+            if (whMap[w.id] === undefined) {
+              whMap[w.id] = getProductStockInWarehouse(alreadyInBatch, w.id, effectiveWarehouses);
+            }
+          });
+          const prevInTarget = Math.max(0, Math.round(Number(whMap[targetWhId]) || 0));
+          whMap[targetWhId] =
+            stockMode === 'add' ? Math.max(0, prevInTarget + incomingQty) : incomingQty;
+
+          const nextTotalStock = Object.values(whMap).reduce(
+            (acc, val) => acc + Math.max(0, Math.round(Number(val) || 0)),
+            0
+          );
 
           consolidatedMap.set(key, {
             ...alreadyInBatch,
@@ -572,17 +647,26 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
             supplier: row.supplier.trim() || alreadyInBatch.supplier,
             cost: Number(row.cost) >= 0 ? Number(row.cost) : alreadyInBatch.cost,
             price: Number(row.price) > 0 ? Number(row.price) : alreadyInBatch.price,
-            stock: Math.max(0, Math.round(nextStock)),
+            stock: nextTotalStock,
+            warehouseStocks: whMap,
           });
         } else if (existingInDb) {
           updatedCodes.add(key);
-          const baseStock = Number(existingInDb.stock) || 0;
-          const nextStock =
-            stockMode === 'add'
-              ? baseStock + (Number(row.excelQuantity) || 0)
-              : Number(row.excelQuantity) || 0;
+          const whMap: Record<string, number> = { ...(existingInDb.warehouseStocks || {}) };
+          effectiveWarehouses.forEach((w) => {
+            whMap[w.id] = getProductStockInWarehouse(existingInDb, w.id, effectiveWarehouses);
+          });
+          const prevInTarget = Math.max(0, Math.round(Number(whMap[targetWhId]) || 0));
+          whMap[targetWhId] =
+            stockMode === 'add' ? Math.max(0, prevInTarget + incomingQty) : incomingQty;
+
+          const nextTotalStock = Object.values(whMap).reduce(
+            (acc, val) => acc + Math.max(0, Math.round(Number(val) || 0)),
+            0
+          );
 
           consolidatedMap.set(key, {
+            ...existingInDb,
             id: existingInDb.id || row.code.trim(),
             code: existingInDb.code, // preserve original casing
             name: row.name.trim() || existingInDb.name,
@@ -591,11 +675,18 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
             supplier: row.supplier.trim() !== '' ? row.supplier.trim() : (existingInDb.supplier || ''),
             cost: Number(row.cost) > 0 ? Number(row.cost) : existingInDb.cost,
             price: Number(row.price) > 0 ? Number(row.price) : existingInDb.price,
-            stock: Math.max(0, Math.round(nextStock)),
+            stock: nextTotalStock,
+            warehouseStocks: whMap,
             img: existingInDb.img || '',
           });
         } else {
+          // Brand new article: assign all incoming units directly to the chosen target warehouse
           createdCodes.add(key);
+          const whMap: Record<string, number> = {};
+          effectiveWarehouses.forEach((w) => {
+            whMap[w.id] = w.id === targetWhId ? incomingQty : 0;
+          });
+
           consolidatedMap.set(key, {
             id: row.code.trim(),
             code: row.code.trim(),
@@ -605,7 +696,8 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
             supplier: row.supplier.trim(),
             cost: Math.max(0, Number(row.cost) || 0),
             price: Math.max(0, Number(row.price) || 0),
-            stock: Math.max(0, Math.round(Number(row.excelQuantity) || 0)),
+            stock: incomingQty,
+            warehouseStocks: whMap,
             img: '',
           });
         }
@@ -635,6 +727,8 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
         updatedCount: updatedCodes.size,
         totalUnitsProcessed: stats.totalUnits,
         mode: stockMode,
+        targetWarehouseId: targetWhId,
+        targetWarehouseName: targetWhName,
       });
 
       setRows([]);
@@ -725,7 +819,7 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
-                title="Suma la cantidad del Excel al stock que ya tienes en tienda"
+                title="Suma la cantidad del Excel al stock de la bodega seleccionada"
               >
                 <Layers className="w-3.5 h-3.5 shrink-0" />
                 <span>Sumar al Stock Actual (+Stock)</span>
@@ -739,12 +833,66 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
                     ? 'bg-amber-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
-                title="Reemplaza el stock actual por el número exacto que venga en el Excel"
+                title="Reemplaza el stock de la bodega seleccionada por el número exacto que venga en el Excel"
               >
                 <Replace className="w-3.5 h-3.5 shrink-0" />
                 <span>Reemplazar Stock (=Stock)</span>
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* TARGET WAREHOUSE SELECTOR BAR (Bodega donde se ingresarán los artículos nuevos y el stock) */}
+        <div className="px-4 sm:px-6 py-3 bg-indigo-50/80 border-b border-indigo-200/80 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 shrink-0">
+          <div className="flex items-start sm:items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-2xs mt-0.5 sm:mt-0">
+              <Boxes className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs sm:text-sm font-extrabold text-indigo-950">
+                  ¿En qué Bodega deseas ingresar los artículos nuevos y el stock?
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white text-[10px] font-black uppercase tracking-wider">
+                  Destino: {selectedWarehouseObj?.name || 'Tienda Principal'}
+                </span>
+              </div>
+              <p className="text-[11px] text-indigo-800/80 mt-0.5">
+                Los <strong>artículos nuevos</strong> se agregarán directamente en{' '}
+                <strong>{selectedWarehouseObj?.name}</strong> y los existentes{' '}
+                {stockMode === 'add' ? 'sumarán su stock' : 'reemplazarán su stock'} en esa misma bodega.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {effectiveWarehouses.map((wh) => {
+              const isSelected = wh.id === (selectedWarehouseObj?.id || 'principal');
+              return (
+                <button
+                  key={wh.id}
+                  type="button"
+                  onClick={() => setSelectedWarehouseId(wh.id)}
+                  className={`px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all cursor-pointer border ${
+                    isSelected
+                      ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm ring-2 ring-indigo-500/25'
+                      : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50'
+                  }`}
+                >
+                  {wh.isMainSalesFloor ? (
+                    <Store className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-emerald-300' : 'text-emerald-600'}`} />
+                  ) : (
+                    <Boxes className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-indigo-200' : 'text-indigo-600'}`} />
+                  )}
+                  <div className="text-left leading-tight">
+                    <div className="truncate max-w-[170px]">{wh.name}</div>
+                    <div className={`text-[10px] font-mono ${isSelected ? 'text-indigo-200' : 'text-slate-400'}`}>
+                      {wh.code} {wh.isMainSalesFloor ? '• Sala Ventas' : '• Almacén'}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1032,7 +1180,9 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
                         <th className="py-2.5 px-2 w-24 text-center">
                           {stockMode === 'add' ? 'Cant. a Sumar' : 'Nuevo Stock'}
                         </th>
-                        <th className="py-2.5 px-3 text-center">Stock Final</th>
+                        <th className="py-2.5 px-3 text-center">
+                          Stock en {selectedWarehouseObj?.code || 'Bodega'}
+                        </th>
                         <th className="py-2.5 px-2 text-center w-10"></th>
                       </tr>
                     </thead>
@@ -1056,14 +1206,21 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
                                 Falta código/nombre
                               </span>
                             ) : row.isExisting ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px]">
-                                <CheckCircle2 className="w-3 h-3 shrink-0" />
-                                Existe (Actual: {row.currentStock})
-                              </span>
+                              <div className="space-y-0.5">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px]">
+                                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                  Existe ({selectedWarehouseObj?.code}: {row.currentStock})
+                                </span>
+                                {row.otherWarehousesStock > 0 && (
+                                  <div className="text-[10px] text-slate-400 font-medium">
+                                    +{row.otherWarehousesStock} en otras bodegas
+                                  </div>
+                                )}
+                              </div>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 font-bold text-[10px]">
                                 <Sparkles className="w-3 h-3 shrink-0" />
-                                Nuevo
+                                Nuevo → {selectedWarehouseObj?.code}
                               </span>
                             )}
                           </td>
@@ -1175,15 +1332,22 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
                             />
                           </td>
 
-                          {/* Calculated Final Stock */}
+                          {/* Calculated Final Stock in Selected Warehouse */}
                           <td className="py-2 px-3 text-center whitespace-nowrap">
                             {row.isExisting ? (
-                              <div className="inline-flex items-center gap-1 font-mono text-xs">
-                                <span className="text-slate-400">{row.currentStock}</span>
-                                <ArrowRight className="w-3 h-3 text-slate-400" />
-                                <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                                  {row.finalStock}
-                                </span>
+                              <div className="flex flex-col items-center">
+                                <div className="inline-flex items-center gap-1 font-mono text-xs">
+                                  <span className="text-slate-400">{row.currentStock}</span>
+                                  <ArrowRight className="w-3 h-3 text-slate-400" />
+                                  <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
+                                    {row.finalStock}
+                                  </span>
+                                </div>
+                                {row.otherWarehousesStock > 0 && (
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    Total global: {row.finalTotalStock}
+                                  </span>
+                                )}
                               </div>
                             ) : (
                               <span className="font-extrabold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-md font-mono">
@@ -1227,6 +1391,11 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
             <span className="text-emerald-700 font-semibold">
               {stats.existingCount} actualizaciones ({stockMode === 'add' ? 'sumando stock' : 'reemplazando stock'})
             </span>
+            <span className="text-slate-300">|</span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-800 font-extrabold">
+              <Boxes className="w-3.5 h-3.5" />
+              <span>Bodega: {selectedWarehouseObj?.name}</span>
+            </span>
           </div>
 
           <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
@@ -1254,7 +1423,8 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
                 <>
                   <CheckCircle2 className="w-4 h-4" />
                   <span>
-                    Confirmar y Subir {stats.validCount > 0 ? `(${stats.validCount})` : ''}
+                    Confirmar y Subir a {selectedWarehouseObj?.code || 'Bodega'}{' '}
+                    {stats.validCount > 0 ? `(${stats.validCount})` : ''}
                   </span>
                 </>
               )}

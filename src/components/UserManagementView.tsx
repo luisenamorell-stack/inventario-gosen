@@ -52,6 +52,12 @@ const TAB_MODULES: { id: ActiveTab; label: string; description: string; icon: Re
     icon: List,
   },
   {
+    id: 'warehouses',
+    label: 'Bodegas y Traslados',
+    description: 'Permite ver existencias por bodega y realizar traslados de mercadería',
+    icon: Boxes,
+  },
+  {
     id: 'price-checker',
     label: 'Consultar Precio',
     description: 'Terminal rápida de consulta de precios con escáner',
