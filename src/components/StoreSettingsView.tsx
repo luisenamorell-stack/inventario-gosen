@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { StoreSettings, PrinterPaperFormat } from '../types';
 import { uploadStoreLogo } from '../firebase/storageService';
 import { PrinterConnectionManager } from './PrintFormatModal';
+import { generateMonogramIconDataUrl } from '../utils/dynamicPwaManifest';
 import {
   Store,
   Upload,
@@ -581,27 +582,29 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   </span>
                   <div className="relative group">
                     <div className="w-20 h-20 rounded-2xl bg-slate-900 border-2 border-emerald-500/50 shadow-xl overflow-hidden p-1.5 flex items-center justify-center">
-                      {logoUrl || isGosen ? (
-                        <img
-                          src={logoUrl || '/pwa-512x512.png'}
-                          alt={storeName}
-                          className="w-full h-full object-contain rounded-xl"
-                          onError={(e) => {
-                            if (isGosen) {
-                              (e.target as HTMLImageElement).src = '/pwa-192x192.png';
-                            }
-                          }}
-                        />
-                      ) : (
-                        <Store className="w-10 h-10 text-emerald-400" />
-                      )}
+                      <img
+                        src={
+                          logoUrl
+                            ? logoUrl
+                            : isGosen
+                            ? '/pwa-512x512.png'
+                            : generateMonogramIconDataUrl(storeName || 'Mi Tienda', 256)
+                        }
+                        alt={storeName}
+                        className="w-full h-full object-contain rounded-xl"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = isGosen
+                            ? '/pwa-192x192.png'
+                            : generateMonogramIconDataUrl(storeName || 'Mi Tienda', 192);
+                        }}
+                      />
                     </div>
                   </div>
                   <span className="mt-2.5 font-bold text-xs text-slate-200 truncate max-w-[140px]">
                     {storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda')}
                   </span>
                   <span className="text-[10px] text-emerald-400 font-medium">
-                    App Móvil Oficial
+                    App Móvil Exclusiva
                   </span>
                 </div>
 
@@ -610,15 +613,51 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   <div className="flex items-start gap-2.5 bg-white/5 p-3 rounded-xl border border-white/5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                     <p>
-                      <strong className="text-white">Icono de Alta Resolución:</strong> Incluye manifiesto web (`manifest.json`) y etiquetas Apple Touch Icon para que Android y iPhone muestren el logo sin bordes borrosos.
+                      <strong className="text-white">Icono y Nombre Propio por Empresa:</strong> Al agregar la app al inicio en Android o iPhone, se instala automáticamente con el logotipo (o monograma oficial) y nombre de <strong className="text-emerald-300">{storeName || 'tu tienda'}</strong>, nunca con el de otra tienda.
                     </p>
                   </div>
 
                   <div className="flex items-start gap-2.5 bg-white/5 p-3 rounded-xl border border-white/5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                    <p>
-                      <strong className="text-white">Experiencia de Pantalla Completa:</strong> Al abrirse desde el teléfono funciona sin la barra de direcciones del navegador, brindando una experiencia nativa fluida.
-                    </p>
+                    <div className="space-y-1.5 flex-1 min-w-0">
+                      <p>
+                        <strong className="text-white">Enlace Directo para Celulares de esta Tienda:</strong> Abre este enlace en el móvil del cliente antes de agregar a pantalla de inicio:
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950/80 border border-slate-700 text-emerald-300 font-mono text-[11px] truncate">
+                          {typeof window !== 'undefined'
+                            ? isGosen
+                              ? `${window.location.origin}/`
+                              : `${window.location.origin}/?empresa=${encodeURIComponent(
+                                  currentSettings.companyId || 'gosen'
+                                )}`
+                            : ''}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const url =
+                              typeof window !== 'undefined'
+                                ? isGosen
+                                  ? `${window.location.origin}/`
+                                  : `${window.location.origin}/?empresa=${encodeURIComponent(
+                                      currentSettings.companyId || 'gosen'
+                                    )}`
+                                : '';
+                            if (url) {
+                              navigator.clipboard.writeText(url);
+                              showToast?.(
+                                `Enlace móvil de ${storeName || 'la tienda'} copiado al portapapeles`,
+                                'success'
+                              );
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-[11px] transition-colors cursor-pointer shrink-0"
+                        >
+                          Copiar enlace
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

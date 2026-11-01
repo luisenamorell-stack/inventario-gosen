@@ -372,6 +372,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
           foundUser.allowedTabs && foundUser.allowedTabs.length > 0
             ? foundUser.allowedTabs
             : ['sales', 'inventory', 'price-checker', 'catalog'],
+        salesPermissions: foundUser.salesPermissions || {
+          canEditSales: true,
+          canCancelSales: false,
+          canViewCostsAndProfits: false,
+        },
       };
 
       onLoginSuccess(collabSession, rememberMe);

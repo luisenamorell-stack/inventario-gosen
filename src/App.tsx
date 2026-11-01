@@ -83,6 +83,7 @@ import {
   applyAuditChangesToFirestore,
   recordSaleInFirestore,
   recordCreditPaymentInFirestore,
+  updateSaleInFirestore,
   cancelSaleInFirestore,
   recordPurchaseInFirestore,
   cancelPurchaseInFirestore,
@@ -134,6 +135,7 @@ import {
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 import { SplashScreen } from './components/SplashScreen';
+import { syncDynamicPwaBranding } from './utils/dynamicPwaManifest';
 
 export const App: React.FC = () => {
   // Active Multi-Tenant Company Slug (defaults to 'gosen' or ?empresa= URL param)
@@ -272,6 +274,19 @@ export const App: React.FC = () => {
   const [splashWelcomeUser, setSplashWelcomeUser] = useState<string | null>(null);
   const [splashWelcomeRole, setSplashWelcomeRole] = useState<'admin' | 'collaborator' | null>(null);
   const splashTimersRef = useRef<{ exit?: ReturnType<typeof setTimeout>; hide?: ReturnType<typeof setTimeout> }>({});
+
+  // Sync dynamic multi-tenant PWA manifest, Apple Touch Icon, favicon, title, and ?empresa= URL parameter
+  useEffect(() => {
+    syncDynamicPwaBranding(activeCompanyId, storeSettings, { isPublicCatalogMode }).catch((err) => {
+      console.warn('Error syncing dynamic PWA branding:', err);
+    });
+  }, [
+    activeCompanyId,
+    storeSettings.storeName,
+    storeSettings.tagline,
+    storeSettings.logoUrl,
+    isPublicCatalogMode,
+  ]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -1493,6 +1508,63 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUpdateSale = async (originalSale: SaleRecord, updatedSale: SaleRecord) => {
+    setIsSyncing(true);
+    try {
+      const savedSale = await updateSaleInFirestore(originalSale, updatedSale, inventory, activeCompanyId);
+
+      // Update local inventory stock if item quantities changed
+      const oldQtyByCode = new Map<string, number>();
+      for (const it of originalSale.items || []) {
+        const k = it.code.trim().toLowerCase();
+        if (k) oldQtyByCode.set(k, (oldQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+      }
+
+      const newQtyByCode = new Map<string, number>();
+      for (const it of savedSale.items || []) {
+        const k = it.code.trim().toLowerCase();
+        if (k) newQtyByCode.set(k, (newQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+      }
+
+      setInventory((prev) => {
+        const nextInv = prev.map((prod) => {
+          const k = prod.code.trim().toLowerCase();
+          const oldQ = oldQtyByCode.get(k) || 0;
+          const newQ = newQtyByCode.get(k) || 0;
+          const delta = oldQ - newQ;
+          if (delta === 0) return prod;
+          return {
+            ...prod,
+            stock: Math.max(0, Math.round((Number(prod.stock) || 0) + delta)),
+          };
+        });
+        setCachedInventory(nextInv, Date.now(), activeCompanyId);
+        return nextInv;
+      });
+
+      setSales((prev) => {
+        const nextSales = prev.map((s) => (s.id === originalSale.id ? savedSale : s));
+        setCachedSales(nextSales, activeCompanyId);
+        return nextSales;
+      });
+
+      setLastSyncTime(new Date());
+
+      logActivityInFirestore(
+        {
+          userName: savedSale.lastEditedBy || userSession?.userName || 'Usuario',
+          userRole: userSession?.role || 'admin',
+          action: `Editó la Venta N° ${savedSale.saleNumber}`,
+          module: 'sales',
+          details: `Cliente: ${savedSale.customerName || 'Consumidor Final'} • Total Anterior: L. ${originalSale.total.toFixed(2)} → Nuevo Total: L. ${savedSale.total.toFixed(2)}`,
+        },
+        activeCompanyId
+      );
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const handleSavePOSFinanceData = async (nextData: POSFinanceStoreData) => {
     setIsSyncing(true);
     try {
@@ -1744,16 +1816,58 @@ export const App: React.FC = () => {
     (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
   );
 
-  // REAL-TIME MORA LOCK SCREEN: If a client is in arrears ('suspended') and is NOT the SaaS Super-Admin, block the app immediately!
-  if (!isSuperAdminSession && activeCompanyTenant?.status === 'suspended') {
+  // Compute Upcoming Subscription Expiry & Auto-Suspension after Grace Period for this Store
+  const daysUntilBilling = getDaysUntilBilling(activeCompanyTenant?.nextBillingDate);
+  const warningDaysThreshold = saasGlobalConfig.expiryWarningDays || 5;
+  const gracePeriodDays = saasGlobalConfig.gracePeriodDays ?? 3;
+  const isAutoSuspendEnabled = saasGlobalConfig.autoSuspendOverdue !== false;
+
+  const isAutoSuspendedByGrace = Boolean(
+    isAutoSuspendEnabled &&
+      activeCompanyTenant &&
+      activeCompanyTenant.autoSuspend !== false &&
+      activeCompanyTenant.slug !== 'gosen' &&
+      activeCompanyTenant.plan !== 'vitalicio' &&
+      daysUntilBilling !== null &&
+      daysUntilBilling < -gracePeriodDays
+  );
+
+  const handleSendPaymentVoucherToSaaSAdmin = () => {
+    const storeTitle = storeSettings.storeName || activeCompanyTenant?.name || activeCompanyId;
+    const amountStr = Number(activeCompanyTenant?.price || 0).toLocaleString('es-HN', {
+      minimumFractionDigits: 2,
+    });
+    const dueStr = formatShortDateEs(activeCompanyTenant?.nextBillingDate);
+    const msg =
+      `👋 Hola Administrador SaaS, envío el comprobante de pago de renovación para nuestra tienda:\n\n` +
+      `• *Tienda:* ${storeTitle} (Código: \`${activeCompanyId}\`)\n` +
+      `• *Fecha de Corte:* ${dueStr}\n` +
+      `• *Monto del Plan:* L. ${amountStr}\n\n` +
+      `Adjunto imagen del comprobante para actualizar nuestra fecha de corte y reactivar el servicio. ¡Gracias!`;
+
+    const cleanPhone = (saasGlobalConfig.saasAdminPhone || '').replace(/\D/g, '');
+    const waUrl = cleanPhone
+      ? `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(waUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  // REAL-TIME MORA LOCK SCREEN: If a client is in arrears ('suspended' or past grace period) and is NOT the SaaS Super-Admin, block the app immediately!
+  if (
+    !isSuperAdminSession &&
+    activeCompanyTenant &&
+    (activeCompanyTenant.status === 'suspended' || isAutoSuspendedByGrace)
+  ) {
+    const saasBanks = saasGlobalConfig.bankAccounts || [];
     return (
-      <div className="fixed inset-0 w-full h-full bg-slate-950 text-white flex flex-col items-center justify-center p-6 select-none z-[999]">
-        <div className="w-full max-w-md bg-slate-900 border border-rose-500/40 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-5">
-          <div className="w-16 h-16 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 mx-auto">
-            <Lock className="w-8 h-8" />
+      <div className="fixed inset-0 w-full h-full bg-slate-950 text-white flex flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto select-none z-[999]">
+        <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
+        <div className="w-full max-w-lg bg-slate-900 border border-rose-500/40 rounded-3xl p-5 sm:p-7 shadow-2xl text-center space-y-4 my-auto">
+          <div className="w-14 h-14 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 mx-auto">
+            <Lock className="w-7 h-7" />
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 border border-rose-500/30 text-rose-300 text-[11px] font-black uppercase tracking-wider">
               <AlertTriangle className="w-3.5 h-3.5" /> Cuenta en Mora • Acceso Deshabilitado
             </span>
@@ -1761,30 +1875,96 @@ export const App: React.FC = () => {
               {activeCompanyTenant.name}
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              El servicio de tu aplicación se encuentra temporalmente <strong>suspendido por mora o pago pendiente de renovación</strong>.
+              El servicio de tu aplicación se encuentra temporalmente{' '}
+              <strong>suspendido por mora o pago pendiente de renovación</strong>.
             </p>
-            {activeCompanyTenant.moraReason && (
-              <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-500/30 text-xs text-rose-200 font-semibold">
-                Motivo: {activeCompanyTenant.moraReason}
-              </div>
-            )}
+            <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-500/30 text-xs text-rose-200 font-semibold">
+              {activeCompanyTenant.moraReason ||
+                (isAutoSuspendedByGrace
+                  ? `Corte automático: Fecha de pago vencida (${formatShortDateEs(
+                      activeCompanyTenant.nextBillingDate
+                    )})`
+                  : 'Renovación pendiente de pago')}
+              {activeCompanyTenant.price > 0 && (
+                <span className="block mt-1 text-emerald-300 font-black">
+                  Cuota de Renovación: L.{' '}
+                  {Number(activeCompanyTenant.price).toLocaleString('es-HN', {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              )}
+            </div>
           </div>
 
-          <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 space-y-1 text-left">
+          {/* SaaS Owner Bank Accounts for Immediate Transfer */}
+          {saasBanks.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-slate-950/90 border border-emerald-500/30 text-left space-y-2">
+              <div className="text-[11px] font-black uppercase tracking-wider text-emerald-400">
+                💳 Cuentas Autorizadas para Realizar tu Pago:
+              </div>
+              <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                {saasBanks.map((bank) => (
+                  <div
+                    key={bank.id}
+                    className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-black text-white truncate">
+                        {bank.bankName}{' '}
+                        <span className="text-[10px] font-bold text-slate-400">
+                          ({bank.accountType})
+                        </span>
+                      </div>
+                      <div className="font-mono font-black text-emerald-400 text-xs">
+                        {bank.accountNumber}
+                      </div>
+                      <div className="text-[10px] text-slate-400 truncate">
+                        Titular: {bank.holderName}
+                        {bank.identidadOrRtn ? ` • ${bank.identidadOrRtn}` : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(bank.accountNumber);
+                        showToast(`Cuenta ${bank.accountNumber} copiada`, 'success');
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-extrabold text-[10px] shrink-0 cursor-pointer"
+                    >
+                      Copiar N°
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 space-y-1 text-left">
             <p className="font-bold text-slate-200">✅ Tu información está 100% segura</p>
             <p>
-              Todo tu inventario, ventas y configuraciones están resguardados. Comunícate con el Administrador del sistema para realizar tu pago y reactivar tu cuenta al instante.
+              Todo tu inventario, ventas y configuraciones están resguardados. Envía tu comprobante de pago por WhatsApp para reactivar tu cuenta al instante.
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="w-full py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>Volver al Inicio de Sesión</span>
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2.5">
+            <button
+              type="button"
+              onClick={handleSendPaymentVoucherToSaaSAdmin}
+              className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg"
+            >
+              <WhatsAppIcon className="w-4 h-4" />
+              <span>Enviar Comprobante por WhatsApp</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-extrabold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Salir</span>
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -1839,9 +2019,6 @@ export const App: React.FC = () => {
   const companyMaxUsers: number =
     activeCompanyTenant?.maxUsers ?? storeSettings.maxUsers ?? 0;
 
-  // Compute Upcoming Subscription Expiry Warning for this Store
-  const daysUntilBilling = getDaysUntilBilling(activeCompanyTenant?.nextBillingDate);
-  const warningDaysThreshold = saasGlobalConfig.expiryWarningDays || 5;
   const showExpiryWarningBanner =
     !expiryBannerDismissedToday &&
     activeCompanyTenant &&
@@ -1857,26 +2034,6 @@ export const App: React.FC = () => {
         normalizeCompanySlug(ann.targetCompanySlug) === normalizeCompanySlug(activeCompanyId)) &&
       !dismissedAnnouncements.includes(ann.id)
   );
-
-  const handleSendPaymentVoucherToSaaSAdmin = () => {
-    const storeTitle = storeSettings.storeName || activeCompanyTenant?.name || activeCompanyId;
-    const amountStr = Number(activeCompanyTenant?.price || 0).toLocaleString('es-HN', {
-      minimumFractionDigits: 2,
-    });
-    const dueStr = formatShortDateEs(activeCompanyTenant?.nextBillingDate);
-    const msg =
-      `👋 Hola Administrador SaaS, envío el comprobante de pago de renovación para nuestra tienda:\n\n` +
-      `• *Tienda:* ${storeTitle} (Código: \`${activeCompanyId}\`)\n` +
-      `• *Fecha de Corte:* ${dueStr}\n` +
-      `• *Monto del Plan:* L. ${amountStr}\n\n` +
-      `Adjunto imagen del comprobante para actualizar nuestra fecha de corte. ¡Gracias!`;
-
-    const cleanPhone = (saasGlobalConfig.saasAdminPhone || '').replace(/\D/g, '');
-    const waUrl = cleanPhone
-      ? `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`
-      : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
-    window.open(waUrl, '_blank', 'noopener,noreferrer');
-  };
 
   // Filter navigation & bottom nav items based on SaaS company permissions + collaborator allowedTabs
   const baseRoleTabs: ActiveTab[] =
@@ -1966,14 +2123,33 @@ export const App: React.FC = () => {
               <Clock className="w-4 h-4 shrink-0" />
               <span className="font-bold truncate">
                 {daysUntilBilling < 0
-                  ? `⚠️ Tu suscripción venció el ${formatShortDateEs(activeCompanyTenant?.nextBillingDate)}. Realiza tu pago para evitar la suspensión del sistema.`
+                  ? `⚠️ Tu fecha de corte venció el ${formatShortDateEs(
+                      activeCompanyTenant?.nextBillingDate
+                    )}. Te quedan ${Math.max(
+                      0,
+                      gracePeriodDays - Math.abs(daysUntilBilling)
+                    )} día(s) de gracia antes del bloqueo automático.`
                   : daysUntilBilling === 0
-                  ? `⚠️ Tu suscripción vence HOY (${formatShortDateEs(activeCompanyTenant?.nextBillingDate)}). Realiza tu pago para evitar suspensión.`
-                  : `🔔 Tu suscripción vence el ${formatShortDateEs(activeCompanyTenant?.nextBillingDate)} (en ${daysUntilBilling} ${daysUntilBilling === 1 ? 'día' : 'días'}). Realiza tu pago para evitar suspensión.`}
+                  ? `⚠️ Tu suscripción vence HOY (${formatShortDateEs(
+                      activeCompanyTenant?.nextBillingDate
+                    )}). Realiza tu pago para evitar suspensión.`
+                  : `🔔 Tu suscripción vence el ${formatShortDateEs(
+                      activeCompanyTenant?.nextBillingDate
+                    )} (en ${daysUntilBilling} ${
+                      daysUntilBilling === 1 ? 'día' : 'días'
+                    }). Realiza tu pago para evitar suspensión.`}
               </span>
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
+              {(saasGlobalConfig.bankAccounts || []).length > 0 && (
+                <span className="hidden xl:inline text-[11px] font-bold opacity-95 mr-1">
+                  🏦 {saasGlobalConfig.bankAccounts?.[0]?.bankName}:{' '}
+                  <code className="font-mono font-black">
+                    {saasGlobalConfig.bankAccounts?.[0]?.accountNumber}
+                  </code>
+                </span>
+              )}
               <button
                 type="button"
                 onClick={handleSendPaymentVoucherToSaaSAdmin}
@@ -2180,6 +2356,7 @@ export const App: React.FC = () => {
               initialSubTab={salesSubTab}
               posFinanceData={posFinanceData}
               onRecordSale={handleRecordSale}
+              onUpdateSale={handleUpdateSale}
               onCancelSale={handleCancelSale}
               onSavePOSFinanceData={handleSavePOSFinanceData}
               onRecordCreditPayment={handleRecordCreditPayment}

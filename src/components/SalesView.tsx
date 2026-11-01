@@ -68,9 +68,12 @@ import {
   Users,
   Wallet,
   FileSpreadsheet,
+  Edit2,
+  Lock,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ConfirmDialog } from './ConfirmDialog';
+import { EditSaleModal, AdminCancelAuthModal } from './EditSaleModal';
 import { playSound } from '../utils/audio';
 import { PosProductGridSkeleton } from './SkeletonLoaders';
 import { POSFinanceTabs } from './POSFinanceTabs';
@@ -104,6 +107,7 @@ interface SalesViewProps {
   onSavePOSFinanceData?: (updated: POSFinanceStoreData) => Promise<void>;
   onRecordCreditPayment?: (sale: SaleRecord, abone: CreditPaymentAbone) => Promise<SaleRecord>;
   onRecordSale: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
+  onUpdateSale?: (originalSale: SaleRecord, updatedSale: SaleRecord) => Promise<void>;
   onCancelSale: (sale: SaleRecord) => Promise<void>;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
@@ -120,9 +124,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
   onSavePOSFinanceData,
   onRecordCreditPayment,
   onRecordSale,
+  onUpdateSale,
   onCancelSale,
   showToast,
 }) => {
+  // Resolve granular Collaborator POS permissions (real-time from users list or session)
+  const isAdminUser = !userSession || userSession.role === 'admin';
+  const matchedCollabAccount = useMemo(() => {
+    if (isAdminUser || !userSession) return undefined;
+    return users.find(
+      (u) =>
+        u.id === userSession.userId ||
+        u.username.trim().toLowerCase() === (userSession.username || '').trim().toLowerCase()
+    );
+  }, [isAdminUser, userSession, users]);
+
+  const effectiveSalesPerms = matchedCollabAccount?.salesPermissions || userSession?.salesPermissions;
+  const canCancelSales = isAdminUser || Boolean(effectiveSalesPerms?.canCancelSales);
+  const canEditSales =
+    isAdminUser ||
+    (effectiveSalesPerms?.canEditSales !== undefined ? effectiveSalesPerms.canEditSales : true);
+  const canViewCostsAndProfits =
+    isAdminUser || Boolean(effectiveSalesPerms?.canViewCostsAndProfits);
   // Navigation between POS Terminal, Cash Register, Credits, Expenses and Sales History
   const [activeSubTab, setActiveSubTab] = useState<SalesSubTab>(initialSubTab);
 
@@ -231,9 +254,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
     };
   };
 
-  // Cancel sale dialog state
+  // Cancel & Edit sale dialog state
   const [saleToCancel, setSaleToCancel] = useState<SaleRecord | null>(null);
+  const [salePendingAdminAuth, setSalePendingAdminAuth] = useState<SaleRecord | null>(null);
+  const [saleToEdit, setSaleToEdit] = useState<SaleRecord | null>(null);
   const [isCancelling, setIsCancelling] = useState<boolean>(false);
+
+  const handleRequestCancelSale = (sale: SaleRecord) => {
+    if (canCancelSales) {
+      setSaleToCancel(sale);
+    } else {
+      setSalePendingAdminAuth(sale);
+    }
+  };
 
   // Printable receipt ref
   const receiptPrintRef = useRef<HTMLDivElement>(null);
@@ -1446,17 +1479,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
             )}
           </button>
 
-          <button
-            onClick={() => setActiveSubTab('expenses')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
-              activeSubTab === 'expenses'
-                ? 'bg-rose-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-            }`}
-          >
-            <TrendingUp className="w-3.5 h-3.5 shrink-0" />
-            <span>Gastos y Utilidad</span>
-          </button>
+          {canViewCostsAndProfits && (
+            <button
+              onClick={() => setActiveSubTab('expenses')}
+              className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                activeSubTab === 'expenses'
+                  ? 'bg-rose-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5 shrink-0" />
+              <span>Gastos y Utilidad</span>
+            </button>
+          )}
 
           <button
             onClick={() => setActiveSubTab('history')}
@@ -2382,43 +2417,47 @@ export const SalesView: React.FC<SalesViewProps> = ({
         /* ==================== SALES HISTORY VIEW ==================== */
         <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-4 sm:space-y-5 pb-40 md:pb-24">
           {/* Top KPI Metrics Banner */}
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-3">
+          <div className={`grid grid-cols-2 ${canViewCostsAndProfits ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-2.5 sm:gap-3`}>
             <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
               <div className="min-w-0">
                 <span className="text-[11px] sm:text-xs text-slate-500 font-medium block truncate">Total Facturado</span>
                 <span className="text-sm sm:text-xl font-extrabold text-emerald-700 block truncate">
                   L. {salesMetrics.revenue.toFixed(2)}
                 </span>
-                <span className="text-[10px] text-slate-400 block truncate">
-                  Costo: L. {salesMetrics.totalCost.toFixed(2)}
-                </span>
+                {canViewCostsAndProfits && (
+                  <span className="text-[10px] text-slate-400 block truncate">
+                    Costo: L. {salesMetrics.totalCost.toFixed(2)}
+                  </span>
+                )}
               </div>
               <div className="p-2 sm:p-2.5 bg-emerald-50 rounded-xl text-emerald-600 shrink-0 hidden sm:flex">
                 <DollarSign className="w-5 h-5" />
               </div>
             </div>
 
-            {/* Ganancia Neta Card */}
-            <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
-              <div className="min-w-0">
-                <span className="text-[11px] sm:text-xs text-slate-500 font-medium block truncate">
-                  Ganancia Neta
-                </span>
-                <span
-                  className={`text-sm sm:text-xl font-extrabold block truncate ${
-                    salesMetrics.profit >= 0 ? 'text-teal-700' : 'text-rose-600'
-                  }`}
-                >
-                  {salesMetrics.profit >= 0 ? '+' : ''}L. {salesMetrics.profit.toFixed(2)}
-                </span>
-                <span className="text-[10px] text-slate-400 block truncate">
-                  Margen: {salesMetrics.marginPct.toFixed(1)}%
-                </span>
+            {/* Ganancia Neta Card (Hidden for collaborators unless authorized) */}
+            {canViewCostsAndProfits && (
+              <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
+                <div className="min-w-0">
+                  <span className="text-[11px] sm:text-xs text-slate-500 font-medium block truncate">
+                    Ganancia Neta
+                  </span>
+                  <span
+                    className={`text-sm sm:text-xl font-extrabold block truncate ${
+                      salesMetrics.profit >= 0 ? 'text-teal-700' : 'text-rose-600'
+                    }`}
+                  >
+                    {salesMetrics.profit >= 0 ? '+' : ''}L. {salesMetrics.profit.toFixed(2)}
+                  </span>
+                  <span className="text-[10px] text-slate-400 block truncate">
+                    Margen: {salesMetrics.marginPct.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="p-2 sm:p-2.5 bg-teal-50 rounded-xl text-teal-600 shrink-0 hidden sm:flex">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
               </div>
-              <div className="p-2 sm:p-2.5 bg-teal-50 rounded-xl text-teal-600 shrink-0 hidden sm:flex">
-                <TrendingUp className="w-5 h-5" />
-              </div>
-            </div>
+            )}
 
             <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
               <div className="min-w-0">
@@ -2839,7 +2878,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             >
                               L. {sale.total.toFixed(2)}
                             </span>
-                            {!isCancelled && (
+                            {!isCancelled && canViewCostsAndProfits && (
                               <span
                                 className={`text-[10px] font-bold block ${
                                   fin.profit >= 0 ? 'text-teal-700' : 'text-rose-600'
@@ -2904,11 +2943,13 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 ? 'Efectivo'
                                 : sale.paymentMethod === 'card'
                                 ? 'Tarjeta'
+                                : sale.paymentMethod === 'credit'
+                                ? 'Crédito'
                                 : 'Transf.'}
                             </span>
                           </span>
 
-                          <div className="flex items-center gap-1.5 ml-auto">
+                          <div className="flex flex-wrap items-center gap-1.5 ml-auto">
                             <button
                               type="button"
                               onClick={() => {
@@ -2918,7 +2959,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               className="px-2.5 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center gap-1 cursor-pointer"
                             >
                               <Printer className="w-3.5 h-3.5" />
-                              <span>Imprimir / Ticket</span>
+                              <span>Ticket</span>
                             </button>
                             <button
                               type="button"
@@ -2938,13 +2979,29 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               <WhatsAppIcon className="w-3.5 h-3.5 fill-white" />
                               <span>WhatsApp</span>
                             </button>
+                            {!isCancelled && canEditSales && onUpdateSale && (
+                              <button
+                                type="button"
+                                onClick={() => setSaleToEdit(sale)}
+                                className="px-2.5 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg flex items-center gap-1 cursor-pointer"
+                                title="Editar datos o artículos de la factura"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                                <span>Editar</span>
+                              </button>
+                            )}
                             {!isCancelled && (
                               <button
                                 type="button"
-                                onClick={() => setSaleToCancel(sale)}
-                                className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer"
-                                title="Anular venta"
+                                onClick={() => handleRequestCancelSale(sale)}
+                                className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer flex items-center gap-0.5"
+                                title={
+                                  canCancelSales
+                                    ? 'Anular venta y devolver stock'
+                                    : 'Anular venta (Requiere clave de Administrador)'
+                                }
                               >
+                                {!canCancelSales && <Lock className="w-3 h-3 text-amber-600" />}
                                 <RotateCcw className="w-3.5 h-3.5" />
                               </button>
                             )}
@@ -2967,7 +3024,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       <th className="py-3 px-4">Artículos</th>
                       <th className="py-3 px-4">Método</th>
                       <th className="py-3 px-4 text-right">Total</th>
-                      <th className="py-3 px-4 text-right">Ganancia Neta</th>
+                      {canViewCostsAndProfits && (
+                        <th className="py-3 px-4 text-right">Ganancia Neta</th>
+                      )}
                       <th className="py-3 px-4 text-center">Estado</th>
                       <th className="py-3 px-4 text-center">Acciones</th>
                     </tr>
@@ -2986,7 +3045,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           }`}
                         >
                           <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                            {sale.saleNumber}
+                            <div>{sale.saleNumber}</div>
+                            {sale.lastEditedBy && (
+                              <div className="text-[10px] text-indigo-600 font-sans font-semibold">
+                                ✏️ Editada
+                              </div>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
                             {sale.date}
@@ -3034,6 +3098,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 ? 'Tarjeta'
                                 : sale.paymentMethod === 'transfer'
                                 ? 'Transferencia'
+                                : sale.paymentMethod === 'credit'
+                                ? 'Crédito'
                                 : 'Otro'}
                             </span>
                           </td>
@@ -3042,24 +3108,26 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               L. {sale.total.toFixed(2)}
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-right">
-                            {isCancelled ? (
-                              <span className="text-xs text-slate-400">—</span>
-                            ) : (
-                              <div className="flex flex-col items-end">
-                                <span
-                                  className={`font-bold text-xs sm:text-sm ${
-                                    fin.profit >= 0 ? 'text-teal-700' : 'text-rose-600'
-                                  }`}
-                                >
-                                  {fin.profit >= 0 ? '+' : ''}L. {fin.profit.toFixed(2)}
-                                </span>
-                                <span className="text-[10px] text-slate-400 font-mono">
-                                  Costo: L. {fin.totalCost.toFixed(2)} ({fin.marginPct.toFixed(0)}%)
-                                </span>
-                              </div>
-                            )}
-                          </td>
+                          {canViewCostsAndProfits && (
+                            <td className="py-3 px-4 text-right">
+                              {isCancelled ? (
+                                <span className="text-xs text-slate-400">—</span>
+                              ) : (
+                                <div className="flex flex-col items-end">
+                                  <span
+                                    className={`font-bold text-xs sm:text-sm ${
+                                      fin.profit >= 0 ? 'text-teal-700' : 'text-rose-600'
+                                    }`}
+                                  >
+                                    {fin.profit >= 0 ? '+' : ''}L. {fin.profit.toFixed(2)}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    Costo: L. {fin.totalCost.toFixed(2)} ({fin.marginPct.toFixed(0)}%)
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                          )}
                           <td className="py-3 px-4 text-center">
                             <span
                               className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -3106,14 +3174,31 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 <WhatsAppIcon className="w-4 h-4 fill-emerald-600" />
                               </button>
 
+                              {/* Edit sale button */}
+                              {!isCancelled && canEditSales && onUpdateSale && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSaleToEdit(sale)}
+                                  className="p-1.5 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Editar datos o artículos de la factura"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                              )}
+
                               {/* Cancel sale button (if not already cancelled) */}
                               {!isCancelled && (
                                 <button
                                   type="button"
-                                  onClick={() => setSaleToCancel(sale)}
-                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                  title="Anular venta y devolver stock"
+                                  onClick={() => handleRequestCancelSale(sale)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer flex items-center gap-0.5"
+                                  title={
+                                    canCancelSales
+                                      ? 'Anular venta y devolver stock'
+                                      : 'Anular venta (Requiere clave de Administrador)'
+                                  }
                                 >
+                                  {!canCancelSales && <Lock className="w-3 h-3 text-amber-500" />}
                                   <RotateCcw className="w-4 h-4" />
                                 </button>
                               )}
@@ -3555,6 +3640,37 @@ export const SalesView: React.FC<SalesViewProps> = ({
             storeSettings
           )
         }
+        showToast={showToast}
+      />
+
+      {/* ==================== EDIT SALE MODAL ==================== */}
+      <EditSaleModal
+        isOpen={Boolean(saleToEdit)}
+        sale={saleToEdit}
+        inventory={inventory}
+        storeSettings={storeSettings}
+        isAdmin={isAdminUser}
+        canCancelSales={canCancelSales}
+        userName={userSession?.userName || 'Administrador'}
+        onClose={() => setSaleToEdit(null)}
+        onSaveEditedSale={async (orig, updated) => {
+          if (onUpdateSale) {
+            await onUpdateSale(orig, updated);
+            showToast(`Factura ${updated.saleNumber} actualizada correctamente.`, 'success');
+          }
+        }}
+        showToast={showToast}
+      />
+
+      {/* ==================== ADMIN AUTH MODAL FOR CANCELLING SALE ==================== */}
+      <AdminCancelAuthModal
+        isOpen={Boolean(salePendingAdminAuth)}
+        sale={salePendingAdminAuth}
+        storeSettings={storeSettings}
+        onClose={() => setSalePendingAdminAuth(null)}
+        onAuthorizedCancel={(authorizedSale) => {
+          setSaleToCancel(authorizedSale);
+        }}
         showToast={showToast}
       />
 

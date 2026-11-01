@@ -1,5 +1,5 @@
-// Service Worker for Tienda Gosén PWA (Network-First to guarantee fresh UI updates)
-const CACHE_NAME = 'tienda-gosen-v7';
+// Service Worker for Multi-Tenant SaaS PWA (Network-First with Dynamic Tenant Manifest support)
+const CACHE_NAME = 'tienda-gosen-v8';
 const STATIC_ASSETS = [
   '/manifest.json',
   '/favicon.png',
@@ -48,6 +48,19 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/src/') ||
     url.pathname.startsWith('/node_modules/')
   ) {
+    return;
+  }
+
+  // If the client app stored a dynamic tenant manifest in CacheStorage, serve it first for /manifest.json
+  if (url.pathname === '/manifest.json') {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.match('/manifest.json').then((cachedManifest) => {
+          if (cachedManifest) return cachedManifest;
+          return fetch(event.request);
+        })
+      )
+    );
     return;
   }
 

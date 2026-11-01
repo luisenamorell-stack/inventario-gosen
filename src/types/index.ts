@@ -120,10 +120,32 @@ export interface SaaSAnnouncement {
   author?: string;
 }
 
+export interface SaaSBankAccount {
+  id: string;
+  bankName: string;
+  accountNumber: string;
+  accountType: string; // 'Ahorro' | 'Cheques' | 'Billetera Móvil'
+  holderName: string;
+  identidadOrRtn?: string;
+}
+
+export interface TenantUsageMetrics {
+  companySlug: string;
+  productCount: number;
+  userCount: number;
+  monthlySalesCount: number;
+  monthlySalesTotal: number;
+  totalSalesCount: number;
+  lastSaleTimestamp: number | null;
+}
+
 export interface SaaSGlobalConfig {
   saasAdminPhone: string;
   saasBrandName: string;
   expiryWarningDays: number;
+  autoSuspendOverdue?: boolean;
+  gracePeriodDays?: number;
+  bankAccounts?: SaaSBankAccount[];
   announcements: SaaSAnnouncement[];
   updatedAt: number;
 }
@@ -141,6 +163,7 @@ export interface CompanyTenant {
   status: 'active' | 'suspended';
   moraReason?: string;
   suspendedAt?: number;
+  autoSuspend?: boolean;
   adminPassword: string;
   logoUrl?: string;
   tagline?: string;
@@ -155,6 +178,12 @@ export interface CompanyTenant {
   isPrimary?: boolean;
 }
 
+export interface CollaboratorSalesPermissions {
+  canEditSales?: boolean;
+  canCancelSales?: boolean;
+  canViewCostsAndProfits?: boolean;
+}
+
 export interface UserAccount {
   id: string;
   companyId?: string;
@@ -164,6 +193,7 @@ export interface UserAccount {
   role: UserRole;
   isActive: boolean;
   allowedTabs: ActiveTab[];
+  salesPermissions?: CollaboratorSalesPermissions;
   createdAt: number;
   lastLoginAt?: number;
 }
@@ -178,6 +208,7 @@ export interface UserSession {
   username: string;
   role: UserRole;
   allowedTabs: ActiveTab[];
+  salesPermissions?: CollaboratorSalesPermissions;
 }
 
 export interface ActivityLogRecord {
@@ -242,6 +273,8 @@ export interface SaleRecord {
   status: 'completed' | 'cancelled';
   cashier?: string;
   cashierRole?: UserRole;
+  lastEditedBy?: string;
+  lastEditedAt?: string;
 }
 
 export interface CashOutMovement {

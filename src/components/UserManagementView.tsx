@@ -127,6 +127,9 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     'price-checker',
     'catalog',
   ]);
+  const [canEditSales, setCanEditSales] = useState<boolean>(true);
+  const [canCancelSales, setCanCancelSales] = useState<boolean>(false);
+  const [canViewCostsAndProfits, setCanViewCostsAndProfits] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState(false);
   const [userToDelete, setUserToDelete] = useState<UserAccount | null>(null);
 
@@ -149,6 +152,9 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
       (t) => !effectiveCompanyModules || effectiveCompanyModules.includes(t)
     );
     setAllowedTabs(defaultCollabTabs.length > 0 ? defaultCollabTabs : availableTabModules.map((t) => t.id));
+    setCanEditSales(true);
+    setCanCancelSales(false);
+    setCanViewCostsAndProfits(false);
     setIsModalOpen(true);
   };
 
@@ -160,6 +166,11 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     setRole(user.role);
     setIsActive(user.isActive);
     setAllowedTabs(user.allowedTabs || ['sales', 'inventory', 'price-checker']);
+    setCanEditSales(
+      user.salesPermissions?.canEditSales !== undefined ? user.salesPermissions.canEditSales : true
+    );
+    setCanCancelSales(Boolean(user.salesPermissions?.canCancelSales));
+    setCanViewCostsAndProfits(Boolean(user.salesPermissions?.canViewCostsAndProfits));
     setIsModalOpen(true);
   };
 
@@ -221,6 +232,11 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         role,
         isActive,
         allowedTabs: role === 'admin' ? availableTabModules.map((t) => t.id) : allowedTabs,
+        salesPermissions: {
+          canEditSales,
+          canCancelSales,
+          canViewCostsAndProfits,
+        },
         createdAt: editingUser ? editingUser.createdAt : Date.now(),
       };
 
@@ -414,6 +430,49 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                           )}
                         </div>
                       </div>
+
+                      {u.role !== 'admin' && u.allowedTabs?.includes('sales') && (
+                        <div className="pt-1.5 border-t border-slate-100 space-y-1">
+                          <div className="font-bold text-[10px] uppercase tracking-wider text-slate-400">
+                            Seguridad en Facturación (POS):
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                u.salesPermissions?.canCancelSales
+                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                  : 'bg-slate-100 text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {u.salesPermissions?.canCancelSales
+                                ? 'Anular ventas: Permitido'
+                                : '🔒 Anular ventas: Solo con clave Admin'}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                u.salesPermissions?.canEditSales !== false
+                                  ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                  : 'bg-slate-100 text-slate-600 border-slate-200'
+                              }`}
+                            >
+                              {u.salesPermissions?.canEditSales !== false
+                                ? '✏️ Editar factura: Sí'
+                                : 'Editar factura: No'}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                u.salesPermissions?.canViewCostsAndProfits
+                                  ? 'bg-teal-50 text-teal-800 border-teal-200'
+                                  : 'bg-slate-100 text-slate-600 border-slate-200'
+                              }`}
+                            >
+                              {u.salesPermissions?.canViewCostsAndProfits
+                                ? 'Costos/Ganancias: Visibles'
+                                : '🔒 Costos/Ganancias: Ocultos'}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -627,6 +686,85 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                       );
                     })}
                   </div>
+
+                  {/* Granular POS Billing Security Filters when 'sales' is enabled */}
+                  {allowedTabs.includes('sales') && (
+                    <div className="mt-4 p-4 rounded-2xl bg-slate-900 text-white border border-slate-800 space-y-3">
+                      <div className="flex items-start gap-2.5 border-b border-slate-800 pb-2.5">
+                        <Lock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="text-xs sm:text-sm font-extrabold text-white">
+                            Filtros y Permisos dentro de Ventas y Facturación (POS)
+                          </h4>
+                          <p className="text-[11px] text-slate-300 mt-0.5">
+                            Por seguridad del negocio, evita que el colaborador anule ventas por su cuenta o vea tus costos y ganancias.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {/* 1. Editar Ventas */}
+                        <label className="flex items-start gap-3 p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 cursor-pointer transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={canEditSales}
+                            onChange={(e) => setCanEditSales(e.target.checked)}
+                            className="mt-0.5 rounded text-emerald-500 focus:ring-emerald-500 w-4 h-4 cursor-pointer shrink-0"
+                          />
+                          <div className="text-xs">
+                            <div className="font-bold text-white flex items-center gap-1.5">
+                              <span>Permitir Editar Datos de Venta (Botón Editar Factura)</span>
+                              <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-extrabold border border-emerald-500/30">
+                                Recomendado
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-300 mt-0.5">
+                              Permite corregir nombre del cliente, RTN, teléfono, método de pago o notas sin borrar la factura. (Si intenta rebajar el total o quitar productos, pedirá clave de Administrador).
+                            </p>
+                          </div>
+                        </label>
+
+                        {/* 2. Anular / Borrar Ventas */}
+                        <label className="flex items-start gap-3 p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 cursor-pointer transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={canCancelSales}
+                            onChange={(e) => setCanCancelSales(e.target.checked)}
+                            className="mt-0.5 rounded text-amber-500 focus:ring-amber-500 w-4 h-4 cursor-pointer shrink-0"
+                          />
+                          <div className="text-xs">
+                            <div className="font-bold text-white flex items-center gap-1.5">
+                              <span>Permitir Anular / Borrar Ventas sin clave de Administrador</span>
+                              <span className="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 text-[10px] font-extrabold border border-rose-500/30">
+                                Riesgo si se activa
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-300 mt-0.5">
+                              Si lo dejas <strong>desmarcado (recomendado)</strong>, el colaborador NO podrá anular ventas por su cuenta; el sistema pedirá la contraseña del Administrador para autorizar la anulación.
+                            </p>
+                          </div>
+                        </label>
+
+                        {/* 3. Ver Costos y Ganancia Neta */}
+                        <label className="flex items-start gap-3 p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 cursor-pointer transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={canViewCostsAndProfits}
+                            onChange={(e) => setCanViewCostsAndProfits(e.target.checked)}
+                            className="mt-0.5 rounded text-emerald-500 focus:ring-emerald-500 w-4 h-4 cursor-pointer shrink-0"
+                          />
+                          <div className="text-xs">
+                            <div className="font-bold text-white">
+                              Permitir ver Costos de Compra, Ganancia Neta y pestaña Gastos
+                            </div>
+                            <p className="text-[11px] text-slate-300 mt-0.5">
+                              Si lo dejas <strong>desmarcado (recomendado)</strong>, el colaborador solo verá precios de venta y totales facturados, ocultando tu margen de ganancia y costos.
+                            </p>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

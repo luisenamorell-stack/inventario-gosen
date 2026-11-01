@@ -21,6 +21,80 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="apple-touch-icon" sizes="192x192" href="/pwa-192x192.png" />
   <link rel="apple-touch-icon" sizes="512x512" href="/pwa-512x512.png" />
+  <script>
+    (function() {
+      try {
+        var params = new URLSearchParams(window.location.search);
+        var rawEmpresa = params.get('empresa') || params.get('tienda') || params.get('cliente') || localStorage.getItem('stockmaster_active_company_id') || 'gosen';
+        var slug = String(rawEmpresa).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'gosen';
+        if (slug === 'tiendagosen' || slug === 'tienda-gosen' || slug === 'tienda_gosen') slug = 'gosen';
+        if (slug !== 'gosen') {
+          localStorage.setItem('stockmaster_active_company_id', slug);
+          var storeName = slug.toUpperCase();
+          var logoUrl = '';
+          var rawSettings = localStorage.getItem('stockmaster_store_settings__' + slug);
+          if (rawSettings) {
+            var parsedSettings = JSON.parse(rawSettings);
+            if (parsedSettings && parsedSettings.storeName) storeName = parsedSettings.storeName;
+            if (parsedSettings && parsedSettings.logoUrl) logoUrl = parsedSettings.logoUrl;
+          } else {
+            var rawCompanies = localStorage.getItem('stockmaster_cached_companies_v1');
+            if (rawCompanies) {
+              var companies = JSON.parse(rawCompanies);
+              for (var i = 0; i < companies.length; i++) {
+                if (companies[i] && companies[i].slug === slug) {
+                  if (companies[i].name) storeName = companies[i].name;
+                  if (companies[i].logoUrl) logoUrl = companies[i].logoUrl;
+                  break;
+                }
+              }
+            }
+          }
+          document.title = storeName + ' - Control de Inventario y Ventas';
+          var appNameMeta = document.querySelector('meta[name="application-name"]');
+          if (appNameMeta) appNameMeta.setAttribute('content', storeName);
+          var appleTitleMeta = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+          if (appleTitleMeta) appleTitleMeta.setAttribute('content', storeName);
+
+          // Generate immediate square monogram PNG so iOS Safari never prefetches Tienda Gosén's logo
+          var canvas = document.createElement('canvas');
+          canvas.width = 192;
+          canvas.height = 192;
+          var ctx = canvas.getContext('2d');
+          var iconDataUrl = '';
+          if (ctx) {
+            var grad = ctx.createLinearGradient(0, 0, 192, 192);
+            grad.addColorStop(0, '#0f172a');
+            grad.addColorStop(0.55, '#064e3b');
+            grad.addColorStop(1, '#047857');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 192, 192);
+            var words = storeName.trim().split(/\s+/);
+            var mainText = words.length > 1 && words[words.length - 1].length <= 4
+              ? words[words.length - 1].toUpperCase()
+              : storeName.slice(0, 3).toUpperCase();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '900 58px system-ui, -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(mainText, 96, 102);
+            iconDataUrl = canvas.toDataURL('image/png');
+          }
+          var initialIcon = (logoUrl && logoUrl.indexOf('data:image/') === 0) ? logoUrl : iconDataUrl;
+          if (initialIcon) {
+            var appleLinks = document.querySelectorAll('link[rel="apple-touch-icon"]');
+            for (var j = 0; j < appleLinks.length; j++) {
+              appleLinks[j].setAttribute('href', initialIcon);
+            }
+            var favLinks = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]');
+            for (var k = 0; k < favLinks.length; k++) {
+              favLinks[k].setAttribute('href', initialIcon);
+            }
+          }
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
@@ -48,7 +122,7 @@
     if ('caches' in window) {
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
-          if (key !== 'tienda-gosen-v7') {
+          if (key !== 'tienda-gosen-v8') {
             caches.delete(key);
           }
         });

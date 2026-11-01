@@ -32,6 +32,8 @@ import {
   ALL_COMPANY_MODULES,
   SubscriptionPaymentRecord,
   SaaSAnnouncement,
+  SaaSBankAccount,
+  TenantUsageMetrics,
   SaaSGlobalConfig
 } from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
@@ -1268,6 +1270,8 @@ export async function fetchSalesOnce(
           data.cashierRole === 'admin' || data.cashierRole === 'collaborator'
             ? data.cashierRole
             : undefined,
+        lastEditedBy: data.lastEditedBy ? String(data.lastEditedBy) : undefined,
+        lastEditedAt: data.lastEditedAt ? String(data.lastEditedAt) : undefined,
       });
     });
     records.sort((a, b) => b.timestamp - a.timestamp);
@@ -1360,6 +1364,8 @@ export function subscribeToSales(
             data.cashierRole === 'admin' || data.cashierRole === 'collaborator'
               ? data.cashierRole
               : undefined,
+          lastEditedBy: data.lastEditedBy ? String(data.lastEditedBy) : undefined,
+          lastEditedAt: data.lastEditedAt ? String(data.lastEditedAt) : undefined,
         });
       });
       records.sort((a, b) => b.timestamp - a.timestamp);
@@ -1569,6 +1575,151 @@ export async function recordCreditPaymentInFirestore(
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
   }
+}
+
+export async function updateSaleInFirestore(
+  originalSale: SaleRecord,
+  updatedSale: SaleRecord,
+  currentInventory: Product[],
+  companyId = getActiveCompanyId()
+): Promise<SaleRecord> {
+  const slug = normalizeCompanySlug(companyId);
+  const saleRef = doc(db, 'sales', originalSale.id);
+
+  const isCredit = updatedSale.paymentMethod === 'credit';
+  const totalVal = Number(updatedSale.total) || 0;
+  const paidVal = Number(updatedSale.amountPaid) || 0;
+  const computedBalanceDue = isCredit
+    ? Math.max(0, updatedSale.balanceDue !== undefined ? Number(updatedSale.balanceDue) : totalVal - paidVal)
+    : 0;
+
+  const cleanItems = (updatedSale.items || []).map((it) => ({
+    productId: String(it.productId || ''),
+    code: String(it.code || '').trim(),
+    name: String(it.name || '').trim(),
+    category: String(it.category || 'General').trim(),
+    size: String(it.size || '').trim(),
+    originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+    unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
+    price: Number(it.price) || 0,
+    cost: Number(it.cost) || 0,
+    quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
+    subtotal: Number(it.subtotal) || 0,
+  }));
+
+  const payload: any = {
+    companyId: originalSale.companyId || slug,
+    saleNumber: String(updatedSale.saleNumber || originalSale.saleNumber || 'VTA').slice(0, 50),
+    timestamp: Number(originalSale.timestamp) || Date.now(),
+    date: String(originalSale.date || new Date().toLocaleString()).slice(0, 100),
+    items: cleanItems,
+    totalItems: cleanItems.reduce((acc, it) => acc + it.quantity, 0),
+    subtotal: Number(updatedSale.subtotal) || 0,
+    discount: Number(updatedSale.discount) || 0,
+    tax: Number(updatedSale.tax) || 0,
+    total: totalVal,
+    paymentMethod: String(updatedSale.paymentMethod || 'cash').slice(0, 50),
+    amountPaid: paidVal,
+    change: Math.max(0, Number(updatedSale.change) || 0),
+    balanceDue: computedBalanceDue,
+    creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
+    creditDueDate: String(updatedSale.creditDueDate || '').trim().slice(0, 50),
+    creditPayments: Array.isArray(updatedSale.creditPayments) ? updatedSale.creditPayments : [],
+    customerName: String(updatedSale.customerName || 'Consumidor Final').trim().slice(0, 200),
+    customerPhone: String(updatedSale.customerPhone || '').trim().slice(0, 50),
+    customerRtn: String(updatedSale.customerRtn || '').trim().slice(0, 50),
+    notes: String(updatedSale.notes || '').trim().slice(0, 500),
+    status: updatedSale.status === 'cancelled' ? 'cancelled' : 'completed',
+    cashier: String(updatedSale.cashier || originalSale.cashier || 'Administrador').trim().slice(0, 100),
+    cashierRole: updatedSale.cashierRole || originalSale.cashierRole || 'admin',
+    lastEditedBy: String(updatedSale.lastEditedBy || 'Administrador').slice(0, 150),
+    lastEditedAt: String(updatedSale.lastEditedAt || new Date().toLocaleString()).slice(0, 100),
+  };
+
+  try {
+    await setDoc(saleRef, stripUndefinedDeep(payload), { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `sales/${originalSale.id}`);
+  }
+
+  // Compute stock difference per product code between originalSale.items and cleanItems
+  try {
+    const oldQtyByCode = new Map<string, number>();
+    for (const it of originalSale.items || []) {
+      const k = it.code.trim().toLowerCase();
+      if (!k) continue;
+      oldQtyByCode.set(k, (oldQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+    }
+
+    const newQtyByCode = new Map<string, { qty: number; item: typeof cleanItems[number] }>();
+    for (const it of cleanItems) {
+      const k = it.code.trim().toLowerCase();
+      if (!k) continue;
+      const existing = newQtyByCode.get(k);
+      if (existing) {
+        existing.qty += it.quantity;
+      } else {
+        newQtyByCode.set(k, { qty: it.quantity, item: it });
+      }
+    }
+
+    const allCodes = new Set<string>([
+      ...Array.from(oldQtyByCode.keys()),
+      ...Array.from(newQtyByCode.keys()),
+    ]);
+
+    const batch = writeBatch(db);
+    let hasStockDelta = false;
+
+    for (const codeKey of allCodes) {
+      const oldQty = oldQtyByCode.get(codeKey) || 0;
+      const newEntry = newQtyByCode.get(codeKey);
+      const newQty = newEntry?.qty || 0;
+      const stockDelta = oldQty - newQty; // positive = return to stock, negative = deduct more stock
+      if (stockDelta === 0) continue;
+
+      hasStockDelta = true;
+      const currentProd = currentInventory.find(
+        (p) => p.code.trim().toLowerCase() === codeKey
+      );
+      const fallbackItem =
+        newEntry?.item ||
+        (originalSale.items || []).find((i) => i.code.trim().toLowerCase() === codeKey);
+
+      const rawCode = currentProd?.code || fallbackItem?.code || codeKey;
+      const productDocId = getScopedDocId(rawCode, slug);
+      const productRef = doc(db, 'inventory', productDocId);
+
+      const currentStock = currentProd ? Number(currentProd.stock) || 0 : 0;
+      const adjustedStock = Math.max(0, Math.round(currentStock + stockDelta));
+
+      batch.set(
+        productRef,
+        {
+          companyId: slug,
+          code: rawCode.trim().slice(0, 100),
+          name: (currentProd?.name || fallbackItem?.name || 'Producto').trim().slice(0, 200),
+          category: (currentProd?.category || fallbackItem?.category || 'General').trim().slice(0, 100),
+          price: Number(currentProd?.price ?? fallbackItem?.price) || 0,
+          cost: Number(currentProd?.cost ?? fallbackItem?.cost) || 0,
+          stock: adjustedStock,
+        },
+        { merge: true }
+      );
+    }
+
+    if (hasStockDelta) {
+      await touchInventorySyncStamp(batch, slug);
+      await batch.commit();
+    }
+  } catch (invErr) {
+    console.warn('Warning adjusting inventory stock on sale edit:', invErr);
+  }
+
+  return {
+    id: originalSale.id,
+    ...payload,
+  };
 }
 
 export async function cancelSaleInFirestore(
@@ -1954,6 +2105,20 @@ export async function fetchUsersOnce(
         role: data.role === 'admin' ? 'admin' : 'collaborator',
         isActive: data.isActive !== false,
         allowedTabs: Array.isArray(data.allowedTabs) ? data.allowedTabs : ['sales', 'inventory', 'price-checker'],
+        salesPermissions: data.salesPermissions
+          ? {
+              canEditSales:
+                data.salesPermissions.canEditSales !== undefined
+                  ? Boolean(data.salesPermissions.canEditSales)
+                  : true,
+              canCancelSales: Boolean(data.salesPermissions.canCancelSales),
+              canViewCostsAndProfits: Boolean(data.salesPermissions.canViewCostsAndProfits),
+            }
+          : {
+              canEditSales: true,
+              canCancelSales: false,
+              canViewCostsAndProfits: false,
+            },
         createdAt: Number(data.createdAt) || Date.now(),
         lastLoginAt: data.lastLoginAt ? Number(data.lastLoginAt) : undefined,
       });
@@ -1991,6 +2156,20 @@ export function subscribeToUsers(
           role: data.role === 'admin' ? 'admin' : 'collaborator',
           isActive: data.isActive !== false,
           allowedTabs: Array.isArray(data.allowedTabs) ? data.allowedTabs : ['sales', 'inventory', 'price-checker'],
+          salesPermissions: data.salesPermissions
+            ? {
+                canEditSales:
+                  data.salesPermissions.canEditSales !== undefined
+                    ? Boolean(data.salesPermissions.canEditSales)
+                    : true,
+                canCancelSales: Boolean(data.salesPermissions.canCancelSales),
+                canViewCostsAndProfits: Boolean(data.salesPermissions.canViewCostsAndProfits),
+              }
+            : {
+                canEditSales: true,
+                canCancelSales: false,
+                canViewCostsAndProfits: false,
+              },
           createdAt: Number(data.createdAt) || Date.now(),
           lastLoginAt: data.lastLoginAt ? Number(data.lastLoginAt) : undefined,
         });
@@ -2022,6 +2201,11 @@ export async function saveUserToFirestore(
     role: user.role,
     isActive: user.isActive,
     allowedTabs: user.allowedTabs,
+    salesPermissions: {
+      canEditSales: user.salesPermissions?.canEditSales !== undefined ? Boolean(user.salesPermissions.canEditSales) : true,
+      canCancelSales: Boolean(user.salesPermissions?.canCancelSales),
+      canViewCostsAndProfits: Boolean(user.salesPermissions?.canViewCostsAndProfits),
+    },
     createdAt: user.createdAt || Date.now(),
     ...(user.lastLoginAt ? { lastLoginAt: user.lastLoginAt } : {}),
   };
@@ -2208,6 +2392,7 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
     status: data.status === 'suspended' ? 'suspended' : 'active',
     moraReason: data.moraReason || '',
     suspendedAt: data.suspendedAt ? Number(data.suspendedAt) : undefined,
+    autoSuspend: data.autoSuspend !== undefined ? Boolean(data.autoSuspend) : true,
     adminPassword: data.adminPassword || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
     logoUrl: safeLogo,
     tagline: data.tagline || 'Control de Inventario y Ventas',
@@ -2323,6 +2508,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     status: company.status === 'suspended' ? 'suspended' : 'active',
     moraReason: (company.moraReason || '').trim(),
     suspendedAt: company.status === 'suspended' ? (company.suspendedAt || Date.now()) : undefined,
+    autoSuspend: company.autoSuspend !== undefined ? Boolean(company.autoSuspend) : true,
     adminPassword: (company.adminPassword || 'ADMIN2026').trim(),
     logoUrl: safeLogo,
     tagline: (company.tagline || 'Control de Inventario y Ventas').trim(),
@@ -2353,6 +2539,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
         status: normalized.status,
         moraReason: normalized.moraReason || '',
         suspendedAt: normalized.suspendedAt || null,
+        autoSuspend: normalized.autoSuspend,
         adminPassword: normalized.adminPassword,
         logoUrl: normalized.logoUrl,
         tagline: normalized.tagline,
@@ -2417,6 +2604,9 @@ export const DEFAULT_SAAS_GLOBAL_CONFIG: SaaSGlobalConfig = {
   saasAdminPhone: '',
   saasBrandName: 'Administración SaaS',
   expiryWarningDays: 5,
+  autoSuspendOverdue: true,
+  gracePeriodDays: 3,
+  bankAccounts: [],
   announcements: [],
   updatedAt: Date.now(),
 };
@@ -2444,10 +2634,24 @@ function sanitizeSaaSGlobalDoc(data: Record<string, any>): SaaSGlobalConfig {
       }))
     : [];
 
+  const bankAccounts: SaaSBankAccount[] = Array.isArray(data.bankAccounts)
+    ? data.bankAccounts.map((b: any) => ({
+        id: String(b.id || `bank_${Date.now()}`),
+        bankName: String(b.bankName || 'Banco'),
+        accountNumber: String(b.accountNumber || ''),
+        accountType: String(b.accountType || 'Ahorro'),
+        holderName: String(b.holderName || ''),
+        identidadOrRtn: b.identidadOrRtn ? String(b.identidadOrRtn) : '',
+      }))
+    : [];
+
   return {
     saasAdminPhone: String(data.saasAdminPhone || ''),
     saasBrandName: String(data.saasBrandName || data.storeName || 'Administración SaaS'),
     expiryWarningDays: Math.max(1, Math.min(30, Number(data.expiryWarningDays) || 5)),
+    autoSuspendOverdue: data.autoSuspendOverdue !== undefined ? Boolean(data.autoSuspendOverdue) : true,
+    gracePeriodDays: Math.max(0, Math.min(30, Number(data.gracePeriodDays ?? 3))),
+    bankAccounts,
     announcements,
     updatedAt: Number(data.updatedAt) || Date.now(),
   };
@@ -2499,6 +2703,9 @@ export async function saveSaaSGlobalConfigToFirestore(
     saasAdminPhone: (config.saasAdminPhone || '').trim(),
     saasBrandName: (config.saasBrandName || 'Administración SaaS').trim(),
     expiryWarningDays: Math.max(1, Math.min(30, Number(config.expiryWarningDays) || 5)),
+    autoSuspendOverdue: config.autoSuspendOverdue !== undefined ? Boolean(config.autoSuspendOverdue) : true,
+    gracePeriodDays: Math.max(0, Math.min(30, Number(config.gracePeriodDays ?? 3))),
+    bankAccounts: Array.isArray(config.bankAccounts) ? config.bankAccounts : [],
     announcements: Array.isArray(config.announcements) ? config.announcements : [],
     updatedAt: Date.now(),
   };
@@ -2506,14 +2713,17 @@ export async function saveSaaSGlobalConfigToFirestore(
   try {
     await setDoc(
       docRef,
-      {
+      stripUndefinedDeep({
         storeName: normalized.saasBrandName.slice(0, 190), // satisfies isValidStoreSettings
         saasAdminPhone: normalized.saasAdminPhone,
         saasBrandName: normalized.saasBrandName,
         expiryWarningDays: normalized.expiryWarningDays,
+        autoSuspendOverdue: normalized.autoSuspendOverdue,
+        gracePeriodDays: normalized.gracePeriodDays,
+        bankAccounts: normalized.bankAccounts,
         announcements: normalized.announcements,
         updatedAt: normalized.updatedAt,
-      },
+      }),
       { merge: true }
     );
     setCachedSaaSGlobalConfig(normalized);
@@ -2521,6 +2731,222 @@ export async function saveSaaSGlobalConfigToFirestore(
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'settings/saas_global_config');
   }
+}
+
+// ----------------- SAAS TENANT LIVE METRICS, CLONING & FULL BACKUP -----------------
+
+export async function fetchAllTenantsUsageMetrics(
+  companySlugs: string[]
+): Promise<Record<string, TenantUsageMetrics>> {
+  const result: Record<string, TenantUsageMetrics> = {};
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0).getTime();
+
+  const ensureEntry = (rawSlug: string): TenantUsageMetrics => {
+    const s = normalizeCompanySlug(rawSlug || 'gosen');
+    if (!result[s]) {
+      result[s] = {
+        companySlug: s,
+        productCount: 0,
+        userCount: 0,
+        monthlySalesCount: 0,
+        monthlySalesTotal: 0,
+        totalSalesCount: 0,
+        lastSaleTimestamp: null,
+      };
+    }
+    return result[s];
+  };
+
+  companySlugs.forEach((slug) => ensureEntry(slug));
+
+  const inferSlugFromDoc = (docId: string, dataCompanyId?: any): string => {
+    if (typeof dataCompanyId === 'string' && dataCompanyId.trim()) {
+      return normalizeCompanySlug(dataCompanyId);
+    }
+    if (docId.includes('__')) {
+      const prefix = docId.split('__')[0];
+      if (prefix) return normalizeCompanySlug(prefix);
+    }
+    return 'gosen';
+  };
+
+  try {
+    const [invSnap, usrSnap, salesSnap] = await Promise.all([
+      getDocs(collection(db, 'inventory')),
+      getDocs(collection(db, 'users')),
+      getDocs(collection(db, 'sales')),
+    ]);
+
+    invSnap.forEach((docSnap) => {
+      const data = docSnap.data();
+      const slug = inferSlugFromDoc(docSnap.id, data.companyId);
+      const entry = ensureEntry(slug);
+      entry.productCount += 1;
+    });
+
+    usrSnap.forEach((docSnap) => {
+      const data = docSnap.data();
+      const slug = inferSlugFromDoc(docSnap.id, data.companyId);
+      const entry = ensureEntry(slug);
+      entry.userCount += 1;
+    });
+
+    salesSnap.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data.status === 'cancelled') return;
+      const slug = inferSlugFromDoc(docSnap.id, data.companyId);
+      const entry = ensureEntry(slug);
+      const ts = Number(data.timestamp) || 0;
+      const total = Number(data.total) || 0;
+      entry.totalSalesCount += 1;
+      if (ts >= monthStart) {
+        entry.monthlySalesCount += 1;
+        entry.monthlySalesTotal += total;
+      }
+      if (ts > 0 && (!entry.lastSaleTimestamp || ts > entry.lastSaleTimestamp)) {
+        entry.lastSaleTimestamp = ts;
+      }
+    });
+  } catch (err) {
+    console.warn('Could not load SaaS tenant usage metrics:', err);
+  }
+
+  return result;
+}
+
+export async function exportCompanyFullBackup(companySlug: string): Promise<{
+  companySlug: string;
+  exportedAt: string;
+  inventory: Product[];
+  sales: SaleRecord[];
+  purchases: PurchaseInvoice[];
+  suppliers: Supplier[];
+  users: UserAccount[];
+  storeSettings: StoreSettings;
+}> {
+  const slug = normalizeCompanySlug(companySlug);
+  const [invRes, sales, purchases, suppliers, users, storeSettings] = await Promise.all([
+    fetchInventorySmart(true, slug),
+    fetchSalesOnce(true, slug),
+    fetchPurchasesOnce(true, slug),
+    fetchSuppliersOnce(true, slug),
+    fetchUsersOnce(true, slug),
+    fetchStoreSettingsOnce(slug),
+  ]);
+
+  return {
+    companySlug: slug,
+    exportedAt: new Date().toISOString(),
+    inventory: invRes.items,
+    sales,
+    purchases,
+    suppliers,
+    users,
+    storeSettings,
+  };
+}
+
+export const STARTER_INDUSTRY_TEMPLATES: Record<
+  'ropa_calzado' | 'pulperia_abarrotes' | 'ferreteria_repuestos' | 'farmacia_cosmeticos',
+  { label: string; description: string; items: Omit<Product, 'id' | 'companyId'>[] }
+> = {
+  ropa_calzado: {
+    label: 'Ropa, Boutique y Calzado',
+    description: 'Categorías de Damas, Caballeros, Niños, Calzado y Accesorios con artículos ejemplo.',
+    items: [
+      { code: 'ROP-001', name: 'Camisa Casual Caballero', category: 'Caballeros', size: 'M', cost: 220, price: 380, stock: 10 },
+      { code: 'ROP-002', name: 'Pantalón Jeans Clásico', category: 'Caballeros', size: '32', cost: 350, price: 590, stock: 8 },
+      { code: 'ROP-003', name: 'Blusa Elegante Dama', category: 'Damas', size: 'S', cost: 190, price: 350, stock: 12 },
+      { code: 'CAL-001', name: 'Tenis Deportivos Unisex', category: 'Calzado', size: '40', cost: 480, price: 850, stock: 6 },
+      { code: 'ACC-001', name: 'Faja de Cuero Ajustable', category: 'Accesorios', size: 'Única', cost: 95, price: 180, stock: 15 },
+    ],
+  },
+  pulperia_abarrotes: {
+    label: 'Pulpería, Mini Súper y Abarrotería',
+    description: 'Granos básicos, Bebidas, Lácteos, Snacks y Limpieza listos para facturar.',
+    items: [
+      { code: 'ABA-001', name: 'Arroz Blanco 1 Libra', category: 'Granos Básicos', cost: 11, price: 15, stock: 50 },
+      { code: 'ABA-002', name: 'Frijoles Rojos 1 Libra', category: 'Granos Básicos', cost: 18, price: 24, stock: 40 },
+      { code: 'BEB-001', name: 'Refresco Desechable 2 Litros', category: 'Bebidas', cost: 34, price: 45, stock: 30 },
+      { code: 'LAC-001', name: 'Leche Entera 1 Litro', category: 'Lácteos', cost: 26, price: 34, stock: 20 },
+      { code: 'LIM-001', name: 'Detergente en Polvo 500g', category: 'Limpieza', cost: 22, price: 30, stock: 25 },
+    ],
+  },
+  ferreteria_repuestos: {
+    label: 'Ferretería, Repuestos y Herramientas',
+    description: 'Herramientas, Electricidad, Plomería, Pinturas y Tornillería.',
+    items: [
+      { code: 'FER-001', name: 'Martillo de Uña Profesional 16oz', category: 'Herramientas', cost: 110, price: 175, stock: 12 },
+      { code: 'FER-002', name: 'Cinta Métrica 5 Metros', category: 'Herramientas', cost: 45, price: 80, stock: 20 },
+      { code: 'ELE-001', name: 'Foco LED Ahorrador 12W', category: 'Electricidad', cost: 28, price: 50, stock: 40 },
+      { code: 'PLO-001', name: 'Tubo PVC 1/2 Pulgada', category: 'Plomería', cost: 55, price: 90, stock: 25 },
+      { code: 'LUB-001', name: 'Aceite Multigrado 20W-50 1 Cuarto', category: 'Lubricantes', cost: 135, price: 195, stock: 18 },
+    ],
+  },
+  farmacia_cosmeticos: {
+    label: 'Cosméticos, Perfumería y Variedades',
+    description: 'Cuidado personal, Perfumería, Maquillaje y Regalos.',
+    items: [
+      { code: 'COS-001', name: 'Crema Hidratante Corporal 400ml', category: 'Cuidado Personal', cost: 85, price: 150, stock: 15 },
+      { code: 'PER-001', name: 'Loción Corporal Fragancia Floral', category: 'Perfumería', cost: 140, price: 260, stock: 10 },
+      { code: 'MAQ-001', name: 'Labial Mate Larga Duración', category: 'Maquillaje', cost: 45, price: 95, stock: 24 },
+      { code: 'CAB-001', name: 'Shampoo Reparación Intensa 500ml', category: 'Cuidado Capilar', cost: 90, price: 165, stock: 14 },
+    ],
+  },
+};
+
+export async function cloneStoreCatalogToTenant(
+  sourceCompanySlug: string,
+  targetCompanySlug: string,
+  options: { includeStock: boolean; includePrices: boolean }
+): Promise<number> {
+  const srcSlug = normalizeCompanySlug(sourceCompanySlug);
+  const dstSlug = normalizeCompanySlug(targetCompanySlug);
+  if (srcSlug === dstSlug) {
+    throw new Error('La tienda de origen y destino no pueden ser la misma.');
+  }
+  if (dstSlug === 'gosen') {
+    throw new Error('Por seguridad no se puede sobrescribir la tienda principal Gosén.');
+  }
+
+  const { items: sourceProducts } = await fetchInventorySmart(true, srcSlug);
+  if (sourceProducts.length === 0) {
+    return 0;
+  }
+
+  const clonedProducts: Product[] = sourceProducts.map((p) => ({
+    ...p,
+    id: p.code,
+    companyId: dstSlug,
+    stock: options.includeStock ? p.stock : 0,
+    cost: options.includePrices ? p.cost : 0,
+    price: options.includePrices ? p.price : 0,
+  }));
+
+  await bulkSaveProductsToFirestore(clonedProducts, [], dstSlug);
+  return clonedProducts.length;
+}
+
+export async function seedStarterTemplateToTenant(
+  templateKey: keyof typeof STARTER_INDUSTRY_TEMPLATES,
+  targetCompanySlug: string
+): Promise<number> {
+  const dstSlug = normalizeCompanySlug(targetCompanySlug);
+  if (dstSlug === 'gosen') {
+    throw new Error('Por seguridad no se puede aplicar plantilla sobre Tienda Gosén.');
+  }
+  const tpl = STARTER_INDUSTRY_TEMPLATES[templateKey];
+  if (!tpl) return 0;
+
+  const products: Product[] = tpl.items.map((item) => ({
+    ...item,
+    id: item.code,
+    companyId: dstSlug,
+  }));
+
+  await bulkSaveProductsToFirestore(products, [], dstSlug);
+  return products.length;
 }
 
 // ----------------- POS CASH REGISTER SHIFTS & STORE OPERATING EXPENSES -----------------

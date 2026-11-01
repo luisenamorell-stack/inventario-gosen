@@ -1,13 +1,22 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   CompanyTenant,
   ActiveTab,
   ALL_COMPANY_MODULES,
   SubscriptionPaymentRecord,
   SaaSAnnouncement,
+  SaaSBankAccount,
+  TenantUsageMetrics,
   SaaSGlobalConfig,
 } from '../types';
-import { normalizeCompanySlug } from '../firebase/firestoreService';
+import {
+  normalizeCompanySlug,
+  fetchAllTenantsUsageMetrics,
+  exportCompanyFullBackup,
+  cloneStoreCatalogToTenant,
+  seedStarterTemplateToTenant,
+  STARTER_INDUSTRY_TEMPLATES,
+} from '../firebase/firestoreService';
 import {
   Building2,
   Plus,
@@ -44,14 +53,19 @@ import {
   Store,
   Receipt,
   Megaphone,
-  Calendar,
   Printer,
   Download,
   Send,
   Package,
   Clock,
   Sparkles,
-  Bell
+  Bell,
+  CreditCard,
+  Database,
+  TrendingUp,
+  Layers,
+  Zap,
+  Calendar,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
@@ -76,6 +90,78 @@ export const SAAS_MODULE_OPTIONS: {
   { id: 'settings', label: 'Ajustes de Tienda', desc: 'Logo propio, nombre comercial y contraseña', icon: Store },
 ];
 
+export const SAAS_PLAN_PRESETS: {
+  id: string;
+  name: string;
+  badge: string;
+  price: number;
+  plan: 'mensual' | 'anual' | 'vitalicio' | 'prueba';
+  maxProducts: number;
+  maxUsers: number;
+  modules: ActiveTab[];
+  enableDvolada: boolean;
+  desc: string;
+}[] = [
+  {
+    id: 'emprendedor',
+    name: 'Plan Emprendedor',
+    badge: 'Básico POS',
+    price: 450,
+    plan: 'mensual',
+    maxProducts: 250,
+    maxUsers: 2,
+    modules: ['dashboard', 'sales', 'inventory', 'price-checker', 'settings'],
+    enableDvolada: false,
+    desc: 'Ideal para negocios pequeños: Inventario + Caja POS (Hasta 250 prod. y 2 colab.)',
+  },
+  {
+    id: 'comercial',
+    name: 'Plan Comercial Pro',
+    badge: 'Más Vendido',
+    price: 650,
+    plan: 'mensual',
+    maxProducts: 1500,
+    maxUsers: 5,
+    modules: [
+      'dashboard',
+      'sales',
+      'inventory',
+      'price-checker',
+      'catalog',
+      'purchases',
+      'suppliers',
+      'users',
+      'settings',
+    ],
+    enableDvolada: false,
+    desc: 'Incluye Catálogo Digital QR, Compras, Proveedores (Hasta 1,500 prod. y 5 colab.)',
+  },
+  {
+    id: 'empresarial',
+    name: 'Plan Empresarial Full',
+    badge: 'Todo Ilimitado',
+    price: 950,
+    plan: 'mensual',
+    maxProducts: 0,
+    maxUsers: 0,
+    modules: [...ALL_COMPANY_MODULES],
+    enableDvolada: true,
+    desc: 'Los 11 módulos + Auditoría Física + Bitácora + D’Volada + Productos/Usuarios ilimitados',
+  },
+  {
+    id: 'prueba15',
+    name: 'Demo Prueba 15 Días',
+    badge: '15 Días Gratis',
+    price: 0,
+    plan: 'prueba',
+    maxProducts: 100,
+    maxUsers: 2,
+    modules: [...ALL_COMPANY_MODULES],
+    enableDvolada: false,
+    desc: 'Acceso de demostración por 15 días con corte automático al vencer',
+  },
+];
+
 export function getDaysUntilBilling(nextBillingDate?: string): number | null {
   if (!nextBillingDate || !nextBillingDate.trim()) return null;
   const parts = nextBillingDate.trim().split('-');
@@ -98,6 +184,20 @@ export function formatShortDateEs(dateStr?: string): string {
   const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
   const m = Number(parts[1]) - 1;
   return `${parts[2]}/${months[m] || parts[1]}/${parts[0]}`;
+}
+
+export function formatRelativeActivityEs(timestamp: number | null | undefined): string {
+  if (!timestamp || timestamp <= 0) return 'Sin ventas aún';
+  const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (diffSec < 60) return 'Hace unos segundos';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `Hace ${diffMin} min`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `Hace ${diffHours} ${diffHours === 1 ? 'hora' : 'horas'}`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) return 'Ayer';
+  if (diffDays < 30) return `Hace ${diffDays} días`;
+  return new Date(timestamp).toLocaleDateString('es-HN', { day: '2-digit', month: 'short' });
 }
 
 export function computeNextBillingDateFromCurrent(
@@ -166,6 +266,28 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [confirmDeleteSlug, setConfirmDeleteSlug] = useState<string | null>(null);
   const [togglingSlug, setTogglingSlug] = useState<string | null>(null);
 
+  // Live Usage Metrics per Tenant
+  const [usageMetricsMap, setUsageMetricsMap] = useState<Record<string, TenantUsageMetrics>>({});
+  const [isLoadingMetrics, setIsLoadingMetrics] = useState<boolean>(false);
+
+  const loadUsageMetrics = useCallback(async () => {
+    if (companies.length === 0) return;
+    setIsLoadingMetrics(true);
+    try {
+      const slugs = companies.map((c) => c.slug);
+      const metrics = await fetchAllTenantsUsageMetrics(slugs);
+      setUsageMetricsMap(metrics);
+    } catch {
+      // ignore
+    } finally {
+      setIsLoadingMetrics(false);
+    }
+  }, [companies]);
+
+  useEffect(() => {
+    loadUsageMetrics();
+  }, [loadUsageMetrics]);
+
   // SaaS Master Key state (only for the SaaS Creator/Owner)
   const [saasMasterKey, setSaasMasterKey] = useState<string>(() => {
     try {
@@ -177,10 +299,44 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [isEditingMasterKey, setIsEditingMasterKey] = useState(false);
   const [tempMasterKey, setTempMasterKey] = useState(saasMasterKey);
 
-  // SaaS Admin WhatsApp & Warning Days Config
+  // SaaS Admin WhatsApp, Warning Days & Auto-Suspend Grace Days Config
   const [isEditingSaaSContact, setIsEditingSaaSContact] = useState(false);
   const [tempSaaSPhone, setTempSaaSPhone] = useState(saasGlobalConfig?.saasAdminPhone || '');
   const [tempWarningDays, setTempWarningDays] = useState(String(saasGlobalConfig?.expiryWarningDays || 5));
+  const [tempAutoSuspend, setTempAutoSuspend] = useState<boolean>(
+    saasGlobalConfig?.autoSuspendOverdue !== false
+  );
+  const [tempGraceDays, setTempGraceDays] = useState<string>(
+    String(saasGlobalConfig?.gracePeriodDays ?? 3)
+  );
+  const [isRunningAutoSuspend, setIsRunningAutoSuspend] = useState(false);
+
+  // Bank Accounts Modal State (#4)
+  const [showBankAccountsModal, setShowBankAccountsModal] = useState(false);
+  const [bankName, setBankName] = useState('BAC Credomatic');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [accountType, setAccountType] = useState('Ahorro Lempiras');
+  const [holderName, setHolderName] = useState('');
+  const [identidadOrRtn, setIdentidadOrRtn] = useState('');
+  const [isSavingBank, setIsSavingBank] = useState(false);
+
+  // SaaS Financial Report Modal State (#7)
+  const [showSaaSFinancesModal, setShowSaaSFinancesModal] = useState(false);
+
+  // Store Cloner & Starter Templates Modal State (#5)
+  const [cloneTargetCompany, setCloneTargetCompany] = useState<CompanyTenant | null>(null);
+  const [cloneMode, setCloneMode] = useState<'template' | 'existing'>('template');
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<
+    keyof typeof STARTER_INDUSTRY_TEMPLATES
+  >('ropa_calzado');
+  const [sourceCompanySlug, setSourceCompanySlug] = useState<string>('gosen');
+  const [cloneIncludeStock, setCloneIncludeStock] = useState<boolean>(false);
+  const [cloneIncludePrices, setCloneIncludePrices] = useState<boolean>(true);
+  const [isCloningCatalog, setIsCloningCatalog] = useState<boolean>(false);
+
+  // Full Client Backup / Export Modal State (#6)
+  const [backupCompany, setBackupCompany] = useState<CompanyTenant | null>(null);
+  const [isExportingBackup, setIsExportingBackup] = useState<boolean>(false);
 
   const handleSaveMasterKey = () => {
     const clean = tempMasterKey.trim().toUpperCase();
@@ -201,19 +357,73 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     if (!onSaveSaaSGlobalConfig) return;
     const cleanPhone = tempSaaSPhone.replace(/[^\d+]/g, '').trim();
     const days = Math.max(1, Math.min(30, Number(tempWarningDays) || 5));
+    const grace = Math.max(0, Math.min(30, Number(tempGraceDays ?? 3)));
     try {
       await onSaveSaaSGlobalConfig({
         saasAdminPhone: cleanPhone,
         saasBrandName: saasGlobalConfig?.saasBrandName || 'Administración SaaS',
         expiryWarningDays: days,
+        autoSuspendOverdue: tempAutoSuspend,
+        gracePeriodDays: grace,
+        bankAccounts: saasGlobalConfig?.bankAccounts || [],
         announcements: saasGlobalConfig?.announcements || [],
         updatedAt: Date.now(),
       });
       setIsEditingSaaSContact(false);
-      showToast('Configuración de WhatsApp SaaS y alertas de corte guardada.', 'success');
+      showToast('Configuración de WhatsApp, avisos y corte automático guardada.', 'success');
     } catch {
       showToast('Error al guardar la configuración SaaS.', 'error');
     }
+  };
+
+  // Add Bank Account Handler
+  const handleAddBankAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onSaveSaaSGlobalConfig) return;
+    if (!bankName.trim() || !accountNumber.trim() || !holderName.trim()) {
+      showToast('Completa el banco, número de cuenta y titular.', 'warning');
+      return;
+    }
+    setIsSavingBank(true);
+    try {
+      const newBank: SaaSBankAccount = {
+        id: `bank_${Date.now()}`,
+        bankName: bankName.trim(),
+        accountNumber: accountNumber.trim(),
+        accountType: accountType.trim() || 'Ahorro',
+        holderName: holderName.trim(),
+        identidadOrRtn: identidadOrRtn.trim(),
+      };
+      const existing = saasGlobalConfig?.bankAccounts || [];
+      await onSaveSaaSGlobalConfig({
+        saasAdminPhone: saasGlobalConfig?.saasAdminPhone || '',
+        saasBrandName: saasGlobalConfig?.saasBrandName || 'Administración SaaS',
+        expiryWarningDays: saasGlobalConfig?.expiryWarningDays || 5,
+        autoSuspendOverdue: saasGlobalConfig?.autoSuspendOverdue !== false,
+        gracePeriodDays: saasGlobalConfig?.gracePeriodDays ?? 3,
+        bankAccounts: [...existing, newBank],
+        announcements: saasGlobalConfig?.announcements || [],
+        updatedAt: Date.now(),
+      });
+      setAccountNumber('');
+      setIdentidadOrRtn('');
+      showToast(`Cuenta de ${newBank.bankName} agregada para cobros SaaS`, 'success');
+    } catch {
+      showToast('Error al guardar cuenta bancaria.', 'error');
+    } finally {
+      setIsSavingBank(false);
+    }
+  };
+
+  const handleDeleteBankAccount = async (bankId: string) => {
+    if (!onSaveSaaSGlobalConfig || !saasGlobalConfig) return;
+    const nextBanks = (saasGlobalConfig.bankAccounts || []).filter((b) => b.id !== bankId);
+    await onSaveSaaSGlobalConfig({
+      ...saasGlobalConfig,
+      bankAccounts: nextBanks,
+      updatedAt: Date.now(),
+    });
+    showToast('Cuenta bancaria eliminada.', 'info');
   };
 
   // Form state for Create/Edit Client
@@ -223,7 +433,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [plan, setPlan] = useState<'mensual' | 'anual' | 'vitalicio' | 'prueba'>('mensual');
-  const [price, setPrice] = useState<string>('600');
+  const [price, setPrice] = useState<string>('650');
   const [nextBillingDate, setNextBillingDate] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [tagline, setTagline] = useState('Control de Inventario y Ventas');
@@ -231,10 +441,12 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [notes, setNotes] = useState('');
   const [status, setStatus] = useState<'active' | 'suspended'>('active');
   const [moraReason, setMoraReason] = useState('');
+  const [autoSuspendClient, setAutoSuspendClient] = useState<boolean>(true);
   const [allowedModules, setAllowedModules] = useState<ActiveTab[]>(ALL_COMPANY_MODULES);
   const [enableDeliveryDvolada, setEnableDeliveryDvolada] = useState<boolean>(false);
   const [maxProducts, setMaxProducts] = useState<string>('0'); // 0 = Ilimitado
   const [maxUsers, setMaxUsers] = useState<string>('0'); // 0 = Ilimitado
+  const [initialStarterTemplate, setInitialStarterTemplate] = useState<string>('none');
 
   // Quick Permissions & Plan Limits Modal State
   const [permissionsCompany, setPermissionsCompany] = useState<CompanyTenant | null>(null);
@@ -277,6 +489,72 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   };
 
   const warningDaysThreshold = saasGlobalConfig?.expiryWarningDays || 5;
+  const gracePeriodDays = saasGlobalConfig?.gracePeriodDays ?? 3;
+  const isAutoSuspendEnabled = saasGlobalConfig?.autoSuspendOverdue !== false;
+
+  // Format Bank Accounts text for WhatsApp messages
+  const formatBankAccountsForWhatsApp = () => {
+    const banks = saasGlobalConfig?.bankAccounts || [];
+    if (banks.length === 0) return '';
+    const lines = banks.map(
+      (b) =>
+        `🏦 *${b.bankName}* (${b.accountType}): \`${b.accountNumber}\` — Titular: ${b.holderName}${
+          b.identidadOrRtn ? ` (ID/RTN: ${b.identidadOrRtn})` : ''
+        }`
+    );
+    return `\n💳 *Cuentas habilitadas para tu pago:*\n${lines.join('\n')}\n`;
+  };
+
+  // Detect clients that have exceeded their billing date + grace period
+  const overduePastGraceCompanies = useMemo(() => {
+    return companies.filter((c) => {
+      if (c.slug === 'gosen' || c.plan === 'vitalicio' || c.status === 'suspended') return false;
+      if (c.autoSuspend === false) return false;
+      const days = getDaysUntilBilling(c.nextBillingDate);
+      if (days === null) return false;
+      return days < -gracePeriodDays;
+    });
+  }, [companies, gracePeriodDays]);
+
+  const handleRunBatchAutoSuspend = async () => {
+    if (overduePastGraceCompanies.length === 0) return;
+    setIsRunningAutoSuspend(true);
+    try {
+      for (const comp of overduePastGraceCompanies) {
+        const days = getDaysUntilBilling(comp.nextBillingDate) || 0;
+        await onSaveCompany({
+          ...comp,
+          status: 'suspended',
+          moraReason: `Corte automático: Suscripción vencida el ${formatShortDateEs(
+            comp.nextBillingDate
+          )} (${Math.abs(days)} días de atraso)`,
+          suspendedAt: Date.now(),
+        });
+      }
+      showToast(
+        `⛔ Se suspendieron automáticamente ${overduePastGraceCompanies.length} tienda(s) con plazo de gracia vencido.`,
+        'warning'
+      );
+    } catch {
+      showToast('Error al ejecutar el corte automático.', 'error');
+    } finally {
+      setIsRunningAutoSuspend(false);
+    }
+  };
+
+  const applyPlanPresetToForm = (preset: (typeof SAAS_PLAN_PRESETS)[number]) => {
+    setPlan(preset.plan);
+    setPrice(String(preset.price));
+    setMaxProducts(String(preset.maxProducts));
+    setMaxUsers(String(preset.maxUsers));
+    setAllowedModules([...preset.modules]);
+    setEnableDeliveryDvolada(preset.enableDvolada);
+    if (preset.plan === 'prueba') {
+      const in15Days = new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0];
+      setNextBillingDate(in15Days);
+    }
+    showToast(`Paquete "${preset.name}" aplicado al formulario`, 'info');
+  };
 
   const openNewModal = () => {
     setEditingCompany(null);
@@ -286,7 +564,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setPhone('');
     setEmail('');
     setPlan('mensual');
-    setPrice('600');
+    setPrice('650');
     const nextMonth = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     setNextBillingDate(nextMonth);
     setAdminPassword(`ADMIN${Math.floor(1000 + Math.random() * 9000)}`);
@@ -295,10 +573,12 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setNotes('');
     setStatus('active');
     setMoraReason('');
+    setAutoSuspendClient(true);
     setAllowedModules([...ALL_COMPANY_MODULES]);
     setEnableDeliveryDvolada(false);
     setMaxProducts('0');
     setMaxUsers('0');
+    setInitialStarterTemplate('none');
     setShowModal(true);
   };
 
@@ -318,6 +598,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setNotes(comp.notes || '');
     setStatus(comp.status || 'active');
     setMoraReason(comp.moraReason || '');
+    setAutoSuspendClient(comp.autoSuspend !== false);
     setAllowedModules(
       Array.isArray(comp.allowedModules) && comp.allowedModules.length > 0
         ? [...comp.allowedModules]
@@ -328,6 +609,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     );
     setMaxProducts(String(comp.maxProducts || 0));
     setMaxUsers(String(comp.maxUsers || 0));
+    setInitialStarterTemplate('none');
     setShowModal(true);
   };
 
@@ -396,6 +678,138 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       showToast('Error al guardar permisos: ' + (err?.message || 'desconocido'), 'error');
     } finally {
       setIsSavingPerms(false);
+    }
+  };
+
+  // Clone Catalog or Apply Starter Template Handler (#5)
+  const handleExecuteCloneOrTemplate = async () => {
+    if (!cloneTargetCompany) return;
+    setIsCloningCatalog(true);
+    try {
+      if (cloneMode === 'template') {
+        const count = await seedStarterTemplateToTenant(
+          selectedTemplateKey,
+          cloneTargetCompany.slug
+        );
+        const tplName = STARTER_INDUSTRY_TEMPLATES[selectedTemplateKey]?.label || 'Plantilla';
+        showToast(
+          `✅ Se cargaron ${count} artículos base de "${tplName}" en ${cloneTargetCompany.name}`,
+          'success'
+        );
+      } else {
+        const count = await cloneStoreCatalogToTenant(
+          sourceCompanySlug,
+          cloneTargetCompany.slug,
+          {
+            includeStock: cloneIncludeStock,
+            includePrices: cloneIncludePrices,
+          }
+        );
+        if (count === 0) {
+          showToast('La tienda de origen no tiene artículos para clonar.', 'warning');
+        } else {
+          showToast(
+            `✅ Se clonaron ${count} artículos hacia "${cloneTargetCompany.name}" exitosamente`,
+            'success'
+          );
+        }
+      }
+      setCloneTargetCompany(null);
+      await loadUsageMetrics();
+    } catch (err: any) {
+      showToast('Error al clonar catálogo: ' + (err?.message || 'desconocido'), 'error');
+    } finally {
+      setIsCloningCatalog(false);
+    }
+  };
+
+  // Export Full Client Backup JSON or CSV (#6)
+  const handleDownloadClientBackupJSON = async (comp: CompanyTenant) => {
+    setIsExportingBackup(true);
+    try {
+      const data = await exportCompanyFullBackup(comp.slug);
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: 'application/json;charset=utf-8',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const dateStr = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `Respaldo_SaaS_${comp.slug}_${dateStr}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(
+        `✅ Respaldo completo JSON descargado (${data.inventory.length} prod., ${data.sales.length} ventas)`,
+        'success'
+      );
+      setBackupCompany(null);
+    } catch (err: any) {
+      showToast('Error al exportar respaldo: ' + (err?.message || 'desconocido'), 'error');
+    } finally {
+      setIsExportingBackup(false);
+    }
+  };
+
+  const handleDownloadClientBackupCSV = async (comp: CompanyTenant) => {
+    setIsExportingBackup(true);
+    try {
+      const data = await exportCompanyFullBackup(comp.slug);
+      const escapeCsv = (val: any) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+
+      const invHeaders = ['Codigo', 'Nombre', 'Categoria', 'Talla', 'Proveedor', 'Costo', 'Precio', 'Stock'];
+      const invRows = data.inventory.map((p) =>
+        [p.code, p.name, p.category, p.size || '', p.supplier || '', p.cost, p.price, p.stock]
+          .map(escapeCsv)
+          .join(',')
+      );
+
+      const salesHeaders = ['Factura', 'Fecha', 'Cliente', 'MetodoPago', 'Items', 'Total', 'Estado', 'Cajero'];
+      const salesRows = data.sales.map((s) =>
+        [
+          s.saleNumber,
+          s.date,
+          s.customerName || 'Consumidor Final',
+          s.paymentMethod,
+          s.totalItems,
+          s.total,
+          s.status,
+          s.cashier || '',
+        ]
+          .map(escapeCsv)
+          .join(',')
+      );
+
+      const csvContent =
+        '\uFEFF' +
+        `REPORTE Y RESPALDO DE EMPRESA: ${comp.name} (${comp.slug})\n` +
+        `Exportado el: ${new Date().toLocaleString('es-HN')}\n\n` +
+        `--- INVENTARIO (${data.inventory.length} ARTICULOS) ---\n` +
+        invHeaders.join(',') +
+        '\n' +
+        invRows.join('\n') +
+        `\n\n--- HISTORIAL DE VENTAS (${data.sales.length} REGISTROS) ---\n` +
+        salesHeaders.join(',') +
+        '\n' +
+        salesRows.join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const dateStr = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `Reporte_Excel_${comp.slug}_${dateStr}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(`✅ Archivo Excel (CSV) de ${comp.name} descargado`, 'success');
+      setBackupCompany(null);
+    } catch (err: any) {
+      showToast('Error al exportar CSV: ' + (err?.message || 'desconocido'), 'error');
+    } finally {
+      setIsExportingBackup(false);
     }
   };
 
@@ -590,6 +1004,9 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         saasAdminPhone: saasGlobalConfig?.saasAdminPhone || '',
         saasBrandName: saasGlobalConfig?.saasBrandName || 'Administración SaaS',
         expiryWarningDays: saasGlobalConfig?.expiryWarningDays || 5,
+        autoSuspendOverdue: saasGlobalConfig?.autoSuspendOverdue !== false,
+        gracePeriodDays: saasGlobalConfig?.gracePeriodDays ?? 3,
+        bankAccounts: saasGlobalConfig?.bankAccounts || [],
         announcements: [newAnn, ...currentList],
         updatedAt: Date.now(),
       });
@@ -691,6 +1108,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             ? moraReason.trim() || 'Mensualidad / Renovación vencida (En Mora)'
             : '',
         suspendedAt: status === 'suspended' ? Date.now() : undefined,
+        autoSuspend: autoSuspendClient,
         adminPassword: cleanPass,
         logoUrl: safeLogo,
         tagline: tagline.trim() || 'Control de Inventario y Ventas',
@@ -706,7 +1124,20 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       };
 
       await onSaveCompany(payload);
+
+      if (
+        !editingCompany &&
+        initialStarterTemplate !== 'none' &&
+        initialStarterTemplate in STARTER_INDUSTRY_TEMPLATES
+      ) {
+        await seedStarterTemplateToTenant(
+          initialStarterTemplate as keyof typeof STARTER_INDUSTRY_TEMPLATES,
+          cleanSlug
+        );
+      }
+
       setShowModal(false);
+      await loadUsageMetrics();
       showToast(
         editingCompany
           ? `Cliente "${cleanName}" actualizado correctamente`
@@ -783,13 +1214,15 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   };
 
   const handleSendMoraNoticeWhatsApp = (comp: CompanyTenant) => {
+    const banksSection = formatBankAccountsForWhatsApp();
     const msg =
       `⚠️ *AVISO DE SUSPENSIÓN POR MORA — ${comp.name.toUpperCase()}*\n\n` +
       `Hola *${comp.ownerName || comp.name}*, te informamos que el acceso al sistema de inventario y facturación para *${comp.name}* (Código: \`${comp.slug}\`) se encuentra temporalmente *DESHABILITADO POR MORA / PAGO PENDIENTE*.\n\n` +
       `• *Plan:* ${comp.plan.toUpperCase()}\n` +
       `• *Monto pendiente:* L. ${Number(comp.price || 0).toLocaleString('es-HN', { minimumFractionDigits: 2 })}\n` +
       (comp.nextBillingDate ? `• *Fecha de corte:* ${formatShortDateEs(comp.nextBillingDate)}\n` : '') +
-      `\nEn cuanto realices tu pago de renovación, reactivaremos tu acceso de forma inmediata. ¡Tus datos e inventario están 100% resguardados!`;
+      banksSection +
+      `\nEn cuanto realices tu pago de renovación y nos envíes el comprobante, reactivaremos tu acceso de forma inmediata. ¡Tus datos e inventario están 100% resguardados!`;
 
     const cleanPhone = (comp.phone || '').replace(/\D/g, '');
     const waUrl = cleanPhone
@@ -800,6 +1233,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   };
 
   const handleSendExpiryReminderWhatsApp = (comp: CompanyTenant, daysLeft: number) => {
+    const banksSection = formatBankAccountsForWhatsApp();
     const msg =
       `🔔 *RECORDATORIO DE PRÓXIMO VENCIMIENTO — ${comp.name.toUpperCase()}*\n\n` +
       `Hola *${comp.ownerName || comp.name}*, te recordamos cordialmente que la suscripción de tu sistema para *${comp.name}* (\`${comp.slug}\`) ${
@@ -809,8 +1243,9 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           ? `vence *HOY (${formatShortDateEs(comp.nextBillingDate)})*`
           : `vence en *${daysLeft} ${daysLeft === 1 ? 'día' : 'días'}* (${formatShortDateEs(comp.nextBillingDate)})`
       }.\n\n` +
-      `• *Cuota de Renovación:* L. ${Number(comp.price || 0).toLocaleString('es-HN', { minimumFractionDigits: 2 })}\n\n` +
-      `Por favor envíanos tu comprobante de pago por esta vía para actualizar tu fecha de corte y evitar interrupciones en tu servicio.`;
+      `• *Cuota de Renovación:* L. ${Number(comp.price || 0).toLocaleString('es-HN', { minimumFractionDigits: 2 })}\n` +
+      banksSection +
+      `\nPor favor envíanos tu comprobante de pago por esta vía para actualizar tu fecha de corte y evitar interrupciones en tu servicio.`;
 
     const cleanPhone = (comp.phone || '').replace(/\D/g, '');
     const waUrl = cleanPhone
@@ -867,7 +1302,46 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       (acc, item) => acc + (Number(item.payment.amount) || 0),
       0
     );
-    return { total, active, suspended, expiringSoon, monthlyRevenue, totalHistoricalCollected };
+
+    // Current Month Collected vs Pending (#7 SaaS Financial Analytics)
+    const now = new Date();
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const collectedThisMonth = allPaymentsList
+      .filter((item) => item.payment.paidAt >= currentMonthStart)
+      .reduce((acc, item) => acc + (Number(item.payment.amount) || 0), 0);
+
+    const atRiskMoraAmount = companies
+      .filter((c) => c.status === 'suspended')
+      .reduce((acc, c) => acc + (Number(c.price) || 0), 0);
+
+    // Last 6 months breakdown
+    const monthlyBreakdown: { label: string; total: number; count: number }[] = [];
+    const shortMonths = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const start = d.getTime();
+      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
+      const matching = allPaymentsList.filter(
+        (it) => it.payment.paidAt >= start && it.payment.paidAt <= end
+      );
+      monthlyBreakdown.push({
+        label: `${shortMonths[d.getMonth()]} ${String(d.getFullYear()).slice(-2)}`,
+        total: matching.reduce((s, it) => s + (Number(it.payment.amount) || 0), 0),
+        count: matching.length,
+      });
+    }
+
+    return {
+      total,
+      active,
+      suspended,
+      expiringSoon,
+      monthlyRevenue,
+      totalHistoricalCollected,
+      collectedThisMonth,
+      atRiskMoraAmount,
+      monthlyBreakdown,
+    };
   }, [companies, warningDaysThreshold, allPaymentsList]);
 
   const togglePasswordVisibility = (companySlug: string) => {
@@ -877,6 +1351,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const activeAnnouncementsCount = (saasGlobalConfig?.announcements || []).filter(
     (a) => a.isActive
   ).length;
+
+  const bankAccountsCount = (saasGlobalConfig?.bankAccounts || []).length;
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-slate-100">
@@ -897,23 +1373,24 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 truncate">
-                Gestión de clientes, límites por plan, recibos de suscripción, avisos de vencimiento y anuncios globales
+                Gestión de clientes, salud en vivo, paquetes de planes, cuentas de cobro, clonador y respaldos
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {onRefreshCompanies && (
-              <button
-                type="button"
-                onClick={onRefreshCompanies}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-xs font-bold transition-colors cursor-pointer"
-                title="Sincronizar lista de clientes desde la nube"
-              >
-                <RefreshCw className="w-3.5 h-3.5 text-teal-400" />
-                <span className="hidden sm:inline">Sincronizar</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                if (onRefreshCompanies) onRefreshCompanies();
+                loadUsageMetrics();
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-xs font-bold transition-colors cursor-pointer"
+              title="Sincronizar lista de clientes y métricas en vivo desde la nube"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-teal-400 ${isLoadingMetrics ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Sincronizar</span>
+            </button>
             {onLogout && (
               <button
                 type="button"
@@ -938,11 +1415,11 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
-                  Administración SaaS: Planes, Pagos, Avisos de Corte y Comunicados
+                  Administración SaaS: Planes, Salud en Vivo, Cobros y Respaldos
                 </h1>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Controla qué módulos y límites tiene cada tienda, registra sus pagos mensuales con recibo en PDF/WhatsApp y envía anuncios globales.
+                Monitorea el uso en vivo de cada tienda, configura corte automático por mora, clona catálogos y administra tus finanzas SaaS.
               </p>
             </div>
           </div>
@@ -950,11 +1427,20 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
             <button
               type="button"
-              onClick={() => setShowSecurityLabModal(true)}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 font-extrabold text-xs border border-emerald-500/40 shadow-xs transition-all cursor-pointer"
+              onClick={() => setShowSaaSFinancesModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-xs transition-all cursor-pointer"
             >
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>Probar Blindaje y Seguridad</span>
+              <TrendingUp className="w-4 h-4 text-indigo-200" />
+              <span>Mis Finanzas SaaS</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowBankAccountsModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-950 font-extrabold text-xs border border-emerald-300 transition-all cursor-pointer"
+            >
+              <CreditCard className="w-4 h-4 text-emerald-600" />
+              <span>Mis Cuentas de Cobro ({bankAccountsCount})</span>
             </button>
 
             <button
@@ -963,7 +1449,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
               className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 font-extrabold text-xs border border-amber-300 transition-all cursor-pointer"
             >
               <Megaphone className="w-4 h-4 text-amber-600" />
-              <span>Anuncios a Tiendas</span>
+              <span>Anuncios</span>
               {activeAnnouncementsCount > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-amber-600 text-white text-[10px] font-black">
                   {activeAnnouncementsCount}
@@ -977,7 +1463,17 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
               className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-900 font-extrabold text-xs border border-teal-200 transition-all cursor-pointer"
             >
               <Receipt className="w-4 h-4 text-teal-600" />
-              <span>Historial de Pagos ({allPaymentsList.length})</span>
+              <span>Recibos ({allPaymentsList.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowSecurityLabModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 font-extrabold text-xs border border-emerald-500/40 shadow-xs transition-all cursor-pointer"
+              title="Laboratorio de Seguridad y Aislamiento Multi-Tienda"
+            >
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span className="hidden sm:inline">Blindaje</span>
             </button>
 
             {!isStandalonePortal && onLockSuperAdmin && (
@@ -987,7 +1483,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                 className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs border border-slate-200 transition-all cursor-pointer"
               >
                 <EyeOff className="w-4 h-4 text-slate-600" />
-                <span>Salir del Modo SaaS</span>
+                <span>Salir</span>
               </button>
             )}
 
@@ -1002,30 +1498,72 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           </div>
         </div>
 
-        {/* SaaS Owner Master Key & Automatic Expiry Banner WhatsApp Config Card */}
+        {/* Automatic Suspension Alert Strip if any client is past their grace period */}
+        {isAutoSuspendEnabled && overduePastGraceCompanies.length > 0 && (
+          <div className="bg-rose-950 text-white rounded-2xl border border-rose-500/50 p-3.5 sm:p-4 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-400/40 flex items-center justify-center text-rose-300 shrink-0">
+                <Zap className="w-5 h-5" />
+              </div>
+              <div className="text-xs">
+                <div className="font-black text-rose-200 text-sm">
+                  🤖 Corte Automático Detectó {overduePastGraceCompanies.length} Tienda(s) con Días de Gracia Vencidos
+                </div>
+                <p className="text-rose-100/80 mt-0.5">
+                  Superaron su fecha de corte más los <strong>{gracePeriodDays} días de gracia</strong>:{' '}
+                  <strong>{overduePastGraceCompanies.map((c) => c.name).join(', ')}</strong>.
+                  Nota: Su pantalla ya se bloquea automáticamente al intentar entrar, o puedes marcarlas como suspendidas en lote:
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={isRunningAutoSuspend}
+              onClick={handleRunBatchAutoSuspend}
+              className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs shrink-0 cursor-pointer shadow-sm"
+            >
+              {isRunningAutoSuspend
+                ? 'Suspendiendo...'
+                : `Suspender ${overduePastGraceCompanies.length} Vencida(s) Ahora`}
+            </button>
+          </div>
+        )}
+
+        {/* SaaS Owner Master Key, Auto-Suspend & Automatic Expiry Banner WhatsApp Config Card */}
         <div className="bg-slate-900 text-white rounded-2xl border border-slate-800 p-3.5 sm:p-4 shadow-sm flex flex-col xl:flex-row xl:items-center justify-between gap-3">
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-xl bg-teal-500/20 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0 mt-0.5">
               <Bell className="w-4 h-4" />
             </div>
             <div className="text-xs space-y-1">
-              <div className="font-extrabold text-teal-300 flex items-center gap-1.5 flex-wrap">
-                <span>🔔 Aviso Automático de Próximo Vencimiento en las Tiendas</span>
+              <div className="font-extrabold text-teal-300 flex items-center gap-2 flex-wrap">
+                <span>🔔 Avisos de Corte y 🤖 Suspensión Automática por Mora</span>
+                <span
+                  className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                    isAutoSuspendEnabled
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {isAutoSuspendEnabled
+                    ? `Auto-Corte Activo (${gracePeriodDays}d gracia)`
+                    : 'Auto-Corte Manual'}
+                </span>
               </div>
               <p className="text-slate-300 leading-relaxed">
-                Cuando a un cliente le falten <strong className="text-amber-300">{warningDaysThreshold} días o menos</strong> para su fecha de corte, le aparecerá un banner en la parte superior de su tienda con un botón directo a tu WhatsApp (<strong className="text-emerald-300">{saasGlobalConfig?.saasAdminPhone || 'Configura tu número →'}</strong>) para enviarte el comprobante de pago.
+                Avisa en la tienda <strong className="text-amber-300">{warningDaysThreshold} días antes</strong> del corte con tus cuentas bancarias y WhatsApp (<strong className="text-emerald-300">{saasGlobalConfig?.saasAdminPhone || 'Configura tu número →'}</strong>). Si no pagan tras <strong className="text-rose-300">{gracePeriodDays} días de gracia</strong>, el sistema bloquea el acceso automáticamente.
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {/* SaaS Admin WhatsApp & Warning Days Config */}
+            {/* SaaS Admin WhatsApp, Warning Days & Grace Days Config */}
             <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-2.5 text-[11px]">
               <div className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
-                Tu WhatsApp Cobros SaaS y Aviso Previo:
+                WhatsApp Cobros, Aviso Previo y Auto-Corte:
               </div>
               {!isEditingSaaSContact ? (
-                <div className="flex items-center gap-2 mt-0.5">
+                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                   <span className="font-mono font-black text-xs text-emerald-400">
                     {saasGlobalConfig?.saasAdminPhone
                       ? `+${saasGlobalConfig.saasAdminPhone}`
@@ -1033,13 +1571,19 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                   </span>
                   <span className="text-slate-500">•</span>
                   <span className="font-bold text-amber-300">
-                    Avisar {warningDaysThreshold} días antes
+                    Aviso: {warningDaysThreshold}d
+                  </span>
+                  <span className="text-slate-500">•</span>
+                  <span className="font-bold text-rose-300">
+                    Gracia: {gracePeriodDays}d
                   </span>
                   <button
                     type="button"
                     onClick={() => {
                       setTempSaaSPhone(saasGlobalConfig?.saasAdminPhone || '');
                       setTempWarningDays(String(saasGlobalConfig?.expiryWarningDays || 5));
+                      setTempAutoSuspend(saasGlobalConfig?.autoSuspendOverdue !== false);
+                      setTempGraceDays(String(saasGlobalConfig?.gracePeriodDays ?? 3));
                       setIsEditingSaaSContact(true);
                     }}
                     className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-300 cursor-pointer"
@@ -1048,27 +1592,46 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                   </button>
                 </div>
               ) : (
-                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                <div className="flex flex-wrap items-center gap-2 mt-1.5">
                   <input
                     type="text"
                     value={tempSaaSPhone}
                     onChange={(e) => setTempSaaSPhone(e.target.value)}
                     placeholder="Ej. 50499887766"
-                    className="w-32 px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs font-mono font-bold text-white"
+                    className="w-28 px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs font-mono font-bold text-white"
                     title="Tu número de WhatsApp con código de país (ej. 504...)"
                   />
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1" title="Días antes del corte para mostrar aviso">
+                    <span className="text-[10px] text-slate-400">Aviso:</span>
                     <input
                       type="number"
                       min="1"
                       max="30"
                       value={tempWarningDays}
                       onChange={(e) => setTempWarningDays(e.target.value)}
-                      className="w-14 px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs font-bold text-amber-300 text-center"
-                      title="Días de anticipación para mostrar el banner en la tienda"
+                      className="w-12 px-1.5 py-1 rounded bg-slate-900 border border-slate-700 text-xs font-bold text-amber-300 text-center"
                     />
-                    <span className="text-[10px] text-slate-400">días</span>
                   </div>
+                  <div className="flex items-center gap-1" title="Días de gracia después de vencer antes de auto-suspender">
+                    <span className="text-[10px] text-slate-400">Gracia:</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="30"
+                      value={tempGraceDays}
+                      onChange={(e) => setTempGraceDays(e.target.value)}
+                      className="w-12 px-1.5 py-1 rounded bg-slate-900 border border-slate-700 text-xs font-bold text-rose-300 text-center"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1 text-[10px] font-bold text-emerald-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={tempAutoSuspend}
+                      onChange={(e) => setTempAutoSuspend(e.target.checked)}
+                      className="rounded"
+                    />
+                    <span>Auto-Corte</span>
+                  </label>
                   <button
                     type="button"
                     onClick={handleSaveSaaSContactConfig}
@@ -1200,7 +1763,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             </div>
             <div className="min-w-0">
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                Mensualidad Activa
+                Mensualidad Activa (MRR)
               </div>
               <div className="text-sm sm:text-base font-black text-teal-700">
                 L. {stats.monthlyRevenue.toLocaleString('es-HN', { minimumFractionDigits: 2 })}
@@ -1251,9 +1814,16 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           {filteredCompanies.map((comp) => {
             const isPassVisible = !!visiblePasswords[comp.slug];
             const loginUrl = getCompanyLoginUrl(comp.slug);
-            const isSuspended = comp.status === 'suspended';
-            const isToggling = togglingSlug === comp.slug;
             const daysUntilBilling = getDaysUntilBilling(comp.nextBillingDate);
+            const isPastGraceAutoSuspended =
+              isAutoSuspendEnabled &&
+              comp.autoSuspend !== false &&
+              comp.slug !== 'gosen' &&
+              comp.plan !== 'vitalicio' &&
+              daysUntilBilling !== null &&
+              daysUntilBilling < -gracePeriodDays;
+            const isSuspended = comp.status === 'suspended' || isPastGraceAutoSuspended;
+            const isToggling = togglingSlug === comp.slug;
             const isExpiringSoon =
               !isSuspended &&
               daysUntilBilling !== null &&
@@ -1261,6 +1831,22 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             const paymentCount = Array.isArray(comp.paymentHistory)
               ? comp.paymentHistory.length
               : 0;
+
+            const tenantMetrics: TenantUsageMetrics = usageMetricsMap[
+              normalizeCompanySlug(comp.slug)
+            ] || {
+              companySlug: comp.slug,
+              productCount: 0,
+              userCount: 0,
+              monthlySalesCount: 0,
+              monthlySalesTotal: 0,
+              totalSalesCount: 0,
+              lastSaleTimestamp: null,
+            };
+
+            const prodLimit = Number(comp.maxProducts) || 0;
+            const prodPercent =
+              prodLimit > 0 ? Math.min(100, Math.round((tenantMetrics.productCount / prodLimit) * 100)) : 0;
 
             return (
               <div
@@ -1322,7 +1908,10 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       </>
                     ) : (
                       <>
-                        <AlertTriangle className="w-3 h-3 text-rose-600" /> EN MORA (Bloqueado)
+                        <AlertTriangle className="w-3 h-3 text-rose-600" />{' '}
+                        {isPastGraceAutoSuspended && comp.status !== 'suspended'
+                          ? 'AUTO-BLOQUEADO MORA'
+                          : 'EN MORA (Bloqueado)'}
                       </>
                     )}
                   </span>
@@ -1334,14 +1923,17 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                     <div className="flex items-center gap-2 min-w-0">
                       <Lock className="w-4 h-4 text-rose-600 shrink-0" />
                       <span className="font-bold truncate">
-                        {comp.moraReason || 'Acceso bloqueado por mora / falta de pago'}
+                        {comp.moraReason ||
+                          (isPastGraceAutoSuspended
+                            ? `Auto-suspendido tras vencer período de gracia (${gracePeriodDays}d)`
+                            : 'Acceso bloqueado por mora / falta de pago')}
                       </span>
                     </div>
                     <button
                       type="button"
                       onClick={() => handleSendMoraNoticeWhatsApp(comp)}
                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-700 hover:bg-rose-800 text-white font-bold text-[11px] shrink-0 cursor-pointer"
-                      title="Enviar aviso de suspensión por mora al WhatsApp del cliente"
+                      title="Enviar aviso de suspensión por mora + tus cuentas bancarias al WhatsApp del cliente"
                     >
                       <WhatsAppIcon className="w-3 h-3" />
                       <span>Aviso Mora</span>
@@ -1356,7 +1948,10 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       <Clock className="w-4 h-4 text-amber-700 shrink-0" />
                       <span className="font-bold truncate">
                         {daysUntilBilling < 0
-                          ? `Fecha de corte venció hace ${Math.abs(daysUntilBilling)} días (${formatShortDateEs(comp.nextBillingDate)})`
+                          ? `Venció hace ${Math.abs(daysUntilBilling)}d (En días de gracia: quedan ${Math.max(
+                              0,
+                              gracePeriodDays - Math.abs(daysUntilBilling)
+                            )}d)`
                           : daysUntilBilling === 0
                           ? `¡Vence HOY! (${formatShortDateEs(comp.nextBillingDate)})`
                           : `Suscripción vence en ${daysUntilBilling} ${daysUntilBilling === 1 ? 'día' : 'días'} (${formatShortDateEs(comp.nextBillingDate)})`}
@@ -1366,13 +1961,73 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       type="button"
                       onClick={() => handleSendExpiryReminderWhatsApp(comp, daysUntilBilling)}
                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-bold text-[11px] shrink-0 cursor-pointer"
-                      title="Enviar recordatorio de pago por WhatsApp"
+                      title="Enviar recordatorio de pago + cuentas bancarias por WhatsApp"
                     >
                       <WhatsAppIcon className="w-3 h-3" />
                       <span>Recordar Pago</span>
                     </button>
                   </div>
                 )}
+
+                {/* #3 LIVE CLIENT HEALTH & CONSUMPTION MONITOR STRIP */}
+                <div className="p-2.5 rounded-xl bg-slate-900 text-white border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="font-extrabold text-teal-300 flex items-center gap-1 uppercase tracking-wider text-[10px]">
+                      <Activity className="w-3.5 h-3.5 text-teal-400" />
+                      Salud y Consumo en Vivo
+                    </span>
+                    <span className="text-[10px] text-slate-300 font-semibold">
+                      Últ. venta:{' '}
+                      <strong className="text-emerald-300">
+                        {formatRelativeActivityEs(tenantMetrics.lastSaleTimestamp)}
+                      </strong>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-xs tabular-nums">
+                    <div className="bg-slate-950/90 p-2 rounded-lg border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-semibold">Inventario</div>
+                      <div className="font-black text-white mt-0.5">
+                        {tenantMetrics.productCount}
+                        <span className="text-[10px] text-slate-400 font-normal">
+                          /{prodLimit > 0 ? prodLimit : '∞'}
+                        </span>
+                      </div>
+                      {prodLimit > 0 && (
+                        <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden mt-1">
+                          <div
+                            className={`h-full rounded-full ${
+                              prodPercent >= 90
+                                ? 'bg-rose-500'
+                                : prodPercent >= 75
+                                ? 'bg-amber-400'
+                                : 'bg-emerald-400'
+                            }`}
+                            style={{ width: `${prodPercent}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-slate-950/90 p-2 rounded-lg border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-semibold">Colaboradores</div>
+                      <div className="font-black text-white mt-0.5">
+                        {tenantMetrics.userCount}
+                        <span className="text-[10px] text-slate-400 font-normal">
+                          /{comp.maxUsers && comp.maxUsers > 0 ? comp.maxUsers : '∞'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-950/90 p-2 rounded-lg border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-semibold">Ventas del Mes</div>
+                      <div className="font-black text-emerald-400 mt-0.5 truncate">
+                        {tenantMetrics.monthlySalesCount} (L.{' '}
+                        {Math.round(tenantMetrics.monthlySalesTotal).toLocaleString('es-HN')})
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
                 {/* Middle Row: Credentials & Subscription Details */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs tabular-nums">
@@ -1409,12 +2064,16 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       Próximo Corte
                     </span>
                     <div className="font-bold text-slate-800 mt-0.5 truncate">
-                      {comp.nextBillingDate ? formatShortDateEs(comp.nextBillingDate) : comp.plan === 'vitalicio' ? 'Vitalicio' : 'Sin fecha'}
+                      {comp.nextBillingDate
+                        ? formatShortDateEs(comp.nextBillingDate)
+                        : comp.plan === 'vitalicio'
+                        ? 'Vitalicio'
+                        : 'Sin fecha'}
                     </div>
                   </div>
                 </div>
 
-                {/* Enabled Modules, Plan Limits & Special Features Strip */}
+                {/* Enabled Modules, Plan Limits & Quick Tools Strip */}
                 <div className="p-2.5 rounded-xl bg-teal-50/50 border border-teal-200/70 flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                     <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-teal-900 bg-white px-2 py-0.5 rounded-md border border-teal-200">
@@ -1426,20 +2085,6 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       </span>
                     </span>
 
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-white px-2 py-0.5 rounded-md border border-slate-200">
-                      <Package className="w-3 h-3 text-emerald-600" />
-                      <span>
-                        Prod: {comp.maxProducts && comp.maxProducts > 0 ? `${comp.maxProducts} máx` : 'Ilimitado'}
-                      </span>
-                    </span>
-
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-white px-2 py-0.5 rounded-md border border-slate-200">
-                      <Users className="w-3 h-3 text-indigo-600" />
-                      <span>
-                        Colab: {comp.maxUsers && comp.maxUsers > 0 ? `${comp.maxUsers} máx` : 'Ilimitado'}
-                      </span>
-                    </span>
-
                     {(comp.enableDeliveryDvolada ?? comp.slug === 'gosen') && (
                       <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-orange-100 text-orange-800 border border-orange-200 inline-flex items-center gap-1">
                         <Truck className="w-3 h-3" /> D&apos;VOLADA
@@ -1447,7 +2092,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
                     <button
                       type="button"
                       onClick={() => openPaymentModal(comp)}
@@ -1455,17 +2100,42 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       title="Registrar pago de suscripción y generar recibo en PDF o WhatsApp"
                     >
                       <Receipt className="w-3 h-3" />
-                      <span>Pagos / Recibo ({paymentCount})</span>
+                      <span>Pagos ({paymentCount})</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => openPermissionsModal(comp)}
                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-[11px] transition-colors cursor-pointer shadow-2xs"
-                      title="Configurar funciones habilitadas y límites de productos/usuarios"
+                      title="Configurar funciones habilitadas y paquetes de plan"
                     >
                       <Sliders className="w-3 h-3" />
-                      <span>Permisos / Límites</span>
+                      <span>Plan / Límites</span>
+                    </button>
+
+                    {comp.slug !== 'gosen' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCloneTargetCompany(comp);
+                          setCloneMode('template');
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 font-extrabold text-[11px] transition-colors cursor-pointer"
+                        title="Cargar plantilla de rubro o clonar artículos de otra tienda"
+                      >
+                        <Layers className="w-3 h-3 text-indigo-600" />
+                        <span>Plantilla / Clonar</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setBackupCompany(comp)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-[11px] transition-colors cursor-pointer"
+                      title="Descargar copia de seguridad completa (JSON o Excel CSV) de esta tienda"
+                    >
+                      <Database className="w-3 h-3 text-teal-300" />
+                      <span>Respaldo</span>
                     </button>
                   </div>
                 </div>
@@ -1525,17 +2195,17 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       disabled={isToggling}
                       onClick={() => handleToggleMoraStatus(comp)}
                       className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-extrabold text-xs transition-all cursor-pointer ${
-                        !isSuspended
+                        comp.status !== 'suspended'
                           ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
                           : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
                       }`}
                       title={
-                        !isSuspended
+                        comp.status !== 'suspended'
                           ? 'Bloquear el acceso a la aplicación para este cliente por mora / falta de pago'
                           : 'Reactivar el acceso a la aplicación para este cliente'
                       }
                     >
-                      {!isSuspended ? (
+                      {comp.status !== 'suspended' ? (
                         <>
                           <Ban className="w-3.5 h-3.5" />
                           <span>{isToggling ? 'Aplicando...' : 'Deshabilitar por Mora'}</span>
@@ -1577,6 +2247,572 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         </div>
       </div>
 
+      {/* #4 SAAS OWNER BANK ACCOUNTS MODAL (Mis Cuentas de Cobro) */}
+      {showBankAccountsModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl overflow-hidden my-auto">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center justify-center shrink-0">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="font-black text-white text-sm sm:text-base">
+                    Mis Cuentas Bancarias para Cobros de Suscripción SaaS
+                  </h2>
+                  <p className="text-[11px] text-slate-300">
+                    Estas cuentas aparecerán automáticamente a tus clientes cuando estén por vencer o suspendidos por mora para que te transfieran rápido.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBankAccountsModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-5 max-h-[80vh] overflow-y-auto">
+              <form
+                onSubmit={handleAddBankAccount}
+                className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200 space-y-3"
+              >
+                <div className="text-xs font-black uppercase tracking-wide text-emerald-950 flex items-center gap-1.5">
+                  <Plus className="w-4 h-4 text-emerald-600" />
+                  <span>Agregar Cuenta Bancaria o Billetera Móvil</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-extrabold uppercase text-slate-700 mb-1">
+                      Banco / Entidad *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={bankName}
+                      onChange={(e) => setBankName(e.target.value)}
+                      placeholder="Ej. BAC Credomatic, Banco Atlántida, Ficohsa, Tigo Money"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-extrabold uppercase text-slate-700 mb-1">
+                      N° de Cuenta / Teléfono *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={accountNumber}
+                      onChange={(e) => setAccountNumber(e.target.value)}
+                      placeholder="Ej. 745892104"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-xs font-black text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-extrabold uppercase text-slate-700 mb-1">
+                      Tipo de Cuenta
+                    </label>
+                    <select
+                      value={accountType}
+                      onChange={(e) => setAccountType(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-900"
+                    >
+                      <option value="Ahorro Lempiras">Ahorro Lempiras</option>
+                      <option value="Cheques Lempiras">Cheques Lempiras</option>
+                      <option value="Billetera Móvil">Billetera Móvil (Tigo/Tengo)</option>
+                      <option value="Dólares">Cuenta en Dólares</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-extrabold uppercase text-slate-700 mb-1">
+                      Nombre del Titular *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={holderName}
+                      onChange={(e) => setHolderName(e.target.value)}
+                      placeholder="Ej. Luis Enamorado"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-extrabold uppercase text-slate-700 mb-1">
+                      DNI / RTN (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={identidadOrRtn}
+                      onChange={(e) => setIdentidadOrRtn(e.target.value)}
+                      placeholder="Ej. 0501-1990-12345"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-xs text-slate-800"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={isSavingBank}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs cursor-pointer"
+                  >
+                    {isSavingBank ? 'Guardando...' : 'Agregar Cuenta de Cobro'}
+                  </button>
+                </div>
+              </form>
+
+              <div className="space-y-2">
+                <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+                  Cuentas Registradas ({(saasGlobalConfig?.bankAccounts || []).length})
+                </div>
+                {!saasGlobalConfig?.bankAccounts || saasGlobalConfig.bankAccounts.length === 0 ? (
+                  <div className="p-6 text-center bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-500">
+                    Aún no has agregado cuentas bancarias. Agrégalas arriba para que tus clientes las vean al renovar.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {saasGlobalConfig.bankAccounts.map((b) => (
+                      <div
+                        key={b.id}
+                        className="p-3.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-black text-slate-900 text-sm">{b.bankName}</span>
+                            <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold">
+                              {b.accountType}
+                            </span>
+                          </div>
+                          <div className="font-mono font-black text-emerald-700 text-sm mt-0.5">
+                            N° {b.accountNumber}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            Titular: <strong>{b.holderName}</strong>
+                            {b.identidadOrRtn ? ` • ID/RTN: ${b.identidadOrRtn}` : ''}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteBankAccount(b.id)}
+                          className="p-2 rounded-lg text-rose-600 hover:bg-rose-50 cursor-pointer"
+                          title="Eliminar cuenta"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* #7 SAAS OWNER FINANCIAL DASHBOARD MODAL (Mis Finanzas SaaS) */}
+      {showSaaSFinancesModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-4xl overflow-hidden my-auto">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 flex items-center justify-center shrink-0">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="font-black text-white text-sm sm:text-base">
+                    Reporte Financiero del Propietario SaaS (Tus Ingresos por Suscripciones)
+                  </h2>
+                  <p className="text-[11px] text-slate-300">
+                    Resumen ejecutivo de tus cobros mensuales, proyección anual, cartera por cobrar y evolución de ingresos.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSaaSFinancesModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-5 max-h-[82vh] overflow-y-auto">
+              {/* Top Financial KPIs */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 tabular-nums">
+                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200">
+                  <div className="text-[10px] font-extrabold uppercase text-emerald-800">
+                    Ingreso Mensual Activo (MRR)
+                  </div>
+                  <div className="text-xl font-black text-emerald-900 mt-1">
+                    L. {stats.monthlyRevenue.toLocaleString('es-HN', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className="text-[11px] text-emerald-700 mt-0.5">
+                    Proyección Anual: L. {(stats.monthlyRevenue * 12).toLocaleString('es-HN')}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-indigo-50 border border-indigo-200">
+                  <div className="text-[10px] font-extrabold uppercase text-indigo-800">
+                    Cobrado en Este Mes
+                  </div>
+                  <div className="text-xl font-black text-indigo-900 mt-1">
+                    L. {stats.collectedThisMonth.toLocaleString('es-HN', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className="text-[11px] text-indigo-700 mt-0.5">
+                    Según recibos emitidos este mes
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200">
+                  <div className="text-[10px] font-extrabold uppercase text-amber-900">
+                    Total Histórico Recaudado
+                  </div>
+                  <div className="text-xl font-black text-amber-950 mt-1">
+                    L. {stats.totalHistoricalCollected.toLocaleString('es-HN', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className="text-[11px] text-amber-800 mt-0.5">
+                    {allPaymentsList.length} recibos registrados
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200">
+                  <div className="text-[10px] font-extrabold uppercase text-rose-800">
+                    Cartera Retenida en Mora
+                  </div>
+                  <div className="text-xl font-black text-rose-900 mt-1">
+                    L. {stats.atRiskMoraAmount.toLocaleString('es-HN', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className="text-[11px] text-rose-700 mt-0.5">
+                    {stats.suspended} cliente(s) suspendido(s)
+                  </div>
+                </div>
+              </div>
+
+              {/* 6-Month Bar Chart */}
+              <div className="p-4 rounded-2xl bg-slate-900 text-white border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-teal-300">
+                    📊 Evolución de Cobros SaaS (Últimos 6 Meses)
+                  </span>
+                </div>
+                <div className="grid grid-cols-6 gap-2.5 pt-2 items-end h-36">
+                  {stats.monthlyBreakdown.map((m) => {
+                    const maxVal = Math.max(
+                      1,
+                      ...stats.monthlyBreakdown.map((item) => item.total)
+                    );
+                    const heightPct = Math.max(8, Math.round((m.total / maxVal) * 100));
+                    return (
+                      <div key={m.label} className="flex flex-col items-center gap-1.5 h-full justify-end">
+                        <div className="text-[10px] font-bold text-emerald-300 tabular-nums">
+                          L.{Math.round(m.total).toLocaleString('es-HN')}
+                        </div>
+                        <div className="w-full bg-slate-800 rounded-t-lg flex items-end h-20 overflow-hidden">
+                          <div
+                            className="w-full bg-gradient-to-t from-teal-600 to-emerald-400 rounded-t-lg transition-all"
+                            style={{ height: `${heightPct}%` }}
+                          />
+                        </div>
+                        <div className="text-[10px] font-bold text-slate-400">{m.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Upcoming Renewals Agenda */}
+              <div className="space-y-2">
+                <div className="text-xs font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                  <Calendar className="w-4 h-4 text-indigo-600" />
+                  <span>Agenda de Próximos Cortes y Renovaciones</span>
+                </div>
+                <div className="space-y-2">
+                  {companies
+                    .filter((c) => c.slug !== 'gosen' && c.plan !== 'vitalicio')
+                    .sort((a, b) => {
+                      const da = getDaysUntilBilling(a.nextBillingDate) ?? 999;
+                      const db = getDaysUntilBilling(b.nextBillingDate) ?? 999;
+                      return da - db;
+                    })
+                    .map((c) => {
+                      const d = getDaysUntilBilling(c.nextBillingDate);
+                      return (
+                        <div
+                          key={c.slug}
+                          className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                        >
+                          <div>
+                            <div className="font-black text-slate-900">
+                              {c.name}{' '}
+                              <span className="font-mono text-slate-500 text-[11px]">
+                                ({c.slug})
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              Corte: <strong>{formatShortDateEs(c.nextBillingDate)}</strong> •{' '}
+                              {d === null
+                                ? 'Sin fecha'
+                                : d < 0
+                                ? `Vencido hace ${Math.abs(d)} días`
+                                : d === 0
+                                ? 'Vence HOY'
+                                : `En ${d} días`}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-black text-slate-900">
+                              L. {Number(c.price || 0).toLocaleString('es-HN', { minimumFractionDigits: 2 })}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleSendExpiryReminderWhatsApp(c, d ?? 0)}
+                              className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <WhatsAppIcon className="w-3.5 h-3.5" />
+                              <span>Cobrar WhatsApp</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowSaaSFinancesModal(false);
+                                openPaymentModal(c);
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] cursor-pointer"
+                            >
+                              Registrar Pago
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* #5 CLONE CATALOG / LOAD INDUSTRY STARTER TEMPLATE MODAL */}
+      {cloneTargetCompany && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-xl overflow-hidden my-auto">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 flex items-center justify-center shrink-0">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="font-black text-white text-sm sm:text-base">
+                    Clonador y Plantillas Iniciales — {cloneTargetCompany.name}
+                  </h2>
+                  <p className="text-[11px] text-slate-300">
+                    Entrega la tienda lista para operar cargando un catálogo base por rubro o clonando productos de otra tienda.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCloneTargetCompany(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setCloneMode('template')}
+                  className={`py-2 rounded-lg text-xs font-extrabold cursor-pointer transition-all ${
+                    cloneMode === 'template'
+                      ? 'bg-white text-indigo-900 shadow-2xs'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  📦 Plantilla por Rubro
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCloneMode('existing')}
+                  className={`py-2 rounded-lg text-xs font-extrabold cursor-pointer transition-all ${
+                    cloneMode === 'existing'
+                      ? 'bg-white text-indigo-900 shadow-2xs'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  🧬 Clonar de Otra Tienda
+                </button>
+              </div>
+
+              {cloneMode === 'template' ? (
+                <div className="space-y-2.5">
+                  <label className="block text-xs font-extrabold text-slate-700">
+                    Selecciona el giro comercial para cargar categorías y productos ejemplo:
+                  </label>
+                  {(
+                    Object.keys(STARTER_INDUSTRY_TEMPLATES) as Array<
+                      keyof typeof STARTER_INDUSTRY_TEMPLATES
+                    >
+                  ).map((key) => {
+                    const tpl = STARTER_INDUSTRY_TEMPLATES[key];
+                    const selected = selectedTemplateKey === key;
+                    return (
+                      <label
+                        key={key}
+                        className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                          selected
+                            ? 'bg-indigo-50/70 border-indigo-400 text-indigo-950'
+                            : 'bg-white border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="starterTpl"
+                          checked={selected}
+                          onChange={() => setSelectedTemplateKey(key)}
+                          className="mt-1"
+                        />
+                        <div className="text-xs">
+                          <div className="font-black">{tpl.label}</div>
+                          <div className="text-slate-500 text-[11px]">{tpl.description}</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-extrabold text-slate-700 mb-1">
+                      Tienda de Origen (de donde se copiarán los productos):
+                    </label>
+                    <select
+                      value={sourceCompanySlug}
+                      onChange={(e) => setSourceCompanySlug(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900"
+                    >
+                      {companies
+                        .filter((c) => c.slug !== cloneTargetCompany.slug)
+                        .map((c) => (
+                          <option key={c.slug} value={c.slug}>
+                            {c.name} (Código: {c.slug})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                    <label className="flex items-center gap-2 font-bold text-slate-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={cloneIncludePrices}
+                        onChange={(e) => setCloneIncludePrices(e.target.checked)}
+                      />
+                      <span>Conservar precios y costos de los artículos</span>
+                    </label>
+                    <label className="flex items-center gap-2 font-bold text-slate-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={cloneIncludeStock}
+                        onChange={(e) => setCloneIncludeStock(e.target.checked)}
+                      />
+                      <span>Copiar también las cantidades en stock (Si se desmarca, inician en 0)</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setCloneTargetCompany(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isCloningCatalog}
+                  onClick={handleExecuteCloneOrTemplate}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs cursor-pointer disabled:opacity-50"
+                >
+                  {isCloningCatalog
+                    ? 'Cargando catálogo...'
+                    : cloneMode === 'template'
+                    ? 'Cargar Plantilla Ahora'
+                    : 'Clonar Catálogo Ahora'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* #6 CLIENT FULL BACKUP / EXPORT MODAL */}
+      {backupCompany && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md overflow-hidden p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">
+                    Respaldo Completo — {backupCompany.name}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Descarga toda la información de la empresa <code className="font-mono font-bold">{backupCompany.slug}</code>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBackupCompany(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5">
+              <button
+                type="button"
+                disabled={isExportingBackup}
+                onClick={() => handleDownloadClientBackupCSV(backupCompany)}
+                className="w-full p-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-between cursor-pointer shadow-xs"
+              >
+                <span className="flex items-center gap-2">
+                  <Download className="w-4 h-4" />
+                  <span>Descargar Inventario + Ventas en Excel (CSV)</span>
+                </span>
+                <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded">Recomendado</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isExportingBackup}
+                onClick={() => handleDownloadClientBackupJSON(backupCompany)}
+                className="w-full p-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs flex items-center justify-between cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-teal-400" />
+                  <span>Descargar Copia de Seguridad Total (JSON)</span>
+                </span>
+                <span className="text-[10px] bg-white/15 px-2 py-0.5 rounded">Base Completa</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Quick Permissions & Plan Limits Modal */}
       {permissionsCompany && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
@@ -1611,56 +2847,28 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                   <div>
                     <div className="text-xs font-black text-indigo-950 flex items-center gap-1.5 uppercase tracking-wide">
                       <Sparkles className="w-4 h-4 text-indigo-600" />
-                      <span>Límites por Plan (Productos y Colaboradores Máximos)</span>
+                      <span>Paquetes Rápidos y Límites por Plan</span>
                     </div>
                     <p className="text-[11px] text-slate-600">
                       Usa <strong>0</strong> para ilimitado. Cuando el cliente llegue al tope, el sistema le pedirá subir de plan.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPermMaxProducts('200');
-                        setPermMaxUsers('2');
-                        setPermModules(['dashboard', 'sales', 'inventory', 'price-checker', 'settings']);
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-extrabold cursor-pointer"
-                    >
-                      Plan Básico (200 Prod / 2 Colab)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPermMaxProducts('1000');
-                        setPermMaxUsers('5');
-                        setPermModules([
-                          'dashboard',
-                          'sales',
-                          'inventory',
-                          'price-checker',
-                          'catalog',
-                          'purchases',
-                          'suppliers',
-                          'users',
-                          'settings',
-                        ]);
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-950 border border-indigo-300 text-[11px] font-extrabold cursor-pointer"
-                    >
-                      Plan Comercial (1,000 Prod / 5 Colab)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPermMaxProducts('0');
-                        setPermMaxUsers('0');
-                        setPermModules([...ALL_COMPANY_MODULES]);
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold cursor-pointer"
-                    >
-                      Plan Pro (Ilimitado + Todo)
-                    </button>
+                    {SAAS_PLAN_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => {
+                          setPermMaxProducts(String(preset.maxProducts));
+                          setPermMaxUsers(String(preset.maxUsers));
+                          setPermModules([...preset.modules]);
+                          setPermDeliveryDvolada(preset.enableDvolada);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-extrabold cursor-pointer"
+                      >
+                        {preset.name}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -1738,26 +2946,24 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                     return (
                       <label
                         key={mod.id}
-                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-start gap-2.5 select-none ${
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-start gap-3 select-none ${
                           isChecked
                             ? 'bg-emerald-50/70 border-emerald-400 text-slate-900 shadow-2xs'
-                            : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                            : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => handleToggleQuickPermModule(mod.id)}
-                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer shrink-0"
+                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
                         />
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 font-extrabold text-xs text-slate-900">
-                            <Icon className={`w-4 h-4 shrink-0 ${isChecked ? 'text-emerald-600' : 'text-slate-400'}`} />
+                          <div className="flex items-center gap-1.5 font-extrabold text-xs">
+                            <Icon className={`w-3.5 h-3.5 ${isChecked ? 'text-emerald-600' : 'text-slate-400'}`} />
                             <span className="truncate">{mod.label}</span>
                           </div>
-                          <p className="text-[11px] text-slate-500 leading-tight mt-0.5">
-                            {mod.desc}
-                          </p>
+                          <p className="text-[10px] text-slate-500 mt-0.5 leading-tight">{mod.desc}</p>
                         </div>
                       </label>
                     );
@@ -1765,40 +2971,43 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                 </div>
               </div>
 
-              {/* Special Add-On: Delivery D'VOLADA */}
-              <div className="pt-2 border-t border-slate-200">
-                <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500 mb-2">
-                  Funciones Especiales / Integraciones Exclusivas
-                </div>
+              {/* Special Integration Toggle: Delivery D'VOLADA */}
+              <div className="pt-2 border-t border-slate-100">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 block mb-2">
+                  Funciones Especiales de Catálogo Digital
+                </span>
                 <label
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-start justify-between gap-3 select-none ${
+                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
                     permDeliveryDvolada
-                      ? 'bg-orange-50/80 border-orange-400 text-slate-900'
-                      : 'bg-slate-50 border-slate-200 text-slate-600'
+                      ? 'bg-orange-50/80 border-orange-300 text-slate-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-500'
                   }`}
                 >
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={permDeliveryDvolada}
-                      onChange={(e) => setPermDeliveryDvolada(e.target.checked)}
-                      className="mt-1 rounded text-orange-600 focus:ring-orange-500 w-4 h-4 cursor-pointer shrink-0"
-                    />
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                        permDeliveryDvolada
+                          ? 'bg-orange-500 text-white'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <Truck className="w-5 h-5" />
+                    </div>
                     <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-extrabold text-xs text-slate-900 flex items-center gap-1.5">
-                          <Truck className="w-4 h-4 text-orange-600" />
-                          Mostrar Convenio de Delivery D&apos;VOLADA en Catálogo Digital
-                        </span>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-orange-100 text-orange-800 border border-orange-200">
-                          Por defecto solo Tienda Gosén
-                        </span>
+                      <div className="font-black text-xs text-slate-900">
+                        Integración de Tarifas y Envíos con Delivery D&apos;VOLADA
                       </div>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Si está desactivado, la tienda del cliente tendrá envío estándar a domicilio sin mostrar el banner ni el logo de D&apos;VOLADA.
+                      <p className="text-[11px] text-slate-500">
+                        Muestra el cotizador de envío a domicilio D&apos;VOLADA dentro del catálogo digital de esta tienda.
                       </p>
                     </div>
                   </div>
+                  <input
+                    type="checkbox"
+                    checked={permDeliveryDvolada}
+                    onChange={(e) => setPermDeliveryDvolada(e.target.checked)}
+                    className="rounded text-orange-600 focus:ring-orange-500 w-5 h-5 cursor-pointer shrink-0"
+                  />
                 </label>
               </div>
             </div>
@@ -2139,7 +3348,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             <div className="p-5 max-h-[75vh] overflow-y-auto space-y-2.5">
               {allPaymentsList.length === 0 ? (
                 <div className="p-10 text-center text-slate-500 text-xs">
-                  Aún no se han registrado pagos de suscripción. Usa el botón &ldquo;Pagos / Recibo&rdquo; en cualquier cliente para registrar su pago.
+                  Aún no se han registrado pagos de suscripción. Usa el botón &ldquo;Pagos&rdquo; en cualquier cliente para registrar su pago.
                 </div>
               ) : (
                 allPaymentsList.map(({ payment, company }) => (
@@ -2452,6 +3661,32 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             </div>
 
             <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+              {/* #2 1-Click Commercial Plan Presets */}
+              <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2">
+                <div className="text-xs font-black text-indigo-950 flex items-center gap-1.5 uppercase tracking-wide">
+                  <Sparkles className="w-4 h-4 text-indigo-600" />
+                  <span>Seleccionar Paquete de Plan con 1 Clic (Precios + Límites + Módulos)</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {SAAS_PLAN_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => applyPlanPresetToForm(preset)}
+                      className="p-2.5 rounded-xl bg-white hover:bg-indigo-100/60 border border-indigo-200 text-left transition-all cursor-pointer"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-black text-xs text-slate-900">{preset.name}</span>
+                        <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-900 font-extrabold text-[10px]">
+                          L. {preset.price}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">{preset.desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-extrabold uppercase text-slate-600 mb-1">
@@ -2600,47 +3835,43 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                 </div>
               </div>
 
+              {/* Auto-Suspend Checkbox for this client */}
+              <label className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs cursor-pointer">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={autoSuspendClient}
+                    onChange={(e) => setAutoSuspendClient(e.target.checked)}
+                    className="rounded text-emerald-600"
+                  />
+                  <span className="font-bold text-slate-800">
+                    🤖 Suspender automáticamente si supera su fecha de corte + {gracePeriodDays} días de gracia
+                  </span>
+                </div>
+              </label>
+
+              {/* Starter Template Selection when Creating a New Client */}
+              {!editingCompany && (
+                <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200">
+                  <label className="block text-[11px] font-extrabold uppercase text-emerald-900 mb-1">
+                    📦 ¿Cargar Catálogo Inicial de Ejemplo al Crear la Tienda?
+                  </label>
+                  <select
+                    value={initialStarterTemplate}
+                    onChange={(e) => setInitialStarterTemplate(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-emerald-300 bg-white text-xs font-bold text-slate-900"
+                  >
+                    <option value="none">Iniciar con inventario en blanco (0 artículos)</option>
+                    <option value="ropa_calzado">👕 Plantilla Ropa, Boutique y Calzado</option>
+                    <option value="pulperia_abarrotes">🛒 Plantilla Pulpería, Mini Súper y Abarrotería</option>
+                    <option value="ferreteria_repuestos">🔧 Plantilla Ferretería, Repuestos y Herramientas</option>
+                    <option value="farmacia_cosmeticos">💄 Plantilla Cosméticos, Perfumería y Variedades</option>
+                  </select>
+                </div>
+              )}
+
               {/* Plan Quotas (Max Products & Max Users) */}
               <div className="p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-200 space-y-2.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-black text-indigo-950 uppercase tracking-wide flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                    Límites de Capacidad por Plan (0 = Ilimitado)
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMaxProducts('200');
-                        setMaxUsers('2');
-                      }}
-                      className="px-2 py-0.5 rounded bg-white border border-indigo-200 text-indigo-900 text-[10px] font-extrabold cursor-pointer"
-                    >
-                      Básico (200 prod / 2 colab)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMaxProducts('1000');
-                        setMaxUsers('5');
-                      }}
-                      className="px-2 py-0.5 rounded bg-white border border-indigo-200 text-indigo-900 text-[10px] font-extrabold cursor-pointer"
-                    >
-                      Comercial (1000 / 5)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMaxProducts('0');
-                        setMaxUsers('0');
-                      }}
-                      className="px-2 py-0.5 rounded bg-emerald-600 text-white text-[10px] font-extrabold cursor-pointer"
-                    >
-                      Pro Ilimitado
-                    </button>
-                  </div>
-                </div>
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[10px] font-extrabold uppercase text-slate-600 mb-1">
