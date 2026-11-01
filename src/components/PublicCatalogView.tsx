@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Product, StoreSettings } from '../types';
 import { WhatsAppIcon } from './SalesView';
 import { PublicCatalogGridSkeleton } from './SkeletonLoaders';
+import { AdaptiveImage } from './AdaptiveImage';
 import {
   ShoppingBag,
   Search,
@@ -277,11 +278,18 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4 text-center sm:text-left">
           <div className="flex flex-col sm:flex-row items-center gap-4">
             {effectiveLogo ? (
-              <div className="w-full sm:w-auto max-w-xs sm:max-w-md h-20 sm:h-28 flex items-center justify-center sm:justify-start overflow-hidden shrink-0">
-                <img
+              <div className="w-full sm:w-auto max-w-[240px] sm:max-w-[300px] h-20 sm:h-24 flex items-center justify-center sm:justify-start overflow-hidden shrink-0 bg-white rounded-2xl border border-slate-100 p-1.5 shadow-2xs">
+                <AdaptiveImage
                   src={effectiveLogo}
                   alt={displayStoreName}
-                  className="h-full w-full object-contain rounded-xl mix-blend-multiply drop-shadow-xs"
+                  variant="logo"
+                  className="w-full h-full"
+                  imgClassName="rounded-xl drop-shadow-2xs"
+                  fallback={
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 shrink-0">
+                      <Store className="w-9 h-9" />
+                    </div>
+                  }
                 />
               </div>
             ) : (
@@ -480,22 +488,23 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                   key={product.code}
                   className="bg-white border border-slate-200/90 rounded-2xl p-3 flex flex-col justify-between transition-all hover:border-emerald-500/60 hover:shadow-md shadow-2xs group relative"
                 >
-                  {/* Image / Placeholder */}
+                  {/* Image / Placeholder (Smart Adaptive Container) */}
                   <div className="aspect-square w-full rounded-xl bg-slate-50 overflow-hidden relative mb-2.5 flex items-center justify-center border border-slate-200/80">
-                    {product.img ? (
-                      <img
-                        src={product.img}
-                        alt={product.name}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center justify-center text-slate-400 p-2 text-center">
-                        <ShoppingBag className="w-8 h-8 mb-1 stroke-1 text-slate-300" />
-                        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
-                          {displayStoreName}
-                        </span>
-                      </div>
-                    )}
+                    <AdaptiveImage
+                      src={product.img}
+                      alt={product.name}
+                      variant="product"
+                      enableZoom
+                      hoverScale
+                      fallback={
+                        <div className="flex flex-col items-center justify-center text-slate-400 p-2 text-center">
+                          <ShoppingBag className="w-8 h-8 mb-1 stroke-1 text-slate-300" />
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                            {displayStoreName}
+                          </span>
+                        </div>
+                      }
+                    />
 
                     {/* Stock badge */}
                     {stockNum > 0 ? (

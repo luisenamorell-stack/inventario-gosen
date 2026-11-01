@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Product } from '../types';
 import { playSound } from '../utils/audio';
+import { AdaptiveImage } from './AdaptiveImage';
 import {
   Tag,
   Barcode,
@@ -361,18 +362,14 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                         className="w-full px-4 py-3 text-left hover:bg-blue-50/70 transition-colors flex items-center justify-between gap-3 cursor-pointer"
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          {item.img ? (
-                            <img
+                          <div className="w-11 h-11 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 border border-slate-200 shrink-0 overflow-hidden">
+                            <AdaptiveImage
                               src={item.img}
                               alt={item.name}
-                              referrerPolicy="no-referrer"
-                              className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0"
+                              variant="product"
+                              fallback={<Box className="w-5 h-5" />}
                             />
-                          ) : (
-                            <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 border border-slate-200 shrink-0">
-                              <Box className="w-5 h-5" />
-                            </div>
-                          )}
+                          </div>
                           <div className="min-w-0">
                             <p className="text-sm font-bold text-slate-800 truncate">
                               {item.name}
@@ -443,19 +440,17 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                 </button>
               </div>
 
-              {/* Image Preview */}
+              {/* Image Preview (Smart Adaptive Container) */}
               <div className="flex justify-center mb-4">
-                {selectedProduct.img ? (
-                  <img
+                <div className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-300 border border-slate-200 shadow-sm overflow-hidden">
+                  <AdaptiveImage
                     src={selectedProduct.img}
                     alt={selectedProduct.name}
-                    className="w-32 h-32 object-cover rounded-2xl shadow-sm border border-slate-200"
+                    variant="product"
+                    enableZoom
+                    fallback={<Box className="w-16 h-16" />}
                   />
-                ) : (
-                  <div className="w-32 h-32 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-300 border border-slate-200">
-                    <Box className="w-16 h-16" />
-                  </div>
-                )}
+                </div>
               </div>
 
               <p className="text-xs font-bold text-blue-500 uppercase tracking-widest mb-1">

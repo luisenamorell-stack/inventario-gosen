@@ -517,6 +517,7 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    const wasSuperAdmin = Boolean(userSession?.isSuperAdmin);
     if (userSession) {
       logActivityInFirestore(
         {
@@ -538,7 +539,7 @@ export const App: React.FC = () => {
       localStorage.removeItem('stockmaster_saas_owner_unlocked');
       const params = new URLSearchParams(window.location.search);
       const urlCompany = params.get('empresa') || params.get('tienda') || params.get('cliente');
-      if (!urlCompany) {
+      if (!urlCompany && wasSuperAdmin) {
         handleSelectCompanyContext('gosen');
       }
     } catch {}
@@ -1210,15 +1211,19 @@ export const App: React.FC = () => {
       await bulkSaveProductsToFirestore(normalizedProducts, newSuppliers, activeCompanyId);
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Usuario',
-        userRole: userSession?.role || 'admin',
-        action: `Carga masiva Excel (${productsToSave.length} artículos procesados)`,
-        module: 'inventory',
-        details: `Nuevos: ${summary.createdCount}, Actualizados: ${summary.updatedCount}, Modo: ${
-          summary.mode === 'add' ? 'Sumar al stock' : 'Reemplazar stock'
-        }`,
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: userSession?.userName || 'Usuario',
+          userRole: userSession?.role || 'admin',
+          action: `Carga masiva Excel (${productsToSave.length} artículos procesados)`,
+          module: 'inventory',
+          details: `Nuevos: ${summary.createdCount}, Actualizados: ${summary.updatedCount}, Modo: ${
+            summary.mode === 'add' ? 'Sumar al stock' : 'Reemplazar stock'
+          }`,
+        },
+        activeCompanyId
+      );
 
       showToast(
         `¡Carga masiva exitosa! ${summary.createdCount} nuevos y ${summary.updatedCount} actualizados en Firebase.`,
@@ -1241,19 +1246,23 @@ export const App: React.FC = () => {
 
       setInventory((prev) => {
         const next = prev.filter((p) => p.id !== id && (code ? p.code !== code : true));
-        setCachedInventory(next, Date.now());
+        setCachedInventory(next, Date.now(), activeCompanyId);
         return next;
       });
 
-      await deleteProductFromFirestore(id, code);
+      await deleteProductFromFirestore(id, code, activeCompanyId);
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Usuario',
-        userRole: userSession?.role || 'admin',
-        action: `Eliminó el producto "${itemToDelete?.name || id}" (${code || ''})`,
-        module: 'inventory',
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: userSession?.userName || 'Usuario',
+          userRole: userSession?.role || 'admin',
+          action: `Eliminó el producto "${itemToDelete?.name || id}" (${code || ''})`,
+          module: 'inventory',
+        },
+        activeCompanyId
+      );
 
       showToast('Artículo eliminado correctamente', 'info');
     } catch (err: any) {
@@ -1268,32 +1277,38 @@ export const App: React.FC = () => {
   const handleSaveSupplier = async (supplier: Supplier, oldName?: string) => {
     setIsSyncing(true);
     try {
+      const enrichedSupplier: Supplier = { ...supplier, companyId: activeCompanyId };
       setSuppliers((prev) => {
-        const index = prev.findIndex((s) => s.id === supplier.id);
-        const next = index >= 0 ? prev.map((s, i) => (i === index ? supplier : s)) : [...prev, supplier];
-        setCachedSuppliers(next);
+        const index = prev.findIndex((s) => s.id === enrichedSupplier.id);
+        const next =
+          index >= 0 ? prev.map((s, i) => (i === index ? enrichedSupplier : s)) : [...prev, enrichedSupplier];
+        setCachedSuppliers(next, activeCompanyId);
         return next;
       });
 
-      if (oldName && oldName !== supplier.name) {
+      if (oldName && oldName !== enrichedSupplier.name) {
         setInventory((prev) => {
           const nextInv = prev.map((item) =>
-            item.supplier === oldName ? { ...item, supplier: supplier.name.trim() } : item
+            item.supplier === oldName ? { ...item, supplier: enrichedSupplier.name.trim() } : item
           );
-          setCachedInventory(nextInv, Date.now());
+          setCachedInventory(nextInv, Date.now(), activeCompanyId);
           return nextInv;
         });
       }
 
-      await saveSupplierToFirestore(supplier, oldName, inventory);
+      await saveSupplierToFirestore(enrichedSupplier, oldName, inventory, activeCompanyId);
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Usuario',
-        userRole: userSession?.role || 'collaborator',
-        action: `Guardó proveedor "${supplier.name}"`,
-        module: 'suppliers',
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: userSession?.userName || 'Usuario',
+          userRole: userSession?.role || 'collaborator',
+          action: `Guardó proveedor "${enrichedSupplier.name}"`,
+          module: 'suppliers',
+        },
+        activeCompanyId
+      );
 
       showToast('Proveedor guardado y sincronizado', 'success');
     } catch (err: any) {
@@ -1310,18 +1325,22 @@ export const App: React.FC = () => {
       const supToDelete = suppliers.find((s) => s.id === id);
       setSuppliers((prev) => {
         const next = prev.filter((s) => s.id !== id);
-        setCachedSuppliers(next);
+        setCachedSuppliers(next, activeCompanyId);
         return next;
       });
-      await deleteSupplierFromFirestore(id, supToDelete?.name);
+      await deleteSupplierFromFirestore(id, supToDelete?.name, activeCompanyId);
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Usuario',
-        userRole: userSession?.role || 'admin',
-        action: `Eliminó el proveedor "${supToDelete?.name || id}"`,
-        module: 'suppliers',
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: userSession?.userName || 'Usuario',
+          userRole: userSession?.role || 'admin',
+          action: `Eliminó el proveedor "${supToDelete?.name || id}"`,
+          module: 'suppliers',
+        },
+        activeCompanyId
+      );
 
       showToast('Proveedor eliminado', 'info');
     } catch (err: any) {
@@ -1341,23 +1360,27 @@ export const App: React.FC = () => {
     setIsSyncing(true);
     try {
       setInventory(updatedInventory);
-      setCachedInventory(updatedInventory, Date.now());
+      setCachedInventory(updatedInventory, Date.now(), activeCompanyId);
       setAuditHistory((prev) => {
         const next = [...prev, historyRecord];
-        setCachedAuditHistory(next);
+        setCachedAuditHistory(next, activeCompanyId);
         return next;
       });
 
-      await applyAuditChangesToFirestore(updatedInventory, historyRecord, auditedCodes);
+      await applyAuditChangesToFirestore(updatedInventory, historyRecord, auditedCodes, activeCompanyId);
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Usuario',
-        userRole: userSession?.role || 'collaborator',
-        action: `Aplicó auditoría de stock (${historyRecord.scope || 'General'})`,
-        module: 'audit',
-        details: `Coincidencias: ${historyRecord.match}, Faltantes: ${historyRecord.missing}, Sobrantes: ${historyRecord.extra}`,
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: userSession?.userName || 'Usuario',
+          userRole: userSession?.role || 'collaborator',
+          action: `Aplicó auditoría de stock (${historyRecord.scope || 'General'})`,
+          module: 'audit',
+          details: `Coincidencias: ${historyRecord.match}, Faltantes: ${historyRecord.missing}, Sobrantes: ${historyRecord.extra}`,
+        },
+        activeCompanyId
+      );
 
       showToast('¡Ajustes de inventario de auditoría aplicados correctamente!', 'success');
     } catch (err: any) {
@@ -2038,11 +2061,11 @@ export const App: React.FC = () => {
             {/* Store brand / Title */}
             <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1 overflow-hidden">
               {storeSettings.logoUrl ? (
-                <div className="h-8 w-8 sm:h-9 sm:w-auto sm:max-w-[160px] rounded-lg p-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-transparent">
+                <div className="h-8 sm:h-9 min-w-8 max-w-[84px] sm:max-w-[140px] rounded-lg px-1 py-0.5 shrink-0 flex items-center justify-center overflow-hidden bg-white border border-slate-200/80 shadow-2xs">
                   <img
                     src={storeSettings.logoUrl}
                     alt={storeSettings.storeName || activeCompanyId.toUpperCase()}
-                    className="h-full w-full object-contain rounded-md mix-blend-multiply filter drop-shadow-2xs"
+                    className="max-h-full max-w-full w-auto h-auto object-contain rounded-sm"
                   />
                 </div>
               ) : (

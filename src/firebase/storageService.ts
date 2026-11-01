@@ -9,7 +9,8 @@ export async function compressImage(
   file: File,
   maxWidth = 1200,
   maxHeight = 1200,
-  quality = 0.85
+  quality = 0.88,
+  preserveTransparency = false
 ): Promise<Blob> {
   // If it's not an image or is already a SVG/GIF, return as is
   if (!file.type.startsWith('image/') || file.type === 'image/svg+xml' || file.type === 'image/gif') {
@@ -21,20 +22,19 @@ export async function compressImage(
     reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
-        let width = img.width;
-        let height = img.height;
+        const naturalW = img.naturalWidth || img.width;
+        const naturalH = img.naturalHeight || img.height;
 
-        if (width > height) {
-          if (width > maxWidth) {
-            height = Math.round((height * maxWidth) / width);
-            width = maxWidth;
-          }
-        } else {
-          if (height > maxHeight) {
-            width = Math.round((width * maxHeight) / height);
-            maxHeight = height;
-          }
+        if (!naturalW || !naturalH) {
+          resolve(file);
+          return;
         }
+
+        // Calculate proportional scale factor so the image fits inside maxWidth x maxHeight
+        // without ever distorting or stretching vertical or horizontal photos
+        const scale = Math.min(1, maxWidth / naturalW, maxHeight / naturalH);
+        const width = Math.max(1, Math.round(naturalW * scale));
+        const height = Math.max(1, Math.round(naturalH * scale));
 
         const canvas = document.createElement('canvas');
         canvas.width = width;
@@ -46,8 +46,22 @@ export async function compressImage(
           return;
         }
 
-        // Draw and compress
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        const isTransparentSource =
+          preserveTransparency && (file.type === 'image/png' || file.type === 'image/webp');
+
+        if (!isTransparentSource) {
+          // Fill clean white background so transparent PNGs converted to JPEG never turn black
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, width, height);
+        }
+
+        // Draw proportionally scaled image
         ctx.drawImage(img, 0, 0, width, height);
+
+        const outputMime = isTransparentSource ? 'image/png' : 'image/jpeg';
 
         canvas.toBlob(
           (blob) => {
@@ -57,8 +71,8 @@ export async function compressImage(
               resolve(file);
             }
           },
-          'image/jpeg',
-          quality
+          outputMime,
+          isTransparentSource ? undefined : quality
         );
       };
       img.onerror = () => resolve(file);
@@ -158,17 +172,18 @@ export async function uploadStoreLogo(
   file: File,
   onProgress?: (percent: number) => void
 ): Promise<string> {
-  // Compress logo to max 800x800 with high clarity
-  const compressedBlob = await compressImage(file, 800, 800, 0.9);
+  // Compress logo to max 900x900 with high clarity and preserve transparency for PNG/WebP
+  const compressedBlob = await compressImage(file, 900, 900, 0.92, true);
   const timestamp = Date.now();
-  const filename = `logo_${timestamp}.jpg`;
+  const isPng = compressedBlob.type === 'image/png';
+  const filename = `logo_${timestamp}.${isPng ? 'png' : 'jpg'}`;
   const storagePath = `store_branding/${filename}`;
 
   const storageRef = ref(storage, storagePath);
 
   try {
     const metadata = {
-      contentType: 'image/jpeg',
+      contentType: isPng ? 'image/png' : 'image/jpeg',
       customMetadata: {
         type: 'store_logo',
         uploadedAt: new Date().toISOString(),

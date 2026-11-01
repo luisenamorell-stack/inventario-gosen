@@ -233,12 +233,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="flex-1 flex items-center gap-3 text-left group overflow-hidden cursor-pointer min-w-0"
               title="Ajustes de tienda"
             >
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 overflow-hidden">
+              <div
+                className={`h-10 rounded-xl flex items-center justify-center shrink-0 overflow-hidden ${
+                  storeSettings?.logoUrl
+                    ? 'min-w-10 max-w-[68px] bg-white/95 border border-slate-700/80 px-1 py-0.5 shadow-xs'
+                    : 'w-10 bg-emerald-500/10 border border-emerald-500/20'
+                }`}
+              >
                 {storeSettings?.logoUrl ? (
                   <img
                     src={storeSettings.logoUrl}
                     alt={storeName}
-                    className="w-full h-full object-contain p-1"
+                    className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg"
                   />
                 ) : (
                   <Boxes className="w-6 h-6 text-emerald-400" />
@@ -365,12 +371,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="w-full h-full flex items-center justify-center text-left cursor-pointer rounded-xl hover:bg-slate-800/60 transition-colors group p-1"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform overflow-hidden">
+                <div
+                  className={`h-10 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform overflow-hidden ${
+                    storeSettings?.logoUrl
+                      ? isCollapsed
+                        ? 'w-11 bg-white/95 border border-slate-700/80 p-1 shadow-xs'
+                        : 'min-w-10 max-w-[68px] bg-white/95 border border-slate-700/80 px-1 py-0.5 shadow-xs'
+                      : 'w-10 bg-emerald-500/10 border border-emerald-500/20'
+                  }`}
+                >
                   {storeSettings?.logoUrl ? (
                     <img
                       src={storeSettings.logoUrl}
                       alt={storeName}
-                      className="w-full h-full object-contain p-1"
+                      className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg"
                     />
                   ) : (
                     <Boxes className="w-6 h-6 text-emerald-400" />

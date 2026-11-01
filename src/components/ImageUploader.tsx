@@ -10,6 +10,7 @@ import {
   Link as LinkIcon,
   AlertCircle
 } from 'lucide-react';
+import { AdaptiveImage } from './AdaptiveImage';
 
 interface ImageUploaderProps {
   value: string;
@@ -144,24 +145,23 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       {/* Preview Card or Upload Zone */}
       {value ? (
         <div className="relative border-2 border-emerald-200 bg-emerald-50/40 rounded-xl p-3 flex items-center gap-4 transition-all">
-          <div className="w-20 h-20 rounded-lg overflow-hidden bg-white border border-slate-200 shadow-sm shrink-0 flex items-center justify-center">
-            <img
+          <div className="w-24 h-24 rounded-xl overflow-hidden bg-white border border-slate-200 shadow-sm shrink-0 flex items-center justify-center">
+            <AdaptiveImage
               src={value}
               alt="Vista previa"
-              className="w-full h-full object-cover"
-              onError={(e) => {
-                (e.target as HTMLElement).style.display = 'none';
-              }}
+              variant="product"
+              enableZoom
+              fallback={<ImageIcon className="w-7 h-7 text-slate-300" />}
             />
           </div>
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
               <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-              <span>Imagen vinculada</span>
+              <span>Imagen vinculada (Adaptación automática activa)</span>
             </div>
             <p className="text-[11px] text-slate-500 truncate mt-0.5 font-mono">
-              {value.startsWith('data:') ? 'Imagen local comprimida' : value}
+              {value.startsWith('data:') ? 'Imagen optimizada lista (Toca la foto para ampliar)' : value}
             </p>
 
             <div className="flex items-center gap-2 mt-2">

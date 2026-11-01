@@ -320,18 +320,21 @@ function getStoreProfileDocId(companyId = getActiveCompanyId()): string {
  */
 export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = getActiveCompanyId()): Promise<number> {
   const now = Date.now();
-  const syncRef = doc(db, 'settings', getSyncStateDocId(companyId));
+  const slug = normalizeCompanySlug(companyId);
+  const syncRef = doc(db, 'settings', getSyncStateDocId(slug));
   try {
-    localStorage.setItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, companyId), String(now));
+    localStorage.setItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, slug), String(now));
   } catch {}
 
+  const stampPayload = { storeName: `Sync ${slug}`, updatedAt: now };
+
   if (batch) {
-    batch.set(syncRef, { updatedAt: now }, { merge: true });
+    batch.set(syncRef, stampPayload, { merge: true });
     return now;
   }
 
   try {
-    await setDoc(syncRef, { updatedAt: now }, { merge: true });
+    await setDoc(syncRef, stampPayload, { merge: true });
   } catch (err) {
     console.warn('Could not update sync_state stamp:', err);
   }
@@ -343,7 +346,8 @@ export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = ge
  * 1. Checks `settings/sync_state[_companyId]` (1 Firestore document read).
  * 2. If local cache exists and its timestamp >= remote `updatedAt` (and !forceRefresh),
  *    returns the cached inventory immediately with 0 collection reads.
- * 3. Otherwise downloads `inventory` collection once, filters by `companyId`, updates cache & timestamp.
+ * 3. Otherwise downloads `inventory` collection once, filters by `companyId`, merges any
+ *    unsynced local cached items so client articles are never lost, and updates cache & timestamp.
  */
 export async function fetchInventorySmart(
   forceRefresh = false,
@@ -358,21 +362,26 @@ export async function fetchInventorySmart(
     const syncSnap = await getDoc(syncRef);
     const remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
 
-    if (!forceRefresh && cached && cached.length >= 0 && remoteTs > 0 && localTs >= remoteTs) {
+    if (!forceRefresh && cached && cached.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
       return { items: cached, fromCache: true, readsUsed: 1 };
     }
 
     const collRef = collection(db, 'inventory');
     const snapshot = await getDocs(collRef);
     const items: Product[] = [];
+    const remoteCodes = new Set<string>();
+
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
       if (!belongsToCompany(data.companyId, slug)) return;
 
+      const code = (data.code || docSnap.id).trim();
+      remoteCodes.add(code.toLowerCase());
+
       items.push({
         id: docSnap.id,
         companyId: data.companyId || 'gosen',
-        code: data.code || docSnap.id,
+        code,
         name: data.name || '',
         category: data.category || 'Otros',
         size: data.size || '',
@@ -387,12 +396,38 @@ export async function fetchInventorySmart(
       });
     });
 
+    // Auto-recover any items present in the client's local cache that failed to sync to Firestore earlier
+    if (!forceRefresh && cached && cached.length > 0) {
+      const missingLocalItems = cached.filter(
+        (localItem) =>
+          localItem &&
+          localItem.code &&
+          belongsToCompany(localItem.companyId || slug, slug) &&
+          !remoteCodes.has(localItem.code.trim().toLowerCase())
+      );
+
+      if (missingLocalItems.length > 0) {
+        missingLocalItems.forEach((localItem) => {
+          remoteCodes.add(localItem.code.trim().toLowerCase());
+          items.push({
+            ...localItem,
+            id: getScopedDocId(localItem.code, slug),
+            companyId: slug,
+          });
+        });
+        // Re-upload missing cached items to Firestore in the background
+        bulkSaveProductsToFirestore(missingLocalItems, [], slug).catch((err) =>
+          console.warn('Auto-sync of cached inventory items warning:', err)
+        );
+      }
+    }
+
     items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
-    const effectiveTs = remoteTs > 0 ? remoteTs : Date.now();
+    const effectiveTs = Date.now();
     setCachedInventory(items, effectiveTs, slug);
 
     if (remoteTs === 0) {
-      await setDoc(syncRef, { updatedAt: effectiveTs }, { merge: true }).catch(() => {});
+      await setDoc(syncRef, { storeName: `Sync ${slug}`, updatedAt: effectiveTs }, { merge: true }).catch(() => {});
     }
 
     return { items, fromCache: false, readsUsed: items.length + 1 };
@@ -483,9 +518,9 @@ export async function saveProductToFirestore(
     if (product.supplier?.trim()) payload.supplier = product.supplier.trim();
     if (product.img?.trim()) payload.img = product.img.trim();
 
-    batch.set(docRef, payload, { merge: true });
-    await touchInventorySyncStamp(batch, slug);
+    batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
     await batch.commit();
+    await touchInventorySyncStamp(undefined, slug);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -514,9 +549,9 @@ export async function deleteProductFromFirestore(
   for (const docId of idsToDelete) {
     batch.delete(doc(db, 'inventory', docId));
   }
-  await touchInventorySyncStamp(batch, slug);
   try {
     await batch.commit();
+    await touchInventorySyncStamp(undefined, slug);
   } catch (error) {
     console.warn('Could not delete product doc in batch:', error);
   }
@@ -582,15 +617,12 @@ export async function bulkSaveProductsToFirestore(
         if (product.supplier !== undefined) payload.supplier = product.supplier.trim();
         if (product.img?.trim()) payload.img = product.img.trim();
 
-        batch.set(docRef, payload, { merge: true });
+        batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
       });
-
-      if (i + CHUNK_SIZE >= products.length) {
-        await touchInventorySyncStamp(batch, slug);
-      }
 
       await batch.commit();
     }
+    await touchInventorySyncStamp(undefined, slug);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'batch:inventory/bulk_import');
   }

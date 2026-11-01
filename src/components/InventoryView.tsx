@@ -26,6 +26,7 @@ import {
 
 import { ConfirmDialog } from './ConfirmDialog';
 import { ImageUploader } from './ImageUploader';
+import { AdaptiveImage } from './AdaptiveImage';
 import {
   InventoryMobileCardSkeleton,
   InventoryTableRowsSkeleton,
@@ -764,21 +765,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   className="p-3 bg-white border border-slate-200/90 rounded-xl shadow-2xs space-y-2.5"
                 >
                   <div className="flex items-start gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
-                      {item.img ? (
-                        <img
-                          src={item.img}
-                          alt={item.name}
-                          loading="lazy"
-                          decoding="async"
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                      ) : (
-                        <Box className="w-6 h-6 text-slate-300" />
-                      )}
+                    <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                      <AdaptiveImage
+                        src={item.img}
+                        alt={item.name}
+                        variant="product"
+                        enableZoom
+                        fallback={<Box className="w-6 h-6 text-slate-300" />}
+                      />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-bold text-slate-900 text-sm leading-snug">
@@ -1009,22 +1003,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     <tr key={item.id} className="hover:bg-slate-50 transition-colors group">
                       <td className="p-4 border-b border-slate-100">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
-                            {item.img ? (
-                              <img
-                                src={item.img}
-                                alt={item.name}
-                                loading="lazy"
-                                decoding="async"
-                                className="w-full h-full object-cover"
-                                onError={(e) => {
-                                  // Fallback icon on image load error
-                                  (e.target as HTMLElement).style.display = 'none';
-                                }}
-                              />
-                            ) : (
-                              <Box className="w-5 h-5 text-slate-300" />
-                            )}
+                          <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                            <AdaptiveImage
+                              src={item.img}
+                              alt={item.name}
+                              variant="product"
+                              enableZoom
+                              fallback={<Box className="w-5 h-5 text-slate-300" />}
+                            />
                           </div>
                           <div>
                             <p className="font-semibold text-slate-800 text-sm whitespace-normal max-w-[220px] leading-tight">

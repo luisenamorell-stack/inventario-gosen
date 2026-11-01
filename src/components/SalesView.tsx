@@ -27,6 +27,7 @@ import {
   printTicketDomElementWithFallbackCss,
 } from '../utils/universalPrintBridge';
 import { PrintFormatModal, PrinterConnectionManager } from './PrintFormatModal';
+import { AdaptiveImage } from './AdaptiveImage';
 import {
   ShoppingCart,
   Search,
@@ -1693,19 +1694,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             </div>
                           </div>
 
-                          {/* Product Image / Icon */}
-                          <div className="w-full h-24 mb-2 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden border border-slate-100">
-                            {product.img ? (
-                              <img
-                                src={product.img}
-                                alt={product.name}
-                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                                loading="lazy"
-                                decoding="async"
-                              />
-                            ) : (
-                              <Package className="w-8 h-8 text-slate-300 group-hover:text-emerald-500 transition-colors" />
-                            )}
+                          {/* Product Image / Icon (Smart Adaptive Container) */}
+                          <div className="w-full h-28 sm:h-32 mb-2 bg-slate-50 rounded-xl flex items-center justify-center overflow-hidden border border-slate-100">
+                            <AdaptiveImage
+                              src={product.img}
+                              alt={product.name}
+                              variant="product"
+                              hoverScale
+                              fallback={
+                                <Package className="w-8 h-8 text-slate-300 group-hover:text-emerald-500 transition-colors" />
+                              }
+                            />
                           </div>
 
                           {/* Details */}
