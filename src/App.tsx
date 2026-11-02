@@ -176,6 +176,14 @@ export const App: React.FC = () => {
       hash.includes('catalog')
     );
   });
+
+  // Dedicated SaaS Owner Console Link Detection (?saas=1)
+  const [isSaaSPortalUrl] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('saas') === '1' || params.get('saas') === 'true' || params.get('panel') === 'saas';
+  });
+
   const [isAdminPreviewMode, setIsAdminPreviewMode] = useState<boolean>(false);
 
   // Application Data State — Initialized immediately from localStorage cache (0 reads on paint)
@@ -233,7 +241,7 @@ export const App: React.FC = () => {
         };
   });
 
-  // User Session & Authentication State
+  // User Session & Authentication State (Strictly isolated per URL link)
   const [userSession, setUserSession] = useState<UserSession | null>(() => {
     try {
       const localSess = localStorage.getItem('stockmaster_user_session');
@@ -247,6 +255,31 @@ export const App: React.FC = () => {
         parsed.isSuperAdmin = Boolean(
           parsed.role === 'admin' && parsed.isSuperAdmin === true && isOwnerUnlocked
         );
+
+        if (typeof window !== 'undefined') {
+          const params = new URLSearchParams(window.location.search);
+          const urlSaaS =
+            params.get('saas') === '1' ||
+            params.get('saas') === 'true' ||
+            params.get('panel') === 'saas';
+          const urlCompany =
+            params.get('empresa') || params.get('tienda') || params.get('cliente');
+
+          // If opening the dedicated SaaS Console URL (?saas=1), require a SuperAdmin session
+          if (urlSaaS && !parsed.isSuperAdmin) {
+            return null;
+          }
+
+          // If opening a specific store link (?empresa=<slug>), never auto-login into a different store's session
+          if (urlCompany) {
+            const targetSlug = normalizeCompanySlug(urlCompany);
+            const sessionSlug = normalizeCompanySlug(parsed.companyId);
+            if (!parsed.isSuperAdmin && sessionSlug !== targetSlug) {
+              return null;
+            }
+          }
+        }
+
         return parsed;
       }
     } catch {}
@@ -1928,6 +1961,7 @@ export const App: React.FC = () => {
           <SplashScreen
             storeSettings={storeSettings}
             companyId={activeCompanyId}
+            isSaaSAdmin={isSaaSPortalUrl}
             isExiting={isSplashExiting}
           />
         )}
@@ -1937,6 +1971,7 @@ export const App: React.FC = () => {
           users={users}
           companies={companies}
           activeCompanyId={activeCompanyId}
+          isSaaSPortalMode={isSaaSPortalUrl}
           onSelectCompany={handleSelectCompanyContext}
           onLoginSuccess={handleLoginSuccess}
         />

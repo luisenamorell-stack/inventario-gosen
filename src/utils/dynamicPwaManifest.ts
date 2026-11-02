@@ -238,26 +238,25 @@ export async function syncDynamicPwaBranding(
     (storeSettings?.tagline || '').trim() || 'Sistema de Inventario y Punto de Venta';
 
   // Build tenant-specific start path so launching from the mobile home screen
-  // always boots directly into this client's company workspace.
-  const startPath = isGosen
-    ? '/'
-    : `/?empresa=${encodeURIComponent(normalizedSlug)}`;
+  // always boots directly into this client's isolated company workspace.
+  const startPath = `/?empresa=${encodeURIComponent(normalizedSlug)}`;
   const fullStartUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}${startPath}`
       : startPath;
 
-  // Keep ?empresa=<slug> in the browser address bar for non-Gosén tenants
-  // so iOS Safari "Add to Home Screen" bookmarks the exact tenant URL.
+  // Keep ?empresa=<slug> in the browser address bar for every store tenant
+  // (unless on the dedicated ?saas=1 portal) so each app link remains strictly separated.
   if (typeof window !== 'undefined' && !options?.isPublicCatalogMode) {
     try {
       const currentUrl = new URL(window.location.href);
+      const isSaaSPortal =
+        currentUrl.searchParams.get('saas') === '1' ||
+        currentUrl.searchParams.get('saas') === 'true' ||
+        currentUrl.searchParams.get('panel') === 'saas';
       const currentEmpresa = (currentUrl.searchParams.get('empresa') || '').trim().toLowerCase();
-      if (!isGosen && currentEmpresa !== normalizedSlug) {
+      if (!isSaaSPortal && currentEmpresa !== normalizedSlug) {
         currentUrl.searchParams.set('empresa', normalizedSlug);
-        window.history.replaceState({}, '', currentUrl.toString());
-      } else if (isGosen && currentUrl.searchParams.has('empresa')) {
-        currentUrl.searchParams.delete('empresa');
         window.history.replaceState({}, '', currentUrl.toString());
       }
     } catch {

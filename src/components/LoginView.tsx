@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StoreSettings, UserAccount, UserSession, CompanyTenant } from '../types';
 import { normalizeCompanySlug } from '../firebase/firestoreService';
 import {
@@ -11,7 +11,6 @@ import {
   ArrowRight,
   User,
   Users,
-  Building2,
   Key,
   AlertTriangle
 } from 'lucide-react';
@@ -21,6 +20,7 @@ interface LoginViewProps {
   users?: UserAccount[];
   companies?: CompanyTenant[];
   activeCompanyId?: string;
+  isSaaSPortalMode?: boolean;
   onSelectCompany?: (companySlug: string) => void;
   onLoginSuccess: (session: UserSession, remember: boolean) => void;
 }
@@ -32,12 +32,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
   users = [],
   companies = [],
   activeCompanyId = 'gosen',
-  onSelectCompany,
+  isSaaSPortalMode = false,
   onLoginSuccess,
 }) => {
-  const [loginMode, setLoginMode] = useState<LoginPortalMode>('admin');
-  const [companySlugInput, setCompanySlugInput] = useState<string>(activeCompanyId || 'gosen');
-  const [showCompanySwitcher, setShowCompanySwitcher] = useState<boolean>(false);
+  const [loginMode, setLoginMode] = useState<LoginPortalMode>(() =>
+    isSaaSPortalMode ? 'saas_owner' : 'admin'
+  );
   const [usernameInput, setUsernameInput] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -45,25 +45,32 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
-  React.useEffect(() => {
-    if (activeCompanyId) {
-      setCompanySlugInput(normalizeCompanySlug(activeCompanyId));
+  useEffect(() => {
+    if (isSaaSPortalMode) {
+      setLoginMode('saas_owner');
+    } else if (loginMode === 'saas_owner') {
+      setLoginMode('admin');
     }
-  }, [activeCompanyId]);
+  }, [isSaaSPortalMode]);
 
-  const normalizedSlug = normalizeCompanySlug(companySlugInput);
+  // Strictly lock this login view to the active company from the URL link
+  const normalizedSlug = normalizeCompanySlug(activeCompanyId || 'gosen');
   const isGosenSelected = normalizedSlug === 'gosen';
 
   const selectedCompany = companies.find(
     (c) => normalizeCompanySlug(c.slug) === normalizedSlug
   );
 
-  // Strict Branding Isolation: Non-Gosén clients never inherit Tienda Gosén's logo or name
+  // Strict Branding Isolation: Each store link displays ONLY its own brand identity
   const storeName =
     loginMode === 'saas_owner'
       ? 'Panel Central SaaS'
       : selectedCompany?.name ||
-        (isGosenSelected ? storeSettings?.storeName || 'Tienda Gosén' : normalizedSlug.toUpperCase());
+        (isGosenSelected
+          ? storeSettings?.storeName || 'Tienda Gosén'
+          : storeSettings?.companyId === normalizedSlug && storeSettings?.storeName
+          ? storeSettings.storeName
+          : normalizedSlug.toUpperCase());
 
   const logoUrl =
     loginMode === 'saas_owner'
@@ -82,32 +89,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
       : selectedCompany?.tagline ||
         (isGosenSelected
           ? storeSettings?.tagline || 'Sistema de Control de Inventario & Facturación'
+          : storeSettings?.companyId === normalizedSlug && storeSettings?.tagline
+          ? storeSettings.tagline
           : 'Sistema de Control de Inventario & Facturación POS');
 
   const isCompanySuspended =
     loginMode !== 'saas_owner' && selectedCompany?.status === 'suspended';
 
+  // Strictly filter collaborators belonging ONLY to this isolated company link
   const activeCollaborators = users.filter(
     (u) =>
       u.isActive !== false &&
       normalizeCompanySlug(u.companyId || 'gosen') === normalizedSlug
   );
 
-  const handleCompanyChange = (newSlugRaw: string) => {
-    const clean = normalizeCompanySlug(newSlugRaw);
-    setCompanySlugInput(clean);
-    setError(null);
-    if (onSelectCompany) {
-      onSelectCompany(clean);
-    }
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
     const cleanInput = password.trim();
-    const targetSlug = normalizeCompanySlug(companySlugInput);
+    const targetSlug = normalizedSlug;
 
     if (!cleanInput) {
       setError('Por favor ingresa la contraseña para continuar.');
@@ -120,7 +121,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       localStorage.getItem('stockmaster_saas_master_key') || 'SAASMASTER2026'
     ).trim();
 
-    // 1. STANDALONE SAAS SUPER-ADMIN LOGIN (Either via 'saas_owner' tab or Master Key)
+    // 1. STANDALONE SAAS SUPER-ADMIN LOGIN (Via dedicated ?saas=1 link or secret Master Key)
     const isSaaSOwnerMasterLogin =
       cleanInput.toUpperCase() === saasOwnerMasterKey.toUpperCase();
 
@@ -148,6 +149,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           'companies',
           'dashboard',
           'inventory',
+          'warehouses',
           'sales',
           'purchases',
           'audit',
@@ -164,7 +166,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    // If user typed the SaaS Master Key inside Admin mode, also open the Standalone SaaS Panel directly
+    // Discreet Master Key support for SaaS Owner if typed inside Admin mode
     if (loginMode === 'admin' && isSaaSOwnerMasterLogin) {
       try {
         localStorage.setItem('stockmaster_saas_owner_unlocked', 'true');
@@ -183,6 +185,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           'companies',
           'dashboard',
           'inventory',
+          'warehouses',
           'sales',
           'purchases',
           'audit',
@@ -199,7 +202,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    // 2. CHECK IF THE SELECTED STORE CLIENT IS IN ARREARS ("EN MORA" / SUSPENDED)
+    // 2. CHECK IF THIS STORE CLIENT IS IN ARREARS ("EN MORA" / SUSPENDED)
     const targetCompanyObj = companies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
     if (targetCompanyObj && targetCompanyObj.status === 'suspended') {
       const moraDetail = targetCompanyObj.moraReason
@@ -212,12 +215,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    // 3. STORE ADMIN LOGIN (Isolated for Tienda Gosén or Other Client)
+    // 3. STRICTLY ISOLATED STORE ADMIN LOGIN (Only validates against THIS store's link, never cross-matches other clients)
     if (loginMode === 'admin') {
       const expectedCompanyPassword = (
         targetCompanyObj?.adminPassword ||
         (targetSlug === 'gosen'
           ? storeSettings?.accessPassword || 'GOSEN2026'
+          : storeSettings?.companyId === targetSlug && storeSettings?.accessPassword
+          ? storeSettings.accessPassword
           : 'ADMIN2026')
       ).trim();
 
@@ -230,61 +235,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
             cleanInput.toUpperCase() === 'GOSEN2026' ||
             cleanInput.toUpperCase() === 'ADMIN2026'));
 
-      // Or if user left another company selected, check if password matches Tienda Gosén or another client's unique password
-      const matchedOtherClient =
-        !matchesSelectedCompany &&
-        (companies.find(
-          (c) =>
-            c.slug !== targetSlug &&
-            c.adminPassword.trim().toUpperCase() === cleanInput.toUpperCase()
-        ) ||
-          (targetSlug !== 'gosen' &&
-          cleanInput.toUpperCase() === 'GOSEN2026'
-            ? companies.find((c) => c.slug === 'gosen')
-            : undefined));
-
-      if (matchedOtherClient) {
-        if (matchedOtherClient.status === 'suspended') {
-          const moraDetail = matchedOtherClient.moraReason
-            ? ` Motivo: ${matchedOtherClient.moraReason}.`
-            : '';
-          setError(
-            `⛔ SERVICIO EN MORA: El acceso para "${matchedOtherClient.name}" se encuentra deshabilitado por falta de pago.${moraDetail}`
-          );
-          setIsLoading(false);
-          return;
-        }
-        try {
-          localStorage.removeItem('stockmaster_saas_owner_unlocked');
-        } catch {}
-        const clientSession: UserSession = {
-          userId: `admin_${matchedOtherClient.slug}`,
-          companyId: matchedOtherClient.slug,
-          companyName: matchedOtherClient.name,
-          isSuperAdmin: false,
-          isStandaloneSaaS: false,
-          userName: `Admin ${matchedOtherClient.name}`,
-          username: 'admin',
-          role: 'admin',
-          allowedTabs: [
-            'dashboard',
-            'inventory',
-            'sales',
-            'purchases',
-            'audit',
-            'price-checker',
-            'suppliers',
-            'settings',
-            'catalog',
-            'users',
-            'activity',
-          ],
-        };
-        if (onSelectCompany) onSelectCompany(matchedOtherClient.slug);
-        onLoginSuccess(clientSession, rememberMe);
-        return;
-      }
-
       if (matchesSelectedCompany) {
         try {
           localStorage.removeItem('stockmaster_saas_owner_unlocked');
@@ -292,7 +242,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
         const resolvedCompanyName =
           targetCompanyObj?.name ||
-          (targetSlug === 'gosen' ? storeSettings?.storeName || 'Tienda Gosén' : targetSlug.toUpperCase());
+          (targetSlug === 'gosen'
+            ? storeSettings?.storeName || 'Tienda Gosén'
+            : storeSettings?.companyId === targetSlug && storeSettings?.storeName
+            ? storeSettings.storeName
+            : targetSlug.toUpperCase());
 
         const adminSession: UserSession = {
           userId: `admin_${targetSlug}`,
@@ -307,6 +261,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           allowedTabs: [
             'dashboard',
             'inventory',
+            'warehouses',
             'sales',
             'purchases',
             'audit',
@@ -320,11 +275,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
         };
         onLoginSuccess(adminSession, rememberMe);
       } else {
-        setError('Contraseña de Administrador de tienda incorrecta.');
+        setError(`Contraseña de Administrador incorrecta para ${storeName}.`);
         setIsLoading(false);
       }
     } else {
-      // 4. COLLABORATOR LOGIN MODE
+      // 4. STRICTLY ISOLATED COLLABORATOR LOGIN MODE (Only authenticates users belonging to this store)
       if (!usernameInput.trim()) {
         setError('Por favor ingresa tu nombre de usuario de colaborador.');
         setIsLoading(false);
@@ -341,7 +296,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       if (!foundUser) {
         setError(
-          `No se encontró un colaborador activo con el usuario "${cleanUser}" en esta empresa.`
+          `No se encontró un colaborador activo con el usuario "${cleanUser}" en ${storeName}.`
         );
         setIsLoading(false);
         return;
@@ -362,7 +317,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
         companyId: targetSlug,
         companyName:
           targetCompanyObj?.name ||
-          (targetSlug === 'gosen' ? storeSettings?.storeName || 'Tienda Gosén' : targetSlug.toUpperCase()),
+          (targetSlug === 'gosen'
+            ? storeSettings?.storeName || 'Tienda Gosén'
+            : storeSettings?.companyId === targetSlug && storeSettings?.storeName
+            ? storeSettings.storeName
+            : targetSlug.toUpperCase()),
         isSuperAdmin: false,
         isStandaloneSaaS: false,
         userName: foundUser.name,
@@ -395,8 +354,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       {/* Login Card */}
       <div className="w-full max-w-md bg-slate-900/90 border border-slate-800 rounded-3xl shadow-2xl backdrop-blur-md p-6 sm:p-8 z-10">
-        {/* Store / Portal Branding Header */}
-        <div className="flex flex-col items-center text-center mb-4">
+        {/* Store / Portal Branding Header (100% Isolated to this Link) */}
+        <div className="flex flex-col items-center text-center mb-5">
           {loginMode === 'saas_owner' ? (
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-teal-600 to-amber-400 p-0.5 shadow-lg shadow-teal-500/20 flex items-center justify-center mb-3">
               <div className="w-full h-full bg-slate-900 rounded-[14px] flex items-center justify-center">
@@ -421,48 +380,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
           <h1 className="text-2xl font-black text-white tracking-wide">{storeName}</h1>
           <p className="text-xs text-slate-400 mt-1">{tagline}</p>
-
-          {/* Private Store Code Switcher (Hidden when in SaaS Owner mode) */}
-          {loginMode !== 'saas_owner' && (
-            <div className="mt-2 flex items-center justify-center w-full">
-              {!showCompanySwitcher ? (
-                <button
-                  type="button"
-                  onClick={() => setShowCompanySwitcher(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/70 border border-slate-800/80 text-[10px] font-bold text-slate-400 hover:text-emerald-300 transition-colors cursor-pointer"
-                  title="Cambiar código de empresa o negocio"
-                >
-                  <Building2 className="w-3 h-3 text-emerald-400" />
-                  <span>Empresa: {normalizedSlug.toUpperCase()} (Cambiar)</span>
-                </button>
-              ) : (
-                <div className="w-full mt-1 p-2.5 rounded-xl bg-slate-950/90 border border-slate-800 flex flex-col gap-1.5 text-left">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
-                      <Building2 className="w-3 h-3" /> Código de Empresa / Cliente
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowCompanySwitcher(false)}
-                      className="text-[10px] text-slate-500 hover:text-slate-300 cursor-pointer"
-                    >
-                      Cerrar
-                    </button>
-                  </div>
-                  <input
-                    type="text"
-                    value={companySlugInput}
-                    onChange={(e) => handleCompanyChange(e.target.value)}
-                    placeholder="Ingresa el código de tu negocio"
-                    className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono font-bold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
-        {/* Suspended / Mora Banner if the selected client is currently disabled */}
+        {/* Suspended / Mora Banner if this store is currently disabled */}
         {isCompanySuspended && (
           <div className="mb-4 p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-left space-y-1">
             <div className="flex items-center gap-2 text-rose-300 font-black text-xs uppercase tracking-wider">
@@ -476,64 +396,49 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </div>
         )}
 
-        {/* 3-Way Role / Portal Switcher: Administrador | Colaborador | Panel SaaS */}
-        <div className="bg-slate-950/80 p-1.5 rounded-2xl border border-slate-800 grid grid-cols-3 gap-1 mb-5">
-          <button
-            type="button"
-            onClick={() => {
-              setLoginMode('admin');
-              setError(null);
-            }}
-            className={`py-2 px-2 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
-              loginMode === 'admin'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="truncate">Admin Tienda</span>
-          </button>
+        {/* Role Switcher: Only shows Administrador | Colaborador on store links */}
+        {loginMode !== 'saas_owner' && (
+          <div className="bg-slate-950/80 p-1.5 rounded-2xl border border-slate-800 grid grid-cols-2 gap-1.5 mb-5">
+            <button
+              type="button"
+              onClick={() => {
+                setLoginMode('admin');
+                setError(null);
+              }}
+              className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                loginMode === 'admin'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="truncate">Administrador</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              setLoginMode('collaborator');
-              setError(null);
-            }}
-            className={`py-2 px-2 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
-              loginMode === 'collaborator'
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span className="truncate">Colaborador</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setLoginMode('saas_owner');
-              setError(null);
-            }}
-            className={`py-2 px-2 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
-              loginMode === 'saas_owner'
-                ? 'bg-teal-500/25 text-teal-200 border border-teal-400/50 shadow-sm'
-                : 'text-slate-400 hover:text-teal-300'
-            }`}
-            title="Panel exclusivo para el Administrador General de SaaS"
-          >
-            <Key className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-            <span className="truncate">Panel SaaS</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => {
+                setLoginMode('collaborator');
+                setError(null);
+              }}
+              className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                loginMode === 'collaborator'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Users className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="truncate">Colaborador</span>
+            </button>
+          </div>
+        )}
 
         {/* Login Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           {loginMode === 'collaborator' && (
             <div>
               <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                Usuario de Colaborador
+                Usuario de Colaborador ({storeName})
               </label>
 
               {activeCollaborators.length > 0 ? (
@@ -546,7 +451,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     }}
                     className="w-full px-3.5 py-3 bg-slate-950/80 border border-slate-700 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-extrabold"
                   >
-                    <option value="">-- Selecciona tu perfil de colaborador --</option>
+                    <option value="">-- Selecciona tu usuario en {storeName} --</option>
                     {activeCollaborators.map((u) => (
                       <option key={u.id} value={u.username}>
                         👤 {u.name} (@{u.username})
@@ -555,10 +460,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   </select>
 
                   <div className="text-[11px] text-slate-400 flex items-center gap-1">
-                    <span>O escribe tu usuario manual:</span>
+                    <span>O escribe tu usuario:</span>
                     <input
                       type="text"
-                      placeholder="ej. juan"
+                      placeholder="ej. cajero1"
                       value={usernameInput}
                       onChange={(e) => setUsernameInput(e.target.value.toLowerCase().trim())}
                       className="flex-1 bg-slate-950 border border-slate-800 px-2 py-1 rounded text-white font-mono text-xs"
@@ -573,7 +478,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     </div>
                     <input
                       type="text"
-                      placeholder="Ingresa tu usuario (ej. juan)"
+                      placeholder="Ingresa tu usuario"
                       value={usernameInput}
                       onChange={(e) => {
                         setUsernameInput(e.target.value.toLowerCase().trim());
@@ -583,7 +488,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     />
                   </div>
                   <p className="text-[11px] text-amber-400/90 font-medium">
-                    ⚠️ Aún no se han registrado colaboradores en esta empresa. Inicia como Administrador para crearlos.
+                    ⚠️ Aún no se han registrado colaboradores en {storeName}. Inicia como Administrador para crearlos.
                   </p>
                 </div>
               )}
@@ -593,7 +498,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           {loginMode === 'saas_owner' && (
             <div className="p-3 rounded-xl bg-teal-950/40 border border-teal-500/30 text-[11px] text-teal-200 leading-relaxed">
               <strong className="text-teal-300 block mb-0.5">
-                🔐 Acceso Exclusivo Propietario / Administrador SaaS
+                🔐 Consola Exclusiva Propietario / Administrador SaaS
               </strong>
               Ingresa tu Clave Maestra para abrir el panel independiente de clientes, crear empresas o deshabilitar clientes en mora.
             </div>
@@ -626,8 +531,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   loginMode === 'saas_owner'
                     ? 'Ingresa tu Clave Maestra SaaS'
                     : loginMode === 'admin'
-                    ? 'Ingresa la contraseña de la tienda'
-                    : 'Ingresa tu PIN/clave'
+                    ? 'Ingresa la contraseña de tu tienda'
+                    : 'Ingresa tu PIN o contraseña'
                 }
                 disabled={isLoading}
                 autoComplete="current-password"
@@ -663,7 +568,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 className="w-4 h-4 rounded bg-slate-950 border-slate-700 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-900 cursor-pointer"
               />
               <span className="hover:text-slate-200 transition-colors">
-                Mantener sesión iniciada
+                Mantener sesión iniciada en este dispositivo
               </span>
             </label>
           </div>
@@ -698,10 +603,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <p>
             {loginMode === 'saas_owner'
               ? 'Consola Central de Licencias y Control de Mora'
-              : `Almacén protegido • ${storeName}`}
+              : `Acceso privado y exclusivo • ${storeName}`}
           </p>
         </div>
       </div>
     </div>
   );
 };
+

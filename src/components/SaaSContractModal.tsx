@@ -6,6 +6,7 @@ import {
   SaaSContractData,
   SaaSProviderContractDefaults,
   ALL_COMPANY_MODULES,
+  getOfficialAppBaseUrl,
 } from '../types';
 import {
   printHtmlDocument,
@@ -226,17 +227,21 @@ export const SaaSContractModal: React.FC<SaaSContractModalProps> = ({
 
   const bankAccounts = saasGlobalConfig?.bankAccounts || [];
 
+  const officialBaseUrl = getOfficialAppBaseUrl(saasGlobalConfig?.customDomain);
+  const clientPortalUrl = `${officialBaseUrl}/?empresa=${selectedCompany?.slug || 'tienda'}`;
+
   // Structured Legal Clauses used for Preview, Print HTML, and PDF
   const legalClauses = useMemo(() => {
     const compSlug = selectedCompany?.slug || 'tienda';
     const compName = selectedCompany?.name || 'El Negocio';
     const maxProds = selectedCompany?.maxProducts || 0;
     const maxUsrs = selectedCompany?.maxUsers || 0;
+    const portalLink = `${officialBaseUrl}/?empresa=${compSlug}`;
 
     return [
       {
         title: 'CLÁUSULA PRIMERA: OBJETO DEL CONTRATO Y CONCESIÓN DE LICENCIA SAAS',
-        body: `Por medio del presente contrato, EL PROVEEDOR otorga a favor de EL CLIENTE una licencia de uso no exclusiva, intransferible y temporal bajo la modalidad de Software como Servicio en la Nube (SaaS) sobre el sistema "${providerBrand}", asignándole el entorno privado e independiente identificado con el Código de Empresa único "${compSlug}" para la gestión operativa de su negocio denominado "${
+        body: `Por medio del presente contrato, EL PROVEEDOR otorga a favor de EL CLIENTE una licencia de uso no exclusiva, intransferible y temporal bajo la modalidad de Software como Servicio en la Nube (SaaS) sobre el sistema "${providerBrand}" (portal web oficial: ${portalLink}), asignándole el entorno privado e independiente identificado con el Código de Empresa único "${compSlug}" para la gestión operativa de su negocio denominado "${
           clientBusinessName || compName
         }".`,
       },
@@ -321,6 +326,7 @@ export const SaaSContractModal: React.FC<SaaSContractModalProps> = ({
     supportHours,
     formattedIssueDateLong,
     planModality,
+    officialBaseUrl,
   ]);
 
   if (!isOpen || !selectedCompany) return null;
@@ -846,6 +852,7 @@ export const SaaSContractModal: React.FC<SaaSContractModalProps> = ({
       `• *Cliente / Tienda:* ${clientBusinessName || selectedCompany.name}${
         clientIdentityOrRtn ? ` (ID/RTN: ${clientIdentityOrRtn})` : ''
       }\n` +
+      `• *Portal Web Oficial:* ${clientPortalUrl}\n` +
       `• *Modalidad de Plan:* ${planPeriodLabel}\n` +
       `• *Cuota Acordada:* ${formatCurrencyL(numericPrice)}\n` +
       (numericSetupFee > 0 ? `• *Implementación Inicial:* ${formatCurrencyL(numericSetupFee)}\n` : '') +

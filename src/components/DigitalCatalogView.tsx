@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { StoreSettings, Product } from '../types';
+import { StoreSettings, Product, getOfficialAppBaseUrl } from '../types';
 import {
   Share2,
   Copy,
@@ -50,13 +50,10 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Generate public catalog link based on current domain origin & company tenant
-  const baseUrl = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
+  // Generate public catalog link based on official domain (https://miapphn.online) & company tenant
+  const baseUrl = getOfficialAppBaseUrl();
   const activeCompanySlug = (storeSettings.companyId || 'gosen').toLowerCase().trim();
-  const shareableUrl =
-    activeCompanySlug && activeCompanySlug !== 'gosen'
-      ? `${baseUrl}?empresa=${encodeURIComponent(activeCompanySlug)}&catalogo=1`
-      : `${baseUrl}?catalogo=1`;
+  const shareableUrl = `${baseUrl}/?empresa=${encodeURIComponent(activeCompanySlug)}&catalogo=1`;
 
   const isGosen = activeCompanySlug === 'gosen';
   const showDvolada = storeSettings.enableDeliveryDvolada ?? isGosen;

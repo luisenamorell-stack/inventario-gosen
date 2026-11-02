@@ -179,9 +179,27 @@ export interface SaaSContractData {
   updatedAt: number;
 }
 
+export const OFFICIAL_SAAS_DOMAIN = 'https://miapphn.online';
+
+export function getOfficialAppBaseUrl(customDomain?: string): string {
+  const configured = (customDomain || '').trim().replace(/\/+$/, '');
+  if (configured) {
+    return configured.startsWith('http') ? configured : `https://${configured}`;
+  }
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname.toLowerCase();
+    if (host.endsWith('.run.app') || host === 'localhost' || host === '127.0.0.1') {
+      return OFFICIAL_SAAS_DOMAIN;
+    }
+    return (window.location.origin + window.location.pathname).replace(/\/+$/, '');
+  }
+  return OFFICIAL_SAAS_DOMAIN;
+}
+
 export interface SaaSGlobalConfig {
   saasAdminPhone: string;
   saasBrandName: string;
+  customDomain?: string;
   expiryWarningDays: number;
   autoSuspendOverdue?: boolean;
   gracePeriodDays?: number;

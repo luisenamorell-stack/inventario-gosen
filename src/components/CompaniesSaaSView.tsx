@@ -8,6 +8,8 @@ import {
   SaaSBankAccount,
   TenantUsageMetrics,
   SaaSGlobalConfig,
+  OFFICIAL_SAAS_DOMAIN,
+  getOfficialAppBaseUrl,
 } from '../types';
 import {
   normalizeCompanySlug,
@@ -302,9 +304,12 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [isEditingMasterKey, setIsEditingMasterKey] = useState(false);
   const [tempMasterKey, setTempMasterKey] = useState(saasMasterKey);
 
-  // SaaS Admin WhatsApp, Warning Days & Auto-Suspend Grace Days Config
+  // SaaS Admin WhatsApp, Official Domain, Warning Days & Auto-Suspend Grace Days Config
   const [isEditingSaaSContact, setIsEditingSaaSContact] = useState(false);
   const [tempSaaSPhone, setTempSaaSPhone] = useState(saasGlobalConfig?.saasAdminPhone || '');
+  const [tempCustomDomain, setTempCustomDomain] = useState(
+    saasGlobalConfig?.customDomain || OFFICIAL_SAAS_DOMAIN
+  );
   const [tempWarningDays, setTempWarningDays] = useState(String(saasGlobalConfig?.expiryWarningDays || 5));
   const [tempAutoSuspend, setTempAutoSuspend] = useState<boolean>(
     saasGlobalConfig?.autoSuspendOverdue !== false
@@ -363,12 +368,15 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const handleSaveSaaSContactConfig = async () => {
     if (!onSaveSaaSGlobalConfig) return;
     const cleanPhone = tempSaaSPhone.replace(/[^\d+]/g, '').trim();
+    const cleanDomain = getOfficialAppBaseUrl(tempCustomDomain);
     const days = Math.max(1, Math.min(30, Number(tempWarningDays) || 5));
     const grace = Math.max(0, Math.min(30, Number(tempGraceDays ?? 3)));
     try {
       await onSaveSaaSGlobalConfig({
+        ...saasGlobalConfig,
         saasAdminPhone: cleanPhone,
         saasBrandName: saasGlobalConfig?.saasBrandName || 'Administración SaaS',
+        customDomain: cleanDomain,
         expiryWarningDays: days,
         autoSuspendOverdue: tempAutoSuspend,
         gracePeriodDays: grace,
@@ -377,7 +385,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         updatedAt: Date.now(),
       });
       setIsEditingSaaSContact(false);
-      showToast('Configuración de WhatsApp, avisos y corte automático guardada.', 'success');
+      showToast(`Configuración guardada. Dominio oficial activo: ${cleanDomain}`, 'success');
     } catch {
       showToast('Error al guardar la configuración SaaS.', 'error');
     }
@@ -487,13 +495,14 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [annTarget, setAnnTarget] = useState<string>('all');
   const [isSavingAnnouncement, setIsSavingAnnouncement] = useState<boolean>(false);
 
-  const baseUrl =
-    typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
+  const baseUrl = getOfficialAppBaseUrl(saasGlobalConfig?.customDomain);
 
   const getCompanyLoginUrl = (companySlug: string) => {
-    if (companySlug === 'gosen') return baseUrl;
-    return `${baseUrl}?empresa=${companySlug}`;
+    const clean = normalizeCompanySlug(companySlug);
+    return `${baseUrl}/?empresa=${clean}`;
   };
+
+  const saasConsoleLoginUrl = `${baseUrl}/?saas=1`;
 
   const warningDaysThreshold = saasGlobalConfig?.expiryWarningDays || 5;
   const gracePeriodDays = saasGlobalConfig?.gracePeriodDays ?? 3;
@@ -1201,8 +1210,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
 
   const handleSendCredentialsWhatsApp = (comp: CompanyTenant) => {
     const loginUrl = getCompanyLoginUrl(comp.slug);
-    const catalogUrl =
-      comp.slug === 'gosen' ? `${baseUrl}?catalogo=1` : `${baseUrl}?empresa=${comp.slug}&catalogo=1`;
+    const catalogUrl = `${baseUrl}/?empresa=${normalizeCompanySlug(comp.slug)}&catalogo=1`;
 
     const msg =
       `🚀 *BIENVENIDO A TU SISTEMA DE INVENTARIO Y FACTURACIÓN POS*\n\n` +
@@ -1579,17 +1587,33 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {/* SaaS Admin WhatsApp, Warning Days & Grace Days Config */}
+            {/* SaaS Admin Official Domain, WhatsApp, Warning Days & Grace Days Config */}
             <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-2.5 text-[11px]">
-              <div className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
-                WhatsApp Cobros, Aviso Previo y Auto-Corte:
+              <div className="text-slate-400 font-semibold uppercase tracking-wider text-[10px] flex items-center gap-1.5">
+                <Globe className="w-3 h-3 text-teal-400" />
+                <span>Dominio Oficial, WhatsApp Cobros y Auto-Corte:</span>
               </div>
               {!isEditingSaaSContact ? (
                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(baseUrl);
+                        showToast(`Dominio oficial copiado: ${baseUrl}`, 'success');
+                      } catch {}
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-teal-500/20 hover:bg-teal-500/30 border border-teal-500/40 font-mono font-black text-xs text-teal-300 cursor-pointer"
+                    title="Clic para copiar el enlace de tu dominio oficial"
+                  >
+                    <span>{baseUrl.replace(/^https?:\/\//, '')}</span>
+                    <Copy className="w-3 h-3" />
+                  </button>
+                  <span className="text-slate-500">•</span>
                   <span className="font-mono font-black text-xs text-emerald-400">
                     {saasGlobalConfig?.saasAdminPhone
                       ? `+${saasGlobalConfig.saasAdminPhone}`
-                      : 'Sin número'}
+                      : 'Sin WhatsApp'}
                   </span>
                   <span className="text-slate-500">•</span>
                   <span className="font-bold text-amber-300">
@@ -1602,6 +1626,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      setTempCustomDomain(saasGlobalConfig?.customDomain || OFFICIAL_SAAS_DOMAIN);
                       setTempSaaSPhone(saasGlobalConfig?.saasAdminPhone || '');
                       setTempWarningDays(String(saasGlobalConfig?.expiryWarningDays || 5));
                       setTempAutoSuspend(saasGlobalConfig?.autoSuspendOverdue !== false);
@@ -1615,6 +1640,14 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                  <input
+                    type="text"
+                    value={tempCustomDomain}
+                    onChange={(e) => setTempCustomDomain(e.target.value)}
+                    placeholder="https://miapphn.online"
+                    className="w-40 px-2 py-1 rounded bg-slate-900 border border-teal-600/60 text-xs font-mono font-bold text-teal-300"
+                    title="Dominio web oficial de tu plataforma SaaS"
+                  />
                   <input
                     type="text"
                     value={tempSaaSPhone}
@@ -1672,10 +1705,24 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
               )}
             </div>
 
-            {/* Master Key Config */}
+            {/* Master Key & Dedicated SaaS Portal Link Config */}
             <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-2.5 text-[11px]">
-              <div className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
-                Tu Clave Maestra (Login SaaS):
+              <div className="text-slate-400 font-semibold uppercase tracking-wider text-[10px] flex items-center justify-between gap-2">
+                <span>Clave Maestra y Link Exclusivo SaaS:</span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(saasConsoleLoginUrl);
+                      showToast(`Link exclusivo de tu Consola SaaS copiado: ${saasConsoleLoginUrl}`, 'success');
+                    } catch {}
+                  }}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/20 hover:bg-teal-500/30 border border-teal-500/40 text-[10px] font-bold text-teal-300 cursor-pointer"
+                  title="Copiar enlace directo al login privado del Administrador SaaS (?saas=1)"
+                >
+                  <Copy className="w-2.5 h-2.5" />
+                  <span>Link SaaS</span>
+                </button>
               </div>
               {!isEditingMasterKey ? (
                 <div className="flex items-center gap-2 mt-0.5">
