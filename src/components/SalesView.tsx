@@ -35,6 +35,13 @@ import {
 import { PrintFormatModal, PrinterConnectionManager } from './PrintFormatModal';
 import { AdaptiveImage } from './AdaptiveImage';
 import {
+  cleanCategoryName,
+  matchesCategoryFilter,
+  matchesProductSearch,
+  normalizeSearchText,
+  scoreProductSearchRelevance,
+} from '../utils/productSearch';
+import {
   ShoppingCart,
   Search,
   Plus,
@@ -378,54 +385,41 @@ export const SalesView: React.FC<SalesViewProps> = ({
   // Printable receipt ref
   const receiptPrintRef = useRef<HTMLDivElement>(null);
 
-  // Available categories in inventory
+  // Available categories in inventory (deduplicated ignoring trailing spaces and case)
   const categories = useMemo(() => {
-    const set = new Set<string>();
+    const map = new Map<string, string>();
     inventory.forEach((p) => {
-      if (p.category) set.add(p.category.trim());
+      const cleaned = cleanCategoryName(p.category);
+      if (cleaned) {
+        const key = normalizeSearchText(cleaned);
+        if (!map.has(key)) {
+          map.set(key, cleaned);
+        }
+      }
     });
-    return Array.from(set).sort();
+    return Array.from(map.values()).sort((a, b) =>
+      a.localeCompare(b, 'es', { sensitivity: 'base' })
+    );
   }, [inventory]);
 
-  // Filtered inventory catalog for POS (supports name, SKU code, barcode)
+  // Filtered inventory catalog for POS (supports name, SKU code, barcode, category, supplier)
   const filteredCatalog = useMemo(() => {
-    const raw = searchQuery.trim().toLowerCase();
-    if (!raw) {
-      return selectedCategory === 'all'
-        ? inventory
-        : inventory.filter((item) => item.category === selectedCategory);
-    }
-
-    const searchTokens = raw.split(/\s+/).filter(Boolean);
-
-    return inventory.filter((item) => {
-      // Category filter
-      if (selectedCategory !== 'all' && item.category !== selectedCategory) {
+    const raw = searchQuery.trim();
+    const filtered = inventory.filter((item) => {
+      if (!matchesCategoryFilter(item.category, selectedCategory)) {
         return false;
       }
+      if (!raw) return true;
+      return matchesProductSearch(item, raw);
+    });
 
-      const itemName = (item.name || '').toLowerCase();
-      const itemCode = (item.code || '').toLowerCase();
-      const itemSize = (item.size || '').toLowerCase();
-      const itemCategory = (item.category || '').toLowerCase();
-      const itemSupplier = (item.supplier || '').toLowerCase();
+    if (!raw) return filtered;
 
-      // Check if code or barcode matches directly
-      if (itemCode.includes(raw) || itemCode.replace(/[-_\s]/g, '').includes(raw.replace(/[-_\s]/g, ''))) {
-        return true;
-      }
-
-      // Check if all token words match the product name, size or category
-      const matchesAllTokens = searchTokens.every(
-        (token) =>
-          itemName.includes(token) ||
-          itemCode.includes(token) ||
-          itemSize.includes(token) ||
-          itemCategory.includes(token) ||
-          itemSupplier.includes(token)
-      );
-
-      return matchesAllTokens;
+    return [...filtered].sort((a, b) => {
+      const scoreA = scoreProductSearchRelevance(a, raw);
+      const scoreB = scoreProductSearchRelevance(b, raw);
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
     });
   }, [inventory, searchQuery, selectedCategory]);
 

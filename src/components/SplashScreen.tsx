@@ -1,11 +1,12 @@
 import React from 'react';
-import { StoreSettings } from '../types';
+import { StoreSettings, CompanyTenant } from '../types';
 import { normalizeCompanySlug } from '../firebase/firestoreService';
 import { MiAppHNBannerLogo, MiAppHNCashRegisterIcon } from './MiAppHNLogo';
 
 interface SplashScreenProps {
   storeSettings?: StoreSettings;
   companyId?: string;
+  companies?: CompanyTenant[];
   isSaaSAdmin?: boolean;
   isExiting: boolean;
   welcomeUser?: string | null;
@@ -92,6 +93,7 @@ const GosenShoeSvg: React.FC<{ className?: string }> = ({ className = '' }) => (
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   storeSettings,
   companyId,
+  companies = [],
   isSaaSAdmin = false,
   isExiting,
   welcomeUser,
@@ -100,13 +102,21 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   const resolvedSlug = normalizeCompanySlug(companyId || storeSettings?.companyId || 'gosen');
   const isGosenStore = !isSaaSAdmin && resolvedSlug === 'gosen';
 
+  const matchingCompany = companies.find(
+    (c) => normalizeCompanySlug(c.slug) === resolvedSlug
+  );
+
   const storeName = isSaaSAdmin
     ? 'MIAPPHN • CONSOLA CENTRAL'
-    : isGosenStore
-    ? storeSettings?.storeName || 'TIENDA GOSÉN'
-    : storeSettings?.storeName || resolvedSlug.toUpperCase();
+    : matchingCompany?.name ||
+      (isGosenStore
+        ? storeSettings?.storeName || 'TIENDA GOSÉN'
+        : storeSettings?.storeName || resolvedSlug.toUpperCase());
 
-  const clientLogoUrl = !isSaaSAdmin && !isGosenStore ? storeSettings?.logoUrl : undefined;
+  const clientLogoUrl =
+    !isSaaSAdmin && !isGosenStore
+      ? matchingCompany?.logoUrl || storeSettings?.logoUrl
+      : undefined;
 
   return (
     <div

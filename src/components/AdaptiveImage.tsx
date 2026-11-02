@@ -108,19 +108,12 @@ export const AdaptiveImage: React.FC<AdaptiveImageProps> = ({
           darkSurface ? 'bg-slate-900' : 'bg-slate-50/90'
         } ${enableZoom ? 'cursor-zoom-in group/zoom' : ''} ${containerClassName} ${className}`}
       >
-        {/* Ambient Studio Backdrop (eliminates empty side/top bars on portrait or landscape photos) */}
-        <img
-          src={src}
-          alt=""
-          aria-hidden="true"
-          decoding="async"
-          className="absolute inset-0 w-full h-full object-cover scale-125 blur-xl opacity-35 pointer-events-none select-none saturate-125"
-        />
+        {/* Lightweight Studio Backdrop (avoids decoding large base64 images twice with GPU blur on every table row) */}
         <div
           className={`absolute inset-0 pointer-events-none ${
             darkSurface
               ? 'bg-gradient-to-b from-slate-900/30 via-transparent to-slate-900/40'
-              : 'bg-radial from-white/75 via-white/35 to-slate-100/50'
+              : 'bg-radial from-white via-slate-50/70 to-slate-100/90'
           }`}
         />
 

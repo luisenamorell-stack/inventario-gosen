@@ -6,9 +6,12 @@ import {
   onSnapshot,
   writeBatch,
   getDocs,
+  getDocsFromCache,
   getDoc,
+  getDocFromCache,
   getDocFromServer,
   query,
+  where,
   limit,
   WriteBatch
 } from 'firebase/firestore';
@@ -337,6 +340,7 @@ export function getScopedDocId(rawId: string, companyId = getActiveCompanyId()):
 const BASE_CACHE_KEYS = {
   INVENTORY: 'stockmaster_cached_inventory_v1',
   INVENTORY_TS: 'stockmaster_inventory_sync_ts_v1',
+  INVENTORY_MUTATIONS: 'stockmaster_inventory_mutations_v1',
   SUPPLIERS: 'stockmaster_cached_suppliers_v1',
   SALES: 'stockmaster_cached_sales_v1',
   PURCHASES: 'stockmaster_cached_purchases_v1',
@@ -348,7 +352,7 @@ const BASE_CACHE_KEYS = {
 };
 
 function getScopedCacheKey(baseKey: string, companyId = getActiveCompanyId()): string {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   if (slug === 'gosen') return baseKey;
   return `${baseKey}__${slug}`;
 }
@@ -363,27 +367,312 @@ function safeReadCache<T>(key: string): T | null {
   }
 }
 
-function safeWriteCache<T>(key: string, data: T): void {
+function safeWriteCache<T>(key: string, data: T): boolean {
   try {
     localStorage.setItem(key, JSON.stringify(data));
+    return true;
   } catch (err) {
     console.warn(`Could not write cache for ${key}:`, err);
+    return false;
   }
+}
+
+// In-memory cache & image map so large catalogs (e.g. 6.2MB of base64 photos in Comercial GYG)
+// never lose images or lag when localStorage hits its 5MB browser quota.
+const memoryInventoryCache = new Map<string, Product[]>();
+const memoryImageMap = new Map<string, string>();
+
+const IDB_NAME = 'stockmaster_idb_cache_v1';
+const IDB_STORE = 'inventory_store';
+
+function openInventoryIdb(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || !('indexedDB' in window)) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      const req = window.indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const dbInstance = req.result;
+        if (!dbInstance.objectStoreNames.contains(IDB_STORE)) {
+          dbInstance.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function saveInventoryToIndexedDB(
+  items: Product[],
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const idb = await openInventoryIdb();
+  if (!idb) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = idb.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      store.put(items, `inv_${slug}`);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export async function loadInventoryFromIndexedDB(
+  companyId = getActiveCompanyId()
+): Promise<Product[] | null> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const idb = await openInventoryIdb();
+  if (!idb) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = idb.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.get(`inv_${slug}`);
+      req.onsuccess = () => {
+        const result = Array.isArray(req.result) ? (req.result as Product[]) : null;
+        if (result && result.length > 0) {
+          result.forEach((p) => {
+            if (p.img) {
+              memoryImageMap.set(`${slug}__${(p.code || '').trim().toLowerCase()}`, p.img);
+            }
+          });
+          const merged = applyPendingMutationsToInventory(result, slug);
+          memoryInventoryCache.set(slug, merged);
+          resolve(merged);
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+interface PendingInventoryMutations {
+  upserts: Record<string, Product>;
+  deletedCodes: string[];
+  deletedIds: string[];
+  updatedAt: number;
+}
+
+const memoryPendingMutations = new Map<string, PendingInventoryMutations>();
+
+function getPendingMutations(companyId = getActiveCompanyId()): PendingInventoryMutations {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const mem = memoryPendingMutations.get(slug);
+  if (mem) return mem;
+  const stored = safeReadCache<PendingInventoryMutations>(
+    getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_MUTATIONS, slug)
+  );
+  const initial: PendingInventoryMutations = stored || {
+    upserts: {},
+    deletedCodes: [],
+    deletedIds: [],
+    updatedAt: 0,
+  };
+  memoryPendingMutations.set(slug, initial);
+  return initial;
+}
+
+function savePendingMutations(mutations: PendingInventoryMutations, companyId = getActiveCompanyId()): void {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  memoryPendingMutations.set(slug, mutations);
+  const lightUpserts: Record<string, Product> = {};
+  for (const [k, v] of Object.entries(mutations.upserts)) {
+    if (v.img) {
+      memoryImageMap.set(`${slug}__${(v.code || '').trim().toLowerCase()}`, v.img);
+    }
+    lightUpserts[k] =
+      v.img && v.img.startsWith('data:') && v.img.length > 4000
+        ? { ...v, img: '' }
+        : v;
+  }
+  const key = getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_MUTATIONS, slug);
+  if (!safeWriteCache(key, { ...mutations, upserts: lightUpserts })) {
+    try {
+      localStorage.removeItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, slug));
+      safeWriteCache(key, { ...mutations, upserts: lightUpserts });
+    } catch {}
+  }
+}
+
+export function recordLocalProductSave(
+  product: Product,
+  oldCode?: string,
+  companyId = getActiveCompanyId()
+): void {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const mut = getPendingMutations(slug);
+  const cleanNew = (product.code || '').trim().toLowerCase();
+  const cleanOld = (oldCode || '').trim().toLowerCase();
+
+  if (cleanOld && cleanOld !== cleanNew) {
+    delete mut.upserts[cleanOld];
+    if (!mut.deletedCodes.includes(cleanOld)) {
+      mut.deletedCodes.push(cleanOld);
+    }
+  }
+
+  mut.deletedCodes = mut.deletedCodes.filter((c) => c !== cleanNew);
+  mut.deletedIds = mut.deletedIds.filter((id) => id !== product.id);
+  if (product.img) {
+    memoryImageMap.set(`${slug}__${cleanNew}`, product.img);
+  }
+  mut.upserts[cleanNew] = {
+    ...product,
+    id: getScopedDocId(product.code, slug),
+    companyId: slug,
+    code: product.code.trim(),
+    name: product.name.trim(),
+    category: (product.category || 'Otros').trim(),
+    supplier: (product.supplier || '').trim(),
+  };
+  mut.updatedAt = Date.now();
+  savePendingMutations(mut, slug);
+}
+
+export function recordLocalProductDelete(
+  id: string,
+  code?: string,
+  companyId = getActiveCompanyId()
+): void {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const mut = getPendingMutations(slug);
+  const cleanCode = (
+    code || (id.includes('__') ? id.split('__').slice(1).join('__') : id)
+  )
+    .trim()
+    .toLowerCase();
+
+  if (cleanCode) {
+    delete mut.upserts[cleanCode];
+    if (!mut.deletedCodes.includes(cleanCode)) {
+      mut.deletedCodes.push(cleanCode);
+    }
+  }
+  if (id && !mut.deletedIds.includes(id.trim())) {
+    mut.deletedIds.push(id.trim());
+  }
+  mut.updatedAt = Date.now();
+  savePendingMutations(mut, slug);
+}
+
+export function applyPendingMutationsToInventory(
+  items: Product[],
+  companyId = getActiveCompanyId()
+): Product[] {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const mut = getPendingMutations(slug);
+  const deletedCodeSet = new Set(mut.deletedCodes.map((c) => c.toLowerCase()));
+  const deletedIdSet = new Set(mut.deletedIds);
+
+  const byCode = new Map<string, Product>();
+
+  for (const item of items) {
+    const codeKey = (item.code || '').trim().toLowerCase();
+    if (!codeKey) continue;
+    if (deletedCodeSet.has(codeKey) || (item.id && deletedIdSet.has(item.id))) {
+      continue;
+    }
+    const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
+    byCode.set(codeKey, {
+      ...item,
+      category: (item.category || 'Otros').trim(),
+      supplier: (item.supplier || '').trim(),
+      img: item.img || memImg || '',
+    });
+  }
+
+  for (const [codeKey, upserted] of Object.entries(mut.upserts)) {
+    if (deletedCodeSet.has(codeKey)) continue;
+    const existing = byCode.get(codeKey);
+    const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
+    byCode.set(codeKey, {
+      ...(existing || {}),
+      ...upserted,
+      category: (upserted.category || existing?.category || 'Otros').trim(),
+      supplier: (upserted.supplier ?? existing?.supplier ?? '').trim(),
+      img: upserted.img || memImg || existing?.img || '',
+    });
+  }
+
+  const merged = Array.from(byCode.values());
+  merged.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+  return merged;
 }
 
 export function getCachedInventory(companyId = getActiveCompanyId()): Product[] | null {
-  return safeReadCache<Product[]>(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, companyId));
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const inMem = memoryInventoryCache.get(slug);
+  if (inMem && inMem.length > 0) {
+    return applyPendingMutationsToInventory(inMem, slug);
+  }
+  const fromLs = safeReadCache<Product[]>(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, slug));
+  if (fromLs && fromLs.length > 0) {
+    const hydrated = applyPendingMutationsToInventory(fromLs, slug);
+    memoryInventoryCache.set(slug, hydrated);
+    return hydrated;
+  }
+  return null;
 }
 
 export function setCachedInventory(items: Product[], syncTs?: number, companyId = getActiveCompanyId()): void {
-  const sorted = [...items].sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
-  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, companyId), sorted);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  items.forEach((p) => {
+    if (p.img) {
+      memoryImageMap.set(`${slug}__${(p.code || '').trim().toLowerCase()}`, p.img);
+    }
+  });
+
+  const merged = applyPendingMutationsToInventory(items, slug);
+  memoryInventoryCache.set(slug, merged);
+
+  // Persist full inventory (including large base64 images) to IndexedDB asynchronously
+  saveInventoryToIndexedDB(merged, slug).catch(() => {});
+
+  // For localStorage (5MB limit), strip oversized data:image URLs if total payload is large
+  const cacheKey = getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, slug);
+  let totalImgChars = 0;
+  for (let i = 0; i < merged.length; i++) {
+    totalImgChars += (merged[i].img || '').length;
+  }
+
+  const shouldStripLargeDataUrls = totalImgChars > 1_200_000;
+  const lsPayload = shouldStripLargeDataUrls
+    ? merged.map((p) =>
+        p.img && p.img.startsWith('data:') && p.img.length > 4000
+          ? { ...p, img: '' }
+          : p
+      )
+    : merged;
+
+  if (!safeWriteCache(cacheKey, lsPayload)) {
+    const ultraLight = merged.map((p) =>
+      p.img && p.img.startsWith('data:') ? { ...p, img: '' } : p
+    );
+    try {
+      localStorage.removeItem(cacheKey);
+    } catch {}
+    safeWriteCache(cacheKey, ultraLight);
+  }
+
   if (syncTs !== undefined) {
     try {
-      localStorage.setItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, companyId), String(syncTs));
+      localStorage.setItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, slug), String(syncTs));
     } catch {}
   }
-  if (sorted.length > 0 && normalizeCompanySlug(companyId) === 'gosen') {
+  if (merged.length > 0 && slug === 'gosen') {
     try {
       localStorage.setItem(BASE_CACHE_KEYS.SEEDED, '1');
     } catch {}
@@ -447,23 +736,75 @@ export function setCachedCompanies(companies: CompanyTenant[]): void {
 }
 
 function getSyncStateDocId(companyId = getActiveCompanyId()): string {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   return slug === 'gosen' ? 'sync_state' : `sync_state_${slug}`;
 }
 
 function getStoreProfileDocId(companyId = getActiveCompanyId()): string {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   return slug === 'gosen' ? 'store_profile' : `store_profile_${slug}`;
 }
 
-/**
- * Updates the lightweight 1-document sync stamp (`settings/sync_state[_companyId]`) whenever
- * inventory changes, and advances the local timestamp so this device does not
- * need to re-download the inventory collection.
- */
+function getScopedInventoryQuery(slug: string) {
+  const collRef = collection(db, 'inventory');
+  if (isGyGAlias(slug)) {
+    return query(
+      collRef,
+      where('companyId', 'in', [
+        'tiendagyg',
+        'comercial-gyg',
+        'comercialgyg',
+        'comercial_gyg',
+        'gyg',
+      ])
+    );
+  }
+  const canonical = canonicalizeCompanySlug(slug);
+  if (canonical !== 'gosen') {
+    const variants = Array.from(new Set([slug, canonical, normalizeCompanySlug(slug)])).filter(Boolean);
+    return query(collRef, where('companyId', 'in', variants));
+  }
+  return collRef;
+}
+
+function parseInventorySnapshotDocs(snapshot: any, slug: string): Product[] {
+  const items: Product[] = [];
+  snapshot.forEach((docSnap: any) => {
+    const data = docSnap.data();
+    if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
+
+    let code = (data.code || '').trim();
+    if (!code) {
+      code = docSnap.id.includes('__') ? docSnap.id.split('__').slice(1).join('__') : docSnap.id;
+    }
+
+    items.push({
+      id: docSnap.id,
+      companyId: data.companyId || slug,
+      code,
+      name: (data.name || '').trim(),
+      category: (data.category || 'Otros').trim(),
+      size: (data.size || '').trim(),
+      supplier: (data.supplier || '').trim(),
+      cost: Number(data.cost) || 0,
+      price: Number(data.price) || 0,
+      discount: Math.max(0, Number(data.discount) || 0),
+      discountType: data.discountType === 'percent' ? 'percent' : 'fixed',
+      discountValue: Math.max(0, Number(data.discountValue) || Number(data.discount) || 0),
+      stock: Number(data.stock) || 0,
+      warehouseStocks:
+        data.warehouseStocks && typeof data.warehouseStocks === 'object'
+          ? data.warehouseStocks
+          : undefined,
+      img: data.img || '',
+    });
+  });
+  return applyPendingMutationsToInventory(items, slug);
+}
+
 export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = getActiveCompanyId()): Promise<number> {
   const now = Date.now();
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const syncRef = doc(db, 'settings', getSyncStateDocId(slug));
   try {
     localStorage.setItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, slug), String(now));
@@ -484,69 +825,34 @@ export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = ge
   return now;
 }
 
-/**
- * Smart Inventory Reader (Multi-Company Isolated):
- * 1. Checks `settings/sync_state[_companyId]` (1 Firestore document read).
- * 2. If local cache exists and its timestamp >= remote `updatedAt` (and !forceRefresh),
- *    returns the cached inventory immediately with 0 collection reads.
- * 3. Otherwise downloads `inventory` collection once, filters by `companyId`, merges any
- *    unsynced local cached items so client articles are never lost, and updates cache & timestamp.
- */
 export async function fetchInventorySmart(
   forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<{ items: Product[]; fromCache: boolean; readsUsed: number }> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
-  const cached = getCachedInventory(slug);
+  const idbCached = await loadInventoryFromIndexedDB(slug);
+  const cached = idbCached && idbCached.length > 0 ? idbCached : getCachedInventory(slug);
   const localTs = Number(localStorage.getItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, slug)) || 0);
+  const scopedQuery = getScopedInventoryQuery(slug);
 
   try {
     const syncRef = doc(db, 'settings', getSyncStateDocId(slug));
-    const syncSnap = await getDoc(syncRef);
-    const remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
-
-    if (!forceRefresh && cached && cached.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
-      return { items: cached, fromCache: true, readsUsed: 1 };
+    let remoteTs = 0;
+    try {
+      const syncSnap = await getDoc(syncRef);
+      remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
+    } catch {
+      const cachedSync = await getDocFromCache(syncRef).catch(() => null);
+      remoteTs = cachedSync && cachedSync.exists() ? Number(cachedSync.data()?.updatedAt || 0) : 0;
     }
 
-    const collRef = collection(db, 'inventory');
-    const snapshot = await getDocs(collRef);
-    const items: Product[] = [];
-    const remoteCodes = new Set<string>();
+    if (!forceRefresh && cached && cached.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
+      return { items: applyPendingMutationsToInventory(cached, slug), fromCache: true, readsUsed: 1 };
+    }
 
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
+    const snapshot = await getDocs(scopedQuery);
+    const items = parseInventorySnapshotDocs(snapshot, slug);
 
-      let code = (data.code || '').trim();
-      if (!code) {
-        code = docSnap.id.includes('__') ? docSnap.id.split('__').slice(1).join('__') : docSnap.id;
-      }
-      remoteCodes.add(code.toLowerCase());
-
-      items.push({
-        id: docSnap.id,
-        companyId: data.companyId || slug,
-        code,
-        name: data.name || '',
-        category: data.category || 'Otros',
-        size: data.size || '',
-        supplier: data.supplier || '',
-        cost: Number(data.cost) || 0,
-        price: Number(data.price) || 0,
-        discount: Math.max(0, Number(data.discount) || 0),
-        discountType: data.discountType === 'percent' ? 'percent' : 'fixed',
-        discountValue: Math.max(0, Number(data.discountValue) || Number(data.discount) || 0),
-        stock: Number(data.stock) || 0,
-        warehouseStocks:
-          data.warehouseStocks && typeof data.warehouseStocks === 'object'
-            ? data.warehouseStocks
-            : undefined,
-        img: data.img || '',
-      });
-    });
-
-    items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
     const effectiveTs = Date.now();
     setCachedInventory(items, effectiveTs, slug);
 
@@ -556,11 +862,29 @@ export async function fetchInventorySmart(
 
     return { items, fromCache: false, readsUsed: items.length + 1 };
   } catch (error) {
-    if (cached) {
-      console.warn('Using cached inventory due to connection issue:', error);
-      return { items: cached, fromCache: true, readsUsed: 0 };
+    try {
+      const cacheSnap = await getDocsFromCache(scopedQuery);
+      if (!cacheSnap.empty) {
+        const itemsFromFsCache = parseInventorySnapshotDocs(cacheSnap, slug);
+        if (itemsFromFsCache.length > 0) {
+          setCachedInventory(itemsFromFsCache, undefined, slug);
+          return { items: itemsFromFsCache, fromCache: true, readsUsed: 0 };
+        }
+      }
+    } catch {}
+
+    if (cached && cached.length > 0) {
+      console.warn('Using cached inventory due to connection/quota issue:', error);
+      return { items: applyPendingMutationsToInventory(cached, slug), fromCache: true, readsUsed: 0 };
     }
-    handleFirestoreError(error, OperationType.GET, 'inventory');
+
+    const pendingOnly = applyPendingMutationsToInventory([], slug);
+    if (pendingOnly.length > 0) {
+      return { items: pendingOnly, fromCache: true, readsUsed: 0 };
+    }
+
+    console.warn('Inventory fetch fallback empty:', error);
+    return { items: [], fromCache: true, readsUsed: 0 };
   }
 }
 
@@ -572,48 +896,35 @@ export function subscribeToInventory(
   companyId = getActiveCompanyId()
 ) {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
-  const collRef = collection(db, 'inventory');
+  const scopedQuery = getScopedInventoryQuery(slug);
   return onSnapshot(
-    collRef,
+    scopedQuery,
     (snapshot) => {
-      const items: Product[] = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
-
-        let code = (data.code || '').trim();
-        if (!code) {
-          code = docSnap.id.includes('__') ? docSnap.id.split('__').slice(1).join('__') : docSnap.id;
-        }
-
-        items.push({
-          id: docSnap.id,
-          companyId: data.companyId || slug,
-          code,
-          name: data.name || '',
-          category: data.category || 'Otros',
-          size: data.size || '',
-          supplier: data.supplier || '',
-          cost: Number(data.cost) || 0,
-          price: Number(data.price) || 0,
-          discount: Math.max(0, Number(data.discount) || 0),
-          discountType: data.discountType === 'percent' ? 'percent' : 'fixed',
-          discountValue: Math.max(0, Number(data.discountValue) || Number(data.discount) || 0),
-          stock: Number(data.stock) || 0,
-          warehouseStocks:
-            data.warehouseStocks && typeof data.warehouseStocks === 'object'
-              ? data.warehouseStocks
-              : undefined,
-          img: data.img || '',
-        });
-      });
-      items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+      const items = parseInventorySnapshotDocs(snapshot, slug);
       setCachedInventory(items, undefined, slug);
       onData(items);
     },
-    (error) => {
+    async (error) => {
       if (onError) onError(error);
-      handleFirestoreError(error, OperationType.GET, 'inventory');
+      console.warn('Inventory realtime listener fallback to cache:', error);
+      try {
+        const cacheSnap = await getDocsFromCache(scopedQuery);
+        if (!cacheSnap.empty) {
+          const items = parseInventorySnapshotDocs(cacheSnap, slug);
+          setCachedInventory(items, undefined, slug);
+          onData(items);
+          return;
+        }
+      } catch {}
+      const idbItems = await loadInventoryFromIndexedDB(slug);
+      if (idbItems && idbItems.length > 0) {
+        onData(idbItems);
+      } else {
+        const lsItems = getCachedInventory(slug);
+        if (lsItems && lsItems.length > 0) {
+          onData(lsItems);
+        }
+      }
     }
   );
 }
@@ -627,11 +938,12 @@ export async function saveProductToFirestore(
   const slug = isGyG ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
   const canonical = canonicalizeCompanySlug(slug);
   const docId = getScopedDocId(product.code, slug);
-  const path = `inventory/${docId}`;
+
+  recordLocalProductSave(product, oldCode, slug);
+
   try {
     const batch = writeBatch(db);
 
-    // If changing SKU/code, remove the old document across all prefix variants
     if (oldCode && oldCode.trim().toLowerCase() !== product.code.trim().toLowerCase()) {
       const cleanOldCode = oldCode.trim();
       const idsToDelete = new Set<string>([
@@ -665,7 +977,7 @@ export async function saveProductToFirestore(
       companyId: slug,
       code: product.code.trim(),
       name: product.name.trim(),
-      category: product.category || 'Otros',
+      category: (product.category || 'Otros').trim(),
       cost: Number(product.cost) || 0,
       price: Number(product.price) || 0,
       discount: Math.max(0, Number(product.discount) || 0),
@@ -690,7 +1002,7 @@ export async function saveProductToFirestore(
       await touchInventorySyncStamp(undefined, 'comercialgyg').catch(() => {});
     }
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
+    console.warn('Product saved in local cache; cloud sync deferred:', error);
   }
 }
 
@@ -702,6 +1014,9 @@ export async function deleteProductFromFirestore(
   const isGyG = isGyGAlias(companyId);
   const slug = isGyG ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
   const canonical = canonicalizeCompanySlug(slug);
+
+  recordLocalProductDelete(id, code, slug);
+
   const idsToDelete = new Set<string>();
   if (id) {
     idsToDelete.add(id.trim());
@@ -748,7 +1063,13 @@ export async function bulkSaveProductsToFirestore(
 ): Promise<void> {
   if (products.length === 0 && newSuppliers.length === 0) return;
 
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  products.forEach((p) => {
+    if (p.code?.trim()) {
+      recordLocalProductSave(p, undefined, slug);
+    }
+  });
+
   const CHUNK_SIZE = 400;
   try {
     if (newSuppliers.length > 0) {
@@ -811,7 +1132,7 @@ export async function bulkSaveProductsToFirestore(
     }
     await touchInventorySyncStamp(undefined, slug);
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, 'batch:inventory/bulk_import');
+    console.warn('Bulk products saved locally; cloud sync deferred:', error);
   }
 }
 
@@ -821,18 +1142,18 @@ export async function fetchSuppliersOnce(
   _forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<Supplier[]> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const cached = getCachedSuppliers(slug);
   try {
     const snapshot = await getDocs(collection(db, 'suppliers'));
     const suppliers: Supplier[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
-      if (!belongsToCompany(data.companyId, slug)) return;
+      if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
       suppliers.push({
         id: docSnap.id,
-        companyId: data.companyId || 'gosen',
-        name: data.name || '',
+        companyId: data.companyId || slug,
+        name: (data.name || '').trim(),
         contact: data.contact || '',
         phone: data.phone || '',
         email: data.email || '',
@@ -843,8 +1164,30 @@ export async function fetchSuppliersOnce(
     setCachedSuppliers(suppliers, slug);
     return suppliers;
   } catch (error) {
+    try {
+      const cacheSnap = await getDocsFromCache(collection(db, 'suppliers'));
+      if (!cacheSnap.empty) {
+        const suppliers: Supplier[] = [];
+        cacheSnap.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
+          suppliers.push({
+            id: docSnap.id,
+            companyId: data.companyId || slug,
+            name: (data.name || '').trim(),
+            contact: data.contact || '',
+            phone: data.phone || '',
+            email: data.email || '',
+            address: data.address || '',
+          });
+        });
+        suppliers.sort((a, b) => a.name.localeCompare(b.name));
+        setCachedSuppliers(suppliers, slug);
+        return suppliers;
+      }
+    } catch {}
     if (cached) return cached;
-    handleFirestoreError(error, OperationType.GET, 'suppliers');
+    return [];
   }
 }
 
@@ -853,7 +1196,7 @@ export function subscribeToSuppliers(
   onError?: (err: any) => void,
   companyId = getActiveCompanyId()
 ) {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const collRef = collection(db, 'suppliers');
   return onSnapshot(
     collRef,
@@ -861,11 +1204,11 @@ export function subscribeToSuppliers(
       const suppliers: Supplier[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        if (!belongsToCompany(data.companyId, slug)) return;
+        if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
         suppliers.push({
           id: docSnap.id,
-          companyId: data.companyId || 'gosen',
-          name: data.name || '',
+          companyId: data.companyId || slug,
+          name: (data.name || '').trim(),
           contact: data.contact || '',
           phone: data.phone || '',
           email: data.email || '',
@@ -878,7 +1221,7 @@ export function subscribeToSuppliers(
     },
     (error) => {
       if (onError) onError(error);
-      handleFirestoreError(error, OperationType.GET, 'suppliers');
+      console.warn('Suppliers listener fallback:', error);
     }
   );
 }

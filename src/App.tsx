@@ -70,6 +70,7 @@ import {
   subscribeToSaaSGlobalConfig,
   saveSaaSGlobalConfigToFirestore,
   fetchInventorySmart,
+  loadInventoryFromIndexedDB,
   subscribeToInventory,
   fetchStoreSettingsOnce,
   fetchSuppliersOnce,
@@ -752,6 +753,15 @@ export const App: React.FC = () => {
     const initCoreData = async () => {
       setIsSyncing(true);
       try {
+        // Hydrate full inventory (including large base64 images) from IndexedDB immediately
+        loadInventoryFromIndexedDB(activeCompanyId)
+          .then((idbItems) => {
+            if (isMounted && idbItems && idbItems.length > 0) {
+              setInventory((prev) => (prev.length === 0 ? idbItems : prev));
+            }
+          })
+          .catch(() => {});
+
         if (!isPublicCatalogMode && activeCompanyId === 'gosen') {
           await seedInitialDataIfEmpty('gosen');
         }
@@ -765,7 +775,9 @@ export const App: React.FC = () => {
 
         if (!isMounted) return;
         setStoreSettings(settings);
-        setInventory(invResult.items);
+        if (invResult.items.length > 0) {
+          setInventory(invResult.items);
+        }
         setCompanies(companiesList);
         setSaasGlobalConfig(globalCfg);
         setIsFirebaseConnected(true);
@@ -832,7 +844,6 @@ export const App: React.FC = () => {
     unsubscribeInventory = subscribeToInventory(
       (liveInventory) => {
         setInventory(liveInventory);
-        setCachedInventory(liveInventory, Date.now(), activeCompanyId);
       },
       (err) => {
         console.warn('Inventory realtime listener warning:', err);
@@ -1294,22 +1305,40 @@ export const App: React.FC = () => {
         ...product,
         id: getScopedDocId(product.code, activeCompanyId),
         companyId: activeCompanyId,
+        code: product.code.trim(),
+        name: product.name.trim(),
+        category: (product.category || 'Otros').trim(),
+        supplier: (product.supplier || '').trim(),
       };
 
       setInventory((prev) => {
-        const index = prev.findIndex(
-          (p) =>
+        let replaced = false;
+        const next: Product[] = [];
+        const seenCodes = new Set<string>();
+
+        for (const p of prev) {
+          const pCode = (p.code || '').trim().toLowerCase();
+          const isTarget =
             (product.id && p.id && p.id === product.id) ||
-            p.code.trim().toLowerCase() === cleanOld ||
-            p.code.trim().toLowerCase() === cleanNew
-        );
-        let next: Product[];
-        if (index >= 0) {
-          next = [...prev];
-          next[index] = normalizedProduct;
-        } else {
-          next = [normalizedProduct, ...prev];
+            (cleanOld && pCode === cleanOld) ||
+            pCode === cleanNew;
+
+          if (isTarget) {
+            if (!replaced) {
+              next.push(normalizedProduct);
+              seenCodes.add(cleanNew);
+              replaced = true;
+            }
+          } else if (!seenCodes.has(pCode)) {
+            next.push(p);
+            seenCodes.add(pCode);
+          }
         }
+
+        if (!replaced) {
+          next.unshift(normalizedProduct);
+        }
+
         setCachedInventory(next, Date.now(), activeCompanyId);
         return next;
       });
@@ -2691,6 +2720,7 @@ export const App: React.FC = () => {
               warehousesData={warehousesData}
               isLoading={isInventoryLoading}
               initialSearchCode={inventorySearchQuery}
+              onClearInitialSearch={() => setInventorySearchQuery('')}
               maxProducts={companyMaxProducts}
               saasAdminPhone={saasGlobalConfig.saasAdminPhone}
               onSaveProduct={handleSaveProduct}

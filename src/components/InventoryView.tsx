@@ -39,6 +39,14 @@ import {
 import { BulkStockImportModal, StockUpdateMode } from './BulkStockImportModal';
 import { PrintFormatModal } from './PrintFormatModal';
 import { buildInventoryReportHtml, downloadInventoryReportPdf } from '../utils/printPdfService';
+import {
+  cleanCategoryName,
+  matchesCategoryFilter,
+  matchesProductSearch,
+  matchesSupplierFilter,
+  normalizeSearchText,
+  scoreProductSearchRelevance,
+} from '../utils/productSearch';
 
 interface InventoryViewProps {
   inventory: Product[];
@@ -47,6 +55,7 @@ interface InventoryViewProps {
   warehousesData?: StoreWarehousesData;
   isLoading?: boolean;
   initialSearchCode?: string;
+  onClearInitialSearch?: () => void;
   maxProducts?: number;
   saasAdminPhone?: string;
   onSaveProduct: (product: Product, oldCode?: string) => void;
@@ -76,6 +85,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   warehousesData,
   isLoading = false,
   initialSearchCode = '',
+  onClearInitialSearch,
   maxProducts = 0,
   onSaveProduct,
   onBulkSaveProducts,
@@ -153,8 +163,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   useEffect(() => {
     if (initialSearchCode) {
       setSearchText(initialSearchCode);
+      setSelectedCategory('all');
+      setSelectedSupplier('all');
+      if (onClearInitialSearch) {
+        onClearInitialSearch();
+      }
     }
-  }, [initialSearchCode]);
+  }, [initialSearchCode, onClearInitialSearch]);
 
   useEffect(() => {
     if (showModalInitially) {
@@ -173,15 +188,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       }
       return;
     }
+    const defaultCategory =
+      categories.length > 0 ? categories[0] : 'General';
     setEditingProduct(null);
     setFormData({
       code: '',
       name: '',
-      category: 'Ropa',
+      category: defaultCategory,
       size: '',
       stock: 0,
       targetWarehouseId: mainWarehouse?.id || 'principal',
-      supplier: suppliers.length > 0 ? suppliers[0].name : '',
+      supplier: availableSupplierNames.length > 0 ? availableSupplierNames[0] : '',
       cost: 0,
       price: 0,
       discountType: 'fixed',
@@ -202,11 +219,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     setFormData({
       code: product.code,
       name: product.name,
-      category: product.category || 'Otros',
+      category: cleanCategoryName(product.category || 'Otros') || 'Otros',
       size: product.size || '',
       stock: product.stock,
       targetWarehouseId: mainWarehouse?.id || 'principal',
-      supplier: product.supplier || '',
+      supplier: (product.supplier || '').trim(),
       cost: product.cost,
       price: product.price,
       discountType: savedType,
@@ -326,11 +343,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       id: editingProduct ? editingProduct.id : Date.now().toString(),
       code: formData.code.trim(),
       name: formData.name.trim(),
-      category: formData.category,
+      category: cleanCategoryName(formData.category) || 'General',
       size: formData.size.trim(),
       stock: finalTotalStock,
       warehouseStocks: nextWarehouseStocks,
-      supplier: formData.supplier,
+      supplier: formData.supplier.trim(),
       cost: Number(formData.cost) || 0,
       price: Number(formData.price) || 0,
       discount: Number(computedFormDiscount.toFixed(2)),
@@ -356,32 +373,31 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   }, [deferredSearch, selectedCategory, selectedSupplier, sortOption]);
 
   // Filter & Sort inventory items (Mayor a menor stock, precio, costo, etc.)
+  const hasSearchMatchesInOtherFilters = React.useMemo(() => {
+    const trimmedSearch = deferredSearch.trim();
+    if (!trimmedSearch) return false;
+    if (selectedCategory === 'all' && selectedSupplier === 'all') return false;
+    return inventory.some((item) => matchesProductSearch(item, trimmedSearch));
+  }, [inventory, deferredSearch, selectedCategory, selectedSupplier]);
+
   const filteredInventory = React.useMemo(() => {
-    const query = deferredSearch.toLowerCase().trim();
-    const queryClean = query.replace(/[-_\s]/g, '');
+    const trimmedSearch = deferredSearch.trim();
     const filtered = inventory.filter((item) => {
-      const itemCode = (item.code || '').toLowerCase();
-      const itemCodeClean = itemCode.replace(/[-_\s]/g, '');
-      const itemName = (item.name || '').toLowerCase();
-      const itemSize = (item.size || '').toLowerCase();
-
-      const matchesSearch =
-        !query ||
-        itemCode.includes(query) ||
-        (queryClean.length > 0 && itemCodeClean.includes(queryClean)) ||
-        itemName.includes(query) ||
-        (item.size && itemSize.includes(query));
-
-      const matchesCategory =
-        selectedCategory === 'all' || item.category === selectedCategory;
-
-      const matchesSupplier =
-        selectedSupplier === 'all' || item.supplier === selectedSupplier;
+      const matchesSearch = matchesProductSearch(item, trimmedSearch);
+      const matchesCategory = matchesCategoryFilter(item.category, selectedCategory);
+      const matchesSupplier = matchesSupplierFilter(item.supplier, selectedSupplier);
 
       return matchesSearch && matchesCategory && matchesSupplier;
     });
 
     return [...filtered].sort((a, b) => {
+      if (trimmedSearch) {
+        const scoreDiff =
+          scoreProductSearchRelevance(b, trimmedSearch) -
+          scoreProductSearchRelevance(a, trimmedSearch);
+        if (scoreDiff !== 0) return scoreDiff;
+      }
+
       switch (sortOption) {
         case 'stock-desc':
           return (Number(b.stock) || 0) - (Number(a.stock) || 0);
@@ -414,9 +430,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         case 'name-desc':
           return b.name.localeCompare(a.name, 'es', { sensitivity: 'base' });
         case 'code-asc':
-          return a.code.localeCompare(b.code, 'es', { sensitivity: 'base' });
+          return a.code.localeCompare(b.code, 'es', { sensitivity: 'base', numeric: true });
         case 'code-desc':
-          return b.code.localeCompare(a.code, 'es', { sensitivity: 'base' });
+          return b.code.localeCompare(a.code, 'es', { sensitivity: 'base', numeric: true });
         case 'default':
         default:
           return 0;
@@ -446,16 +462,57 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   // Paginated subset to render only active page in DOM
   const totalPages = pageSize === 'all' ? 1 : Math.max(1, Math.ceil(filteredInventory.length / pageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
   const paginatedInventory = React.useMemo(() => {
     if (pageSize === 'all') return filteredInventory;
-    const start = (currentPage - 1) * pageSize;
+    const start = (safeCurrentPage - 1) * pageSize;
     return filteredInventory.slice(start, start + pageSize);
-  }, [filteredInventory, currentPage, pageSize]);
+  }, [filteredInventory, safeCurrentPage, pageSize]);
 
-  // Extract unique categories
-  const categories = Array.from(
-    new Set(['Ropa', 'Calzado', 'Accesorios', ...inventory.map((i) => i.category)])
-  ).filter(Boolean);
+  // Extract unique cleaned categories (prevents duplicates like "MESAS " and "MESAS")
+  const categories = React.useMemo(() => {
+    const map = new Map<string, string>();
+    inventory.forEach((item) => {
+      const cleaned = cleanCategoryName(item.category);
+      if (!cleaned) return;
+      const key = normalizeSearchText(cleaned);
+      if (key && !map.has(key)) {
+        map.set(key, cleaned);
+      }
+    });
+    if (map.size === 0) {
+      ['Ropa', 'Calzado', 'Accesorios', 'General'].forEach((def) =>
+        map.set(normalizeSearchText(def), def)
+      );
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.localeCompare(b, 'es', { sensitivity: 'base' })
+    );
+  }, [inventory]);
+
+  // Extract unique supplier names from both `suppliers` collection and `inventory` items
+  const availableSupplierNames = React.useMemo(() => {
+    const map = new Map<string, string>();
+    suppliers.forEach((sup) => {
+      const cleaned = (sup.name || '').trim();
+      if (!cleaned) return;
+      const key = normalizeSearchText(cleaned);
+      if (key && !map.has(key)) {
+        map.set(key, cleaned);
+      }
+    });
+    inventory.forEach((item) => {
+      const cleaned = (item.supplier || '').trim();
+      if (!cleaned) return;
+      const key = normalizeSearchText(cleaned);
+      if (key && !map.has(key)) {
+        map.set(key, cleaned);
+      }
+    });
+    return Array.from(map.values()).sort((a, b) =>
+      a.localeCompare(b, 'es', { sensitivity: 'base' })
+    );
+  }, [suppliers, inventory]);
 
   // Direct Export of Filtered Inventory to organized Excel (.xlsx)
   const handleExportInventoryExcel = () => {
@@ -683,14 +740,22 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             <input
               type="text"
               value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Buscar por código, nombre o talla..."
+              onChange={(e) => {
+                setSearchText(e.target.value);
+                setCurrentPage(1);
+              }}
+              placeholder="Buscar por código/SKU, nombre, categoría, proveedor o medida..."
               className="py-2.5 pr-4 outline-none w-full text-sm bg-transparent"
             />
             {searchText && (
               <button
-                onClick={() => setSearchText('')}
-                className="p-3 text-slate-400 hover:text-slate-600"
+                type="button"
+                onClick={() => {
+                  setSearchText('');
+                  setCurrentPage(1);
+                }}
+                className="p-3 text-slate-400 hover:text-slate-600 cursor-pointer"
+                title="Limpiar búsqueda"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -701,7 +766,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             {/* Category filter */}
             <select
               value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
+              onChange={(e) => {
+                setSelectedCategory(e.target.value);
+                setCurrentPage(1);
+              }}
               className="border border-slate-200 rounded-xl px-3 sm:px-3.5 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700 w-full"
             >
               <option value="all">Categorías (Todas)</option>
@@ -715,13 +783,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             {/* Supplier filter */}
             <select
               value={selectedSupplier}
-              onChange={(e) => setSelectedSupplier(e.target.value)}
+              onChange={(e) => {
+                setSelectedSupplier(e.target.value);
+                setCurrentPage(1);
+              }}
               className="border border-slate-200 rounded-xl px-3 sm:px-3.5 py-2.5 text-xs sm:text-sm bg-white outline-none cursor-pointer hover:border-slate-300 font-medium text-slate-700 w-full"
             >
               <option value="all">Proveedores (Todos)</option>
-              {suppliers.map((sup) => (
-                <option key={sup.id} value={sup.name}>
-                  {sup.name}
+              {availableSupplierNames.map((supName) => (
+                <option key={supName} value={supName}>
+                  {supName}
                 </option>
               ))}
             </select>
@@ -817,9 +888,21 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         ) : (
           <div className="sm:hidden p-2.5 space-y-2.5">
             {filteredInventory.length === 0 ? (
-              <div className="p-8 text-center text-slate-400">
-                <Box className="w-10 h-10 mx-auto mb-2 opacity-30" />
+              <div className="p-8 text-center text-slate-400 space-y-2.5">
+                <Box className="w-10 h-10 mx-auto mb-1 opacity-30" />
                 <p className="font-medium text-sm">No se encontraron artículos con los filtros aplicados.</p>
+                {hasSearchMatchesInOtherFilters && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCategory('all');
+                      setSelectedSupplier('all');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition-colors cursor-pointer"
+                  >
+                    <span>Mostrar coincidencias en todas las categorías</span>
+                  </button>
+                )}
               </div>
             ) : (
               paginatedInventory.map((item) => {
@@ -1059,6 +1142,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   <td colSpan={6} className="p-12 text-center text-slate-400">
                     <Box className="w-10 h-10 mx-auto mb-2 opacity-30" />
                     <p className="font-medium">No se encontraron artículos con los filtros aplicados.</p>
+                    {hasSearchMatchesInOtherFilters && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategory('all');
+                          setSelectedSupplier('all');
+                        }}
+                        className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition-colors cursor-pointer"
+                      >
+                        <span>Mostrar coincidencias en todas las categorías y proveedores</span>
+                      </button>
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -1219,13 +1314,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <strong className="text-slate-900">
                   {pageSize === 'all'
                     ? 1
-                    : (currentPage - 1) * pageSize + 1}
+                    : (safeCurrentPage - 1) * pageSize + 1}
                 </strong>{' '}
                 -{' '}
                 <strong className="text-slate-900">
                   {pageSize === 'all'
                     ? filteredInventory.length
-                    : Math.min(currentPage * pageSize, filteredInventory.length)}
+                    : Math.min(safeCurrentPage * pageSize, filteredInventory.length)}
                 </strong>{' '}
                 de <strong className="text-slate-900">{filteredInventory.length}</strong> artículos
               </span>
@@ -1270,8 +1365,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  disabled={currentPage <= 1}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={safeCurrentPage <= 1}
+                  onClick={() => setCurrentPage(Math.max(1, safeCurrentPage - 1))}
                   className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer shadow-2xs"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
@@ -1279,13 +1374,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 </button>
 
                 <span className="px-2 font-bold text-slate-800">
-                  Página {currentPage} de {totalPages}
+                  Página {safeCurrentPage} de {totalPages}
                 </span>
 
                 <button
                   type="button"
-                  disabled={currentPage >= totalPages}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safeCurrentPage >= totalPages}
+                  onClick={() => setCurrentPage(Math.min(totalPages, safeCurrentPage + 1))}
                   className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer shadow-2xs"
                 >
                   <span>Siguiente</span>
@@ -1466,9 +1561,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm bg-white"
                       >
                         <option value="">-- Seleccionar Proveedor --</option>
-                        {suppliers.map((sup) => (
-                          <option key={sup.id} value={sup.name}>
-                            {sup.name}
+                        {availableSupplierNames.map((supName) => (
+                          <option key={supName} value={supName}>
+                            {supName}
                           </option>
                         ))}
                       </select>

@@ -35,6 +35,13 @@ import {
 import { WhatsAppIcon } from './SalesView';
 import { BulkStockImportModal, StockUpdateMode } from './BulkStockImportModal';
 import { printHtmlDocument } from '../utils/printPdfService';
+import {
+  cleanCategoryName,
+  matchesCategoryFilter,
+  matchesProductSearch,
+  normalizeSearchText,
+  scoreProductSearchRelevance,
+} from '../utils/productSearch';
 
 interface WarehousesViewProps {
   inventory: Product[];
@@ -646,44 +653,57 @@ export const WarehousesView: React.FC<WarehousesViewProps> = ({
   }, [activeWarehouses, inventory, warehouses]);
 
   const categories = useMemo(() => {
-    const set = new Set<string>();
+    const map = new Map<string, string>();
     inventory.forEach((p) => {
-      if (p.category?.trim()) set.add(p.category.trim());
+      const cleaned = cleanCategoryName(p.category);
+      if (cleaned) {
+        const key = normalizeSearchText(cleaned);
+        if (!map.has(key)) {
+          map.set(key, cleaned);
+        }
+      }
     });
-    return ['Todas', ...Array.from(set).sort()];
+    return [
+      'Todas',
+      ...Array.from(map.values()).sort((a, b) =>
+        a.localeCompare(b, 'es', { sensitivity: 'base' })
+      ),
+    ];
   }, [inventory]);
 
   const filteredProducts = useMemo(() => {
-    return inventory.filter((prod) => {
-      if (categoryFilter !== 'Todas' && prod.category !== categoryFilter) return false;
+    const raw = searchQuery.trim();
+    const list = inventory.filter((prod) => {
+      if (!matchesCategoryFilter(prod.category, categoryFilter)) return false;
       if (selectedWarehouseFilter !== 'all') {
         const qtyInWh = getProductStockInWarehouse(prod, selectedWarehouseFilter, warehouses);
         if (qtyInWh <= 0) return false;
       }
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
-      return (
-        prod.name.toLowerCase().includes(q) ||
-        prod.code.toLowerCase().includes(q) ||
-        (prod.category || '').toLowerCase().includes(q)
-      );
+      if (!raw) return true;
+      return matchesProductSearch(prod, raw);
+    });
+
+    if (!raw) return list;
+    return [...list].sort((a, b) => {
+      const scoreA = scoreProductSearchRelevance(a, raw);
+      const scoreB = scoreProductSearchRelevance(b, raw);
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
     });
   }, [inventory, categoryFilter, selectedWarehouseFilter, searchQuery, warehouses]);
 
   const transferEligibleProducts = useMemo(() => {
-    const q = transferSearch.trim().toLowerCase();
-    return inventory
-      .filter((prod) => {
-        const avail = getProductStockInWarehouse(prod, fromWhId, warehouses);
-        if (avail <= 0) return false;
-        if (!q) return true;
-        return (
-          prod.name.toLowerCase().includes(q) ||
-          prod.code.toLowerCase().includes(q) ||
-          (prod.category || '').toLowerCase().includes(q)
-        );
-      })
-      .slice(0, 40);
+    const q = transferSearch.trim();
+    const list = inventory.filter((prod) => {
+      const avail = getProductStockInWarehouse(prod, fromWhId, warehouses);
+      if (avail <= 0) return false;
+      if (!q) return true;
+      return matchesProductSearch(prod, q);
+    });
+    if (q) {
+      list.sort((a, b) => scoreProductSearchRelevance(b, q) - scoreProductSearchRelevance(a, q));
+    }
+    return list.slice(0, 40);
   }, [inventory, fromWhId, transferSearch, warehouses]);
 
   return (
