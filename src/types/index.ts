@@ -142,6 +142,43 @@ export interface TenantUsageMetrics {
   lastSaleTimestamp: number | null;
 }
 
+export interface SaaSProviderContractDefaults {
+  providerName: string;
+  providerBrand: string;
+  providerIdentityOrRtn: string;
+  providerPhone: string;
+  providerEmail: string;
+  cityAndCountry: string;
+  supportHours: string;
+  defaultCustomClauses?: string;
+}
+
+export interface SaaSContractData {
+  contractNumber: string;
+  issueDate: string;
+  cityAndCountry: string;
+  providerName: string;
+  providerBrand: string;
+  providerIdentityOrRtn: string;
+  providerPhone: string;
+  providerEmail: string;
+  clientRepresentative: string;
+  clientIdentityOrRtn: string;
+  clientBusinessName: string;
+  clientAddress: string;
+  clientPhone: string;
+  planModality: 'mensual' | 'anual' | 'vitalicio' | 'prueba';
+  agreedPrice: number;
+  setupFee: number;
+  billingDayOrDate: string;
+  graceDays: number;
+  supportHours: string;
+  customClauses: string;
+  status: 'draft' | 'sent' | 'signed';
+  signedAt?: string;
+  updatedAt: number;
+}
+
 export interface SaaSGlobalConfig {
   saasAdminPhone: string;
   saasBrandName: string;
@@ -150,6 +187,7 @@ export interface SaaSGlobalConfig {
   gracePeriodDays?: number;
   bankAccounts?: SaaSBankAccount[];
   announcements: SaaSAnnouncement[];
+  contractDefaults?: SaaSProviderContractDefaults;
   updatedAt: number;
 }
 
@@ -160,6 +198,7 @@ export interface CompanyTenant {
   ownerName: string;
   phone: string;
   email?: string;
+  clientRtnOrId?: string;
   plan: 'mensual' | 'anual' | 'vitalicio' | 'prueba';
   price: number;
   nextBillingDate?: string;
@@ -177,6 +216,7 @@ export interface CompanyTenant {
   maxProducts?: number; // 0 or undefined = Ilimitado
   maxUsers?: number; // 0 or undefined = Ilimitado
   paymentHistory?: SubscriptionPaymentRecord[];
+  contractData?: SaaSContractData;
   createdAt: number;
   isPrimary?: boolean;
 }

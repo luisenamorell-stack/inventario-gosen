@@ -1532,24 +1532,25 @@ export const SalesView: React.FC<SalesViewProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-slate-50 overflow-hidden">
       {/* Top Bar / Navigation Tabs */}
-      <div className="bg-white border-b border-slate-200 px-3 sm:px-6 py-2 sm:py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-3 shrink-0 shadow-xs">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-base sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-              <ShoppingCart className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600 shrink-0" />
-              <span>Panel de Ventas & Facturación</span>
+      <div className="bg-white border-b border-slate-200 px-3 sm:px-5 py-2.5 flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-2.5 shrink-0 shadow-xs">
+        <div className="flex items-center justify-between min-w-0">
+          <div className="min-w-0">
+            <h1 className="text-base sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2 truncate">
+              <ShoppingCart className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span className="truncate">Panel de Ventas &amp; Facturación</span>
             </h1>
-            <p className="hidden sm:block text-xs text-slate-500 mt-0.5">
+            <p className="hidden 2xl:block text-xs text-slate-500 mt-0.5 truncate">
               Punto de Venta (POS) en tiempo real con descuento automático de inventario e historial auditado.
             </p>
           </div>
         </div>
 
-        {/* View Switcher Tabs */}
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 overflow-x-auto no-scrollbar">
+        {/* View Switcher Tabs — Wraps cleanly on PC/Tablet so Historial is never cut off */}
+        <div className="flex items-center sm:flex-wrap gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 overflow-x-auto max-w-full">
           <button
+            type="button"
             onClick={() => setActiveSubTab('pos')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
               activeSubTab === 'pos'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
@@ -1565,8 +1566,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveSubTab('cash-register')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
               activeSubTab === 'cash-register'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
@@ -1580,8 +1582,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveSubTab('credits')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
               activeSubTab === 'credits'
                 ? 'bg-amber-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
@@ -1598,8 +1601,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
           {canViewCostsAndProfits && (
             <button
+              type="button"
               onClick={() => setActiveSubTab('expenses')}
-              className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+              className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeSubTab === 'expenses'
                   ? 'bg-rose-600 text-white shadow-sm'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
@@ -1611,8 +1615,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
           )}
 
           <button
+            type="button"
             onClick={() => setActiveSubTab('history')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
               activeSubTab === 'history'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'

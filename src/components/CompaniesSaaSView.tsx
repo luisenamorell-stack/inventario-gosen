@@ -70,6 +70,7 @@ import {
 import { WhatsAppIcon } from './SalesView';
 import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
 import { SecurityAuditPanel } from './SecurityAuditPanel';
+import { SaaSContractModal } from './SaaSContractModal';
 
 export const SAAS_MODULE_OPTIONS: {
   id: ActiveTab;
@@ -339,6 +340,10 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   // Full Client Backup / Export Modal State (#6)
   const [backupCompany, setBackupCompany] = useState<CompanyTenant | null>(null);
   const [isExportingBackup, setIsExportingBackup] = useState<boolean>(false);
+
+  // SaaS Legal Usage Contract Modal State
+  const [showContractModal, setShowContractModal] = useState<boolean>(false);
+  const [contractModalCompany, setContractModalCompany] = useState<CompanyTenant | null>(null);
 
   const handleSaveMasterKey = () => {
     const clean = tempMasterKey.trim().toUpperCase();
@@ -1121,6 +1126,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         maxProducts: Math.max(0, Number(maxProducts) || 0),
         maxUsers: Math.max(0, Number(maxUsers) || 0),
         paymentHistory: editingCompany?.paymentHistory || [],
+        contractData: editingCompany?.contractData,
+        clientRtnOrId: editingCompany?.clientRtnOrId,
         createdAt: editingCompany?.createdAt || Date.now(),
         isPrimary: cleanSlug === 'gosen',
       };
@@ -1427,6 +1434,19 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                setContractModalCompany(companies[0] || null);
+                setShowContractModal(true);
+              }}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs border border-slate-700 shadow-xs transition-all cursor-pointer"
+              title="Crear, personalizar, imprimir en hoja Carta o descargar en PDF el Contrato de Licencia y Uso de la App"
+            >
+              <FileText className="w-4 h-4 text-emerald-400" />
+              <span>Contratos de Uso</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowSaaSFinancesModal(true)}
@@ -2129,6 +2149,27 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                         <span>Plantilla / Clonar</span>
                       </button>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setContractModalCompany(comp);
+                        setShowContractModal(true);
+                      }}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-extrabold text-[11px] transition-colors cursor-pointer shadow-2xs ${
+                        comp.contractData?.status === 'signed'
+                          ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-950 border border-emerald-300'
+                          : 'bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300'
+                      }`}
+                      title="Generar, editar, imprimir en Carta o enviar Contrato de Uso de la App a este cliente"
+                    >
+                      <FileText className="w-3 h-3 text-emerald-700" />
+                      <span>
+                        {comp.contractData?.status === 'signed'
+                          ? 'Contrato ✓'
+                          : 'Contrato'}
+                      </span>
+                    </button>
 
                     <button
                       type="button"
@@ -4049,6 +4090,18 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* SaaS Usage & Licensing Contract Generator Modal */}
+      <SaaSContractModal
+        isOpen={showContractModal}
+        initialCompany={contractModalCompany}
+        companies={companies}
+        saasGlobalConfig={saasGlobalConfig}
+        onClose={() => setShowContractModal(false)}
+        onSaveCompany={onSaveCompany}
+        onSaveSaaSGlobalConfig={onSaveSaaSGlobalConfig}
+        showToast={showToast}
+      />
     </div>
   );
 };
