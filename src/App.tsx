@@ -2529,7 +2529,7 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(true)}
-              className="md:hidden inline-flex items-center justify-center gap-1.5 p-2 sm:px-2.5 sm:py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white transition-all cursor-pointer shadow-xs shrink-0 text-xs font-bold"
+              className="md:hidden inline-flex items-center justify-center gap-1.5 min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white transition-all cursor-pointer shadow-xs shrink-0 text-xs font-bold"
               aria-label="Abrir menú de navegación"
               title="Abrir menú"
             >
@@ -2541,7 +2541,7 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={toggleSidebarCollapse}
-              className="hidden md:inline-flex p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer border border-slate-200/80 shrink-0"
+              className="hidden md:inline-flex items-center justify-center min-h-[40px] min-w-[40px] p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer border border-slate-200/80 shrink-0"
               title={isSidebarCollapsed ? "Expandir barra lateral" : "Contraer barra lateral"}
               aria-label="Alternar barra lateral"
             >
@@ -2579,19 +2579,19 @@ export const App: React.FC = () => {
               onClick={handleManualSync}
               disabled={isSyncing}
               title="Sincronizar cambios recientes desde la nube (Modo ahorro de lecturas activo)"
-              className={`inline-flex items-center justify-center gap-1.5 p-2 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shrink-0 ${
+              className={`inline-flex items-center justify-center gap-1.5 min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer shrink-0 ${
                 isSyncing
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border-slate-200/80 hover:border-emerald-200 active:scale-95'
               }`}
             >
-              <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizando'.slice(0, 0) || 'Sincronizar'}</span>
+              <RefreshCw className={`w-4 h-4 text-emerald-600 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
             </button>
 
             {userSession && (
               <div
-                className="flex items-center justify-center gap-1.5 p-2 sm:px-3 sm:py-1.5 rounded-xl bg-slate-100 border border-slate-200/80 text-xs font-bold shrink-0"
+                className="flex items-center justify-center gap-1.5 min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-slate-100 border border-slate-200/80 text-xs font-bold shrink-0"
                 title={`${userSession.userName} (${userSession.role === 'admin' ? 'Admin' : 'Colaborador'})`}
               >
                 {userSession.role === 'admin' ? (
@@ -2612,9 +2612,9 @@ export const App: React.FC = () => {
               type="button"
               onClick={() => setIsInstallPromptOpen(true)}
               title="Instalar aplicación móvil o de escritorio"
-              className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors text-xs font-bold border border-emerald-200 cursor-pointer shrink-0"
+              className="hidden lg:inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors text-xs font-bold border border-emerald-200 cursor-pointer shrink-0"
             >
-              <Download className="w-3.5 h-3.5 text-emerald-600" />
+              <Download className="w-4 h-4 text-emerald-600" />
               <span>Instalar App</span>
             </button>
 
@@ -2623,7 +2623,7 @@ export const App: React.FC = () => {
               onClick={handleLogout}
               title="Cerrar sesión del sistema"
               aria-label="Cerrar sesión"
-              className="inline-flex items-center justify-center gap-1.5 p-2 sm:px-3 sm:py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 transition-all text-xs font-bold border border-rose-200 cursor-pointer shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 transition-all text-xs font-bold border border-rose-200 cursor-pointer shrink-0"
             >
               <LogOut className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-rose-600 shrink-0" />
               <span className="hidden sm:inline">Salir</span>
@@ -2631,8 +2631,8 @@ export const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Tab Views Container — Reserves exact 60px on mobile for the fixed bottom bar */}
-        <div className="flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden relative pb-[60px] md:pb-0">
+        {/* Tab Views Container — Reserves exact 64px on mobile for the fixed bottom bar */}
+        <div className="flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden relative pb-[64px] md:pb-0">
           {activeTabToRender === 'dashboard' && allowedTabsList.includes('dashboard') && (
             <DashboardView
               inventory={inventory}
@@ -2829,10 +2829,10 @@ export const App: React.FC = () => {
           )}
         </div>
 
-        {/* Mobile Bottom Navigation Dock (< md) — Fixed 60px height, vertically centered & flush to bottom edge */}
+        {/* Mobile Bottom Navigation Dock (< md) — Fixed 64px height, safe-area-inset padding, vertically centered */}
         <nav
           aria-label="Navegación rápida móvil"
-          className="md:hidden fixed bottom-0 left-0 right-0 w-full h-[60px] z-30 bg-white border-t border-slate-200 px-1.5 flex items-center justify-center shadow-[0_-4px_16px_rgba(15,23,42,0.08)] select-none"
+          className="md:hidden fixed bottom-0 left-0 right-0 w-full h-[64px] z-30 bg-white border-t border-slate-200 px-1.5 flex items-center justify-center shadow-[0_-4px_16px_rgba(15,23,42,0.08)] select-none pb-[env(safe-area-inset-bottom,0px)]"
         >
           <div className="grid grid-cols-5 items-center w-full max-w-md mx-auto h-full">
             {/* 1. Left Outer: INICIO (Dashboard) */}

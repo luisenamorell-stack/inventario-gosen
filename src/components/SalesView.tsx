@@ -1545,21 +1545,21 @@ export const SalesView: React.FC<SalesViewProps> = ({
           </div>
         </div>
 
-        {/* View Switcher Tabs — Wraps cleanly on PC/Tablet so Historial is never cut off */}
-        <div className="flex items-center sm:flex-wrap gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 overflow-x-auto max-w-full">
+        {/* View Switcher Tabs — Optimized touch targets, zero clipping, smooth horizontal scroll */}
+        <div className="flex items-center sm:flex-wrap gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200/90 overflow-x-auto max-w-full scrollbar-none">
           <button
             type="button"
             onClick={() => setActiveSubTab('pos')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+            className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
               activeSubTab === 'pos'
-                ? 'bg-emerald-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
             }`}
           >
-            <ShoppingCart className="w-3.5 h-3.5 shrink-0" />
+            <ShoppingCart className="w-4 h-4 shrink-0" />
             <span>Nueva Venta (POS)</span>
             {cart.length > 0 && (
-              <span className="bg-white text-emerald-700 text-[10px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
+              <span className="bg-white text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 shadow-2xs">
                 {totalCartItemsCount}
               </span>
             )}
@@ -1568,32 +1568,32 @@ export const SalesView: React.FC<SalesViewProps> = ({
           <button
             type="button"
             onClick={() => setActiveSubTab('cash-register')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+            className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
               activeSubTab === 'cash-register'
-                ? 'bg-emerald-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
             }`}
           >
-            <Wallet className="w-3.5 h-3.5 shrink-0" />
+            <Wallet className="w-4 h-4 shrink-0" />
             <span>Caja / Arqueo</span>
             {(posFinanceData?.shifts || []).some((s) => s.status === 'open') && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" title="Caja Abierta" />
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0 ring-2 ring-emerald-300" title="Caja Abierta" />
             )}
           </button>
 
           <button
             type="button"
             onClick={() => setActiveSubTab('credits')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+            className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
               activeSubTab === 'credits'
-                ? 'bg-amber-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
             }`}
           >
-            <Users className="w-3.5 h-3.5 shrink-0" />
+            <Users className="w-4 h-4 shrink-0" />
             <span>Cuentas por Cobrar</span>
             {sales.filter((s) => s.status === 'completed' && (s.balanceDue ?? (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01).length > 0 && (
-              <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
+              <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
                 {sales.filter((s) => s.status === 'completed' && (s.balanceDue ?? (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01).length}
               </span>
             )}
@@ -1603,13 +1603,13 @@ export const SalesView: React.FC<SalesViewProps> = ({
             <button
               type="button"
               onClick={() => setActiveSubTab('expenses')}
-              className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
                 activeSubTab === 'expenses'
-                  ? 'bg-rose-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
               }`}
             >
-              <TrendingUp className="w-3.5 h-3.5 shrink-0" />
+              <TrendingUp className="w-4 h-4 shrink-0" />
               <span>Gastos y Utilidad</span>
             </button>
           )}
@@ -1617,15 +1617,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
           <button
             type="button"
             onClick={() => setActiveSubTab('history')}
-            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+            className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
               activeSubTab === 'history'
-                ? 'bg-emerald-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
             }`}
           >
-            <History className="w-3.5 h-3.5 shrink-0" />
+            <History className="w-4 h-4 shrink-0" />
             <span>Historial</span>
-            <span className="bg-slate-200 text-slate-700 text-[10px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
+            <span className="bg-slate-200 text-slate-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
               {sales.length}
             </span>
           </button>
@@ -1665,37 +1665,37 @@ export const SalesView: React.FC<SalesViewProps> = ({
         /* ==================== POS TERMINAL VIEW ==================== */
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden relative">
           {/* Mobile / Tablet Segmented POS Switcher (< lg) */}
-          <div className="lg:hidden p-2 bg-white border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 shadow-2xs">
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-full">
+          <div className="lg:hidden p-2 sm:p-2.5 bg-white border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 shadow-2xs">
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl w-full">
               <button
                 type="button"
                 onClick={() => setMobilePosTab('catalog')}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                className={`flex-1 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer active:scale-95 ${
                   mobilePosTab === 'catalog'
-                    ? 'bg-white text-slate-900 shadow-xs'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <Tag className="w-3.5 h-3.5 text-emerald-600" />
+                <Tag className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>Catálogo ({filteredCatalog.length})</span>
               </button>
               <button
                 type="button"
                 onClick={() => setMobilePosTab('cart')}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                className={`flex-1 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer active:scale-95 ${
                   mobilePosTab === 'cart'
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <ShoppingCart className="w-3.5 h-3.5" />
+                <ShoppingCart className="w-4 h-4 shrink-0" />
                 <span>Ticket / Cobrar</span>
                 {cart.length > 0 && (
                   <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                    className={`text-[11px] px-2 py-0.5 rounded-full font-black ${
                       mobilePosTab === 'cart'
                         ? 'bg-white text-emerald-700'
-                        : 'bg-emerald-600 text-white'
+                        : 'bg-emerald-600 text-white ring-1 ring-white/60'
                     }`}
                   >
                     {totalCartItemsCount}
@@ -2292,43 +2292,43 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                     Método de Pago
                   </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('cash')}
-                      className={`py-2 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                      className={`min-h-[44px] py-2.5 px-2.5 rounded-xl text-xs sm:text-sm font-bold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
                         paymentMethod === 'cash'
                           ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                           : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
-                      <DollarSign className="w-3.5 h-3.5 shrink-0" />
+                      <DollarSign className="w-4 h-4 shrink-0" />
                       <span className="truncate">Efectivo</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('card')}
-                      className={`py-2 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                      className={`min-h-[44px] py-2.5 px-2.5 rounded-xl text-xs sm:text-sm font-bold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
                         paymentMethod === 'card'
                           ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                           : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
-                      <CreditCard className="w-3.5 h-3.5 shrink-0" />
+                      <CreditCard className="w-4 h-4 shrink-0" />
                       <span className="truncate">Tarjeta</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('transfer')}
-                      className={`py-2 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                      className={`min-h-[44px] py-2.5 px-2.5 rounded-xl text-xs sm:text-sm font-bold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
                         paymentMethod === 'transfer'
                           ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                           : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
-                      <Building className="w-3.5 h-3.5 shrink-0" />
+                      <Building className="w-4 h-4 shrink-0" />
                       <span className="truncate">Transf.</span>
                     </button>
 
@@ -2340,14 +2340,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           setCustomerName('');
                         }
                       }}
-                      className={`py-2 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                      className={`min-h-[44px] py-2.5 px-2.5 rounded-xl text-xs sm:text-sm font-bold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
                         paymentMethod === 'credit'
                           ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
                           : 'bg-white text-amber-800 border-amber-200 hover:bg-amber-50'
                       }`}
                       title="Venta al Crédito / Fiado (Cuentas por Cobrar)"
                     >
-                      <Users className="w-3.5 h-3.5 shrink-0" />
+                      <Users className="w-4 h-4 shrink-0" />
                       <span className="truncate">Fiado</span>
                     </button>
                   </div>
@@ -2590,7 +2590,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
 
             {/* Sticky Checkout Action Button Footer */}
-            <div className="p-3 bg-white border-t border-slate-200 shrink-0 shadow-md">
+            <div className="p-3 sm:p-4 bg-white border-t border-slate-200 shrink-0 shadow-md">
               <button
                 type="button"
                 onClick={handleCheckout}
@@ -2599,22 +2599,22 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   isSubmittingSale ||
                   (paymentMethod === 'cash' && isCashInsufficient)
                 }
-                className={`w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
+                className={`w-full min-h-[52px] py-3.5 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-center gap-2.5 transition-all shadow-md cursor-pointer ${
                   cart.length === 0 ||
                   isSubmittingSale ||
                   (paymentMethod === 'cash' && isCashInsufficient)
                     ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
-                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 active:scale-[0.99]'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 active:scale-[0.98]'
                 }`}
               >
                 {isSubmittingSale ? (
                   <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
                     <span className="truncate">Registrando venta...</span>
                   </>
                 ) : (
                   <>
-                    <CheckCircle2 className="w-5 h-5 shrink-0" />
+                    <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" />
                     <span className="truncate">Cobrar y Registrar Venta (L. {cartTotal.toFixed(2)})</span>
                   </>
                 )}
@@ -3164,44 +3164,44 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             </span>
                           </span>
 
-                          <div className="flex flex-wrap items-center gap-1.5 ml-auto">
+                          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full pt-1">
                             <button
                               type="button"
                               onClick={() => {
                                 setCompletedSale(sale);
                                 setShowReceiptModal(true);
                               }}
-                              className="px-2.5 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center gap-1 cursor-pointer"
+                              className="min-h-[40px] px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs"
                             >
-                              <Printer className="w-3.5 h-3.5" />
-                              <span>Ticket</span>
+                              <Printer className="w-4 h-4 text-emerald-600 shrink-0" />
+                              <span>Ver Ticket</span>
                             </button>
                             <button
                               type="button"
                               onClick={() => handleDownloadSalePdf('letter', sale)}
-                              className="px-2.5 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg flex items-center gap-1 cursor-pointer"
+                              className="min-h-[40px] px-3 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs"
                               title="Descargar factura en PDF"
                             >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>PDF</span>
+                              <Download className="w-4 h-4 text-rose-600 shrink-0" />
+                              <span>PDF Carta</span>
                             </button>
                             <button
                               type="button"
                               onClick={() => handleSendTicketWhatsApp(sale, sale.customerPhone)}
-                              className="px-2.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                              className="min-h-[40px] px-3 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors active:scale-95 shadow-2xs col-span-2 sm:col-span-1"
                               title="Enviar ticket por WhatsApp"
                             >
-                              <WhatsAppIcon className="w-3.5 h-3.5 fill-white" />
+                              <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
                               <span>WhatsApp</span>
                             </button>
                             {!isCancelled && canEditSales && onUpdateSale && (
                               <button
                                 type="button"
                                 onClick={() => setSaleToEdit(sale)}
-                                className="px-2.5 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg flex items-center gap-1 cursor-pointer"
+                                className="min-h-[40px] px-3 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs"
                                 title="Editar datos o artículos de la factura"
                               >
-                                <Edit2 className="w-3.5 h-3.5" />
+                                <Edit2 className="w-4 h-4 text-indigo-600 shrink-0" />
                                 <span>Editar</span>
                               </button>
                             )}
@@ -3209,15 +3209,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleRequestCancelSale(sale)}
-                                className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer flex items-center gap-0.5"
+                                className="min-h-[40px] px-3 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 shadow-2xs"
                                 title={
                                   canCancelSales
                                     ? 'Anular venta y devolver stock'
                                     : 'Anular venta (Requiere clave de Administrador)'
                                 }
                               >
-                                {!canCancelSales && <Lock className="w-3 h-3 text-amber-600" />}
-                                <RotateCcw className="w-3.5 h-3.5" />
+                                {!canCancelSales ? (
+                                  <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                ) : (
+                                  <RotateCcw className="w-4 h-4 text-rose-600 shrink-0" />
+                                )}
+                                <span>Anular</span>
                               </button>
                             )}
                           </div>

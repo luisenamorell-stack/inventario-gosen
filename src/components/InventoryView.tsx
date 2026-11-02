@@ -592,20 +592,20 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">Gestiona todos los artículos de la tienda.</p>
         </div>
-        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full xl:w-auto">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2 sm:gap-2.5 w-full xl:w-auto">
           <button
             type="button"
             onClick={handleExportInventoryExcel}
-            className="bg-emerald-600 text-white px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+            className="min-h-[44px] bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 active:scale-95 transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
             title="Descargar inventario actual en archivo Excel (.xlsx) con columnas ordenadas"
           >
             <Download className="w-4 h-4 shrink-0" />
-            <span>Exportar Excel (.xlsx)</span>
+            <span>Exportar Excel</span>
           </button>
           <button
             type="button"
             onClick={() => setShowInventoryPrintModal(true)}
-            className="bg-white text-slate-800 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-50 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-300 whitespace-nowrap"
+            className="min-h-[44px] bg-white text-slate-800 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-50 active:scale-95 transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer border border-slate-300 whitespace-nowrap"
             title="Imprimir catálogo o descargar PDF de inventario valorizado en cualquier impresora"
           >
             <Printer className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -625,7 +625,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               }
               setIsBulkImportOpen(true);
             }}
-            className="bg-slate-900 text-white px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-800 whitespace-nowrap"
+            className="min-h-[44px] bg-slate-900 text-white px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 active:scale-95 transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer border border-slate-800 whitespace-nowrap"
             title="Subir stock o catálogo masivamente desde Excel (.xlsx / .csv) o copiando y pegando"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -634,7 +634,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <button
             type="button"
             onClick={handleOpenCreate}
-            className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-700 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+            className="min-h-[44px] bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
           >
             <Plus className="w-4 h-4 shrink-0" />
             <span>Nuevo Artículo</span>
@@ -923,14 +923,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
                         onClick={() => handleOpenQuickDiscount(item)}
-                        className={`p-2 rounded-lg transition-colors cursor-pointer ${
+                        className={`min-w-[40px] min-h-[40px] p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-center active:scale-95 ${
                           (Number(item.discount) || 0) > 0
-                            ? 'text-rose-700 bg-rose-100 hover:bg-rose-200'
-                            : 'text-slate-600 hover:text-amber-700 bg-slate-100 hover:bg-amber-50'
+                            ? 'text-rose-700 bg-rose-100 border-rose-200 hover:bg-rose-200'
+                            : 'text-slate-600 hover:text-amber-700 bg-slate-100 border-slate-200/80 hover:bg-amber-50'
                         }`}
                         title="Asignar o cambiar descuento del artículo"
                       >
@@ -939,7 +939,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       <button
                         type="button"
                         onClick={() => handleOpenEdit(item)}
-                        className="p-2 text-slate-600 hover:text-blue-600 bg-slate-100 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                        className="min-w-[40px] min-h-[40px] p-2.5 text-slate-700 hover:text-blue-600 bg-slate-100 hover:bg-blue-50 border border-slate-200/80 rounded-xl transition-all cursor-pointer flex items-center justify-center active:scale-95"
                         title="Editar Artículo"
                       >
                         <Pencil className="w-4 h-4" />
@@ -947,7 +947,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       <button
                         type="button"
                         onClick={() => setItemToDelete(item)}
-                        className="p-2 text-slate-400 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                        className="min-w-[40px] min-h-[40px] p-2.5 text-slate-400 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 border border-slate-200/80 rounded-xl transition-all cursor-pointer flex items-center justify-center active:scale-95"
                         title="Eliminar Artículo"
                       >
                         <Trash2 className="w-4 h-4" />

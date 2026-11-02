@@ -274,11 +274,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             Resumen general, finanzas operativas y métricas de tu inventario.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-2.5 w-full md:w-auto">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap sm:gap-2.5 gap-2 w-full md:w-auto">
           {onNavigateToSales && (
             <button
               onClick={onNavigateToSales}
-              className="bg-emerald-600 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer shadow-emerald-600/20"
+              className="min-h-[44px] bg-emerald-600 text-white px-3.5 sm:px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-emerald-700 active:scale-95 transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer shadow-emerald-600/20"
             >
               <ShoppingCart className="w-4 h-4 shrink-0" />
               <span>Nueva Venta</span>
@@ -287,7 +287,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {onNavigateToExpenses && (
             <button
               onClick={onNavigateToExpenses}
-              className="bg-rose-600 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-rose-700 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer shadow-rose-600/20"
+              className="min-h-[44px] bg-rose-600 text-white px-3.5 sm:px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-rose-700 active:scale-95 transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer shadow-rose-600/20"
             >
               <Wallet className="w-4 h-4 shrink-0" />
               <span>Gastos / Caja</span>
@@ -296,7 +296,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {onNavigateToPurchases && (
             <button
               onClick={onNavigateToPurchases}
-              className="bg-indigo-600 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-700 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer shadow-indigo-600/20"
+              className="min-h-[44px] bg-indigo-600 text-white px-3.5 sm:px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer shadow-indigo-600/20"
             >
               <Truck className="w-4 h-4 shrink-0" />
               <span>Ingresar Compra</span>
@@ -304,14 +304,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           )}
           <button
             onClick={onOpenNewProduct}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer"
+            className="min-h-[44px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 px-3.5 sm:px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800 active:scale-95 transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
           >
-            <Plus className="w-4 h-4 text-emerald-500 shrink-0" />
+            <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>Nuevo Producto</span>
           </button>
           <button
             onClick={onStartAudit}
-            className="bg-slate-800 dark:bg-slate-800 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-700 dark:hover:bg-slate-700 transition-all shadow-sm flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer border border-slate-700"
+            className="min-h-[44px] col-span-2 sm:col-span-1 bg-slate-900 dark:bg-slate-800 text-white px-3.5 sm:px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold hover:bg-slate-800 dark:hover:bg-slate-700 active:scale-95 transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer border border-slate-800"
           >
             <QrCode className="w-4 h-4 text-blue-400 shrink-0" />
             <span>Auditar Stock</span>

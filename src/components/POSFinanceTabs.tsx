@@ -1362,7 +1362,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   </div>
 
                   {/* Actions */}
-                  <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
+                  <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
                     {!isPaid && (
                       <button
                         type="button"
@@ -1372,9 +1372,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           setAboneMethod('cash');
                           setAboneNotes('');
                         }}
-                        className="flex-1 py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                        className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 col-span-2 sm:col-span-1"
                       >
-                        <DollarSign className="w-3.5 h-3.5" />
+                        <DollarSign className="w-4 h-4 shrink-0" />
                         <span>Registrar Abono</span>
                       </button>
                     )}
@@ -1382,29 +1382,30 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     <button
                       type="button"
                       onClick={() => handleSendCreditReminderWhatsApp(sale)}
-                      className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                      className="min-h-[42px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
                     >
-                      <WhatsAppIcon className="w-3.5 h-3.5 fill-white" />
+                      <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
                       <span>WhatsApp</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setCreditSaleForPrintModal(sale)}
-                      className="py-2 px-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
+                      className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
                       title="Imprimir o descargar en PDF el Estado de Cuenta del cliente"
                     >
-                      <Printer className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>PDF / Imprimir</span>
+                      <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>Estado Cuenta</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => onViewSaleTicket(sale)}
-                      className="py-2 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs cursor-pointer"
+                      className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 col-span-2 sm:col-span-1"
                       title="Ver Factura Original"
                     >
-                      <Receipt className="w-4 h-4" />
+                      <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Ver Factura</span>
                     </button>
                   </div>
                 </div>
