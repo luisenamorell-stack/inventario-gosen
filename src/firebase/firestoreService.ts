@@ -35,6 +35,7 @@ import {
   SaaSBankAccount,
   TenantUsageMetrics,
   SaaSGlobalConfig,
+  SaaSDemoRequest,
   WarehouseLocation,
   WarehouseTransferItem,
   WarehouseTransferRecord,
@@ -113,18 +114,83 @@ function stripUndefinedDeep<T>(value: T): T {
 
 // ----------------- MULTI-TENANT COMPANY CONTEXT -----------------
 
-export function normalizeCompanySlug(raw?: string | null): string {
+/**
+ * Detects whether a string refers to the client Comercial GYG / Tienda GYG.
+ * Handles all aliases: tiendagyg, comercialgyg, comercial-gyg, comercial_gyg, gyg, etc.
+ */
+export function isGyGAlias(raw?: string | null): boolean {
+  if (!raw) return false;
+  const c = raw
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+  if (!c || c === 'gosen' || c === 'tiendagosen' || c === 'gosentienda') return false;
+  return (
+    c === 'tiendagyg' ||
+    c === 'comercialgyg' ||
+    c === 'gyg' ||
+    c === 'comercial' ||
+    c === 'comercialgyghn' ||
+    c === 'tiendacomercialgyg' ||
+    c === 'gygcomercial' ||
+    c.includes('tiendagyg') ||
+    c.includes('comercialgyg') ||
+    (c.includes('gyg') && (c.includes('comercial') || c.includes('tienda')))
+  );
+}
+
+export function canonicalizeCompanySlug(raw?: string | null): string {
   if (!raw) return 'gosen';
+  if (isGyGAlias(raw)) return 'tiendagyg';
   const cleaned = raw
     .trim()
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9_-]/g, '');
-  if (!cleaned || cleaned === 'tiendagosen' || cleaned === 'tienda-gosen' || cleaned === 'tienda_gosen') {
+    .replace(/[^a-z0-9]/g, ''); // Strips all spaces, dashes, hyphens, and underscores
+  if (!cleaned || cleaned === 'tiendagosen' || cleaned === 'gosen') {
     return 'gosen';
   }
   return cleaned;
+}
+
+export function normalizeCompanySlug(raw?: string | null): string {
+  if (!raw) return 'gosen';
+  if (isGyGAlias(raw)) return 'tiendagyg';
+  const trimmed = raw.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Replace one or more spaces with a hyphen for consistent readable slugs
+  const slugified = trimmed.replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+  if (!slugified || slugified === 'tiendagosen' || slugified === 'tienda-gosen' || slugified === 'tienda_gosen') {
+    return 'gosen';
+  }
+  return slugified;
+}
+
+export function resolveCompanySlugFromInput(rawInput?: string | null, knownCompanies?: CompanyTenant[]): string {
+  if (!rawInput) return 'gosen';
+  const clean = rawInput.trim();
+  if (isGyGAlias(clean)) {
+    return 'tiendagyg';
+  }
+  const canonical = canonicalizeCompanySlug(clean);
+  if (canonical === 'gosen') return 'gosen';
+
+  const list = knownCompanies || getCachedCompanies() || [];
+  // 1. Direct slug match (e.g. 'comercial-gyg' === 'comercial-gyg')
+  const exactSlug = list.find((c) => c.slug.toLowerCase() === clean.toLowerCase());
+  if (exactSlug) return exactSlug.slug;
+
+  // 2. Canonical slug match (e.g. 'comercialgyg' matches 'comercial-gyg')
+  const canonicalSlug = list.find((c) => canonicalizeCompanySlug(c.slug) === canonical);
+  if (canonicalSlug) return canonicalSlug.slug;
+
+  // 3. Name match (e.g. 'Comercial GYG' matches company with name 'Comercial GYG')
+  const nameMatch = list.find((c) => canonicalizeCompanySlug(c.name) === canonical);
+  if (nameMatch) return nameMatch.slug;
+
+  return normalizeCompanySlug(clean);
 }
 
 function detectInitialCompanyId(): string {
@@ -133,7 +199,7 @@ function detectInitialCompanyId(): string {
     const params = new URLSearchParams(window.location.search);
     const urlCompany = params.get('empresa') || params.get('tienda') || params.get('cliente');
     if (urlCompany) {
-      const slug = normalizeCompanySlug(urlCompany);
+      const slug = resolveCompanySlugFromInput(urlCompany);
       localStorage.setItem('stockmaster_active_company_id', slug);
       return slug;
     }
@@ -143,12 +209,12 @@ function detectInitialCompanyId(): string {
     if (rawSess) {
       const parsed = JSON.parse(rawSess);
       if (parsed?.companyId) {
-        return normalizeCompanySlug(parsed.companyId);
+        return resolveCompanySlugFromInput(parsed.companyId);
       }
     }
     const storedCompany = localStorage.getItem('stockmaster_active_company_id');
     if (storedCompany) {
-      return normalizeCompanySlug(storedCompany);
+      return resolveCompanySlugFromInput(storedCompany);
     }
   } catch {}
   return 'gosen';
@@ -161,38 +227,109 @@ export function getActiveCompanyId(): string {
 }
 
 export function setActiveCompanyId(companyId: string): string {
-  const normalized = normalizeCompanySlug(companyId);
-  currentCompanyId = normalized;
+  const resolved = resolveCompanySlugFromInput(companyId);
+  currentCompanyId = resolved;
   try {
-    localStorage.setItem('stockmaster_active_company_id', normalized);
+    localStorage.setItem('stockmaster_active_company_id', resolved);
   } catch {}
-  return normalized;
+  return resolved;
 }
 
 /**
  * Checks whether a Firestore document belongs to the requested companyId.
- * Documents without a `companyId` field belong to `'gosen'` (the original primary store).
+ * Handles slug variations (hyphens, underscores, spaces) so tenants like
+ * "Comercial GYG" (tiendagyg, comercial-gyg, comercialgyg, comercial_gyg, gyg) seamlessly match.
  */
-export function belongsToCompany(docCompanyId: string | undefined, targetCompanyId = getActiveCompanyId()): boolean {
-  const normalizedTarget = normalizeCompanySlug(targetCompanyId);
-  const normalizedDoc = docCompanyId ? normalizeCompanySlug(docCompanyId) : 'gosen';
-  return normalizedDoc === normalizedTarget;
+export function belongsToCompany(
+  docCompanyId: string | undefined,
+  targetCompanyId = getActiveCompanyId(),
+  docId?: string
+): boolean {
+  const targetNorm = normalizeCompanySlug(targetCompanyId);
+  const targetCanon = canonicalizeCompanySlug(targetCompanyId);
+  const isTargetGyG = isGyGAlias(targetCompanyId);
+
+  // If docId is provided and explicitly prefixed with target company slug
+  if (docId) {
+    if (
+      docId.startsWith(`${targetNorm}__`) ||
+      docId.startsWith(`${targetCanon}__`)
+    ) {
+      return true;
+    }
+    // Specifically handle all Comercial GyG / Tienda GyG prefixes
+    if (
+      isTargetGyG &&
+      (docId.startsWith('tiendagyg__') ||
+        docId.startsWith('comercial-gyg__') ||
+        docId.startsWith('comercialgyg__') ||
+        docId.startsWith('comercial_gyg__') ||
+        docId.startsWith('gyg__'))
+    ) {
+      return true;
+    }
+  }
+
+  // If no companyId field is present in document
+  if (!docCompanyId) {
+    if (docId && docId.includes('__')) {
+      const prefix = docId.split('__')[0];
+      if (isTargetGyG && isGyGAlias(prefix)) return true;
+      return canonicalizeCompanySlug(prefix) === targetCanon;
+    }
+    return targetCanon === 'gosen';
+  }
+
+  const docNorm = normalizeCompanySlug(docCompanyId);
+  const docCanon = canonicalizeCompanySlug(docCompanyId);
+
+  // 1. Direct or slugified match
+  if (docNorm === targetNorm || docCanon === targetCanon) {
+    return true;
+  }
+
+  // 2. GyG alias match (handles tiendagyg <-> comercial-gyg <-> comercialgyg <-> gyg)
+  if (isTargetGyG && (isGyGAlias(docCompanyId) || isGyGAlias(docCanon))) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
  * Generates a collision-free Firestore Document ID scoped to the active company.
+ * Strips existing company prefixes to prevent nested prefixes like tiendagyg__tiendagyg__...
  * For 'gosen', preserves legacy document IDs so existing records update in-place.
  */
 export function getScopedDocId(rawId: string, companyId = getActiveCompanyId()): string {
-  const cleanId = rawId.trim().replace(/\//g, '_');
+  let cleanId = rawId.trim().replace(/\//g, '_');
   const slug = normalizeCompanySlug(companyId);
-  if (slug === 'gosen') {
+  const canonical = canonicalizeCompanySlug(companyId);
+
+  if (canonical === 'gosen') {
     return cleanId;
   }
-  if (cleanId.startsWith(`${slug}__`)) {
-    return cleanId;
+
+  // Strip existing company prefixes if already present to prevent duplicate prefixes
+  const knownPrefixes = [
+    'tiendagyg__',
+    'comercial-gyg__',
+    'comercialgyg__',
+    'comercial_gyg__',
+    'gyg__',
+    `${slug}__`,
+    `${canonical}__`,
+    'gosen__',
+  ];
+  for (const pfx of knownPrefixes) {
+    if (cleanId.startsWith(pfx)) {
+      cleanId = cleanId.slice(pfx.length);
+      break;
+    }
   }
-  return `${slug}__${cleanId}`;
+
+  const finalPrefix = isGyGAlias(companyId) ? 'tiendagyg' : slug;
+  return `${finalPrefix}__${cleanId}`;
 }
 
 // ----------------- LOCAL CACHE & 1-READ SYNC STAMP HELPERS -----------------
@@ -359,7 +496,7 @@ export async function fetchInventorySmart(
   forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<{ items: Product[]; fromCache: boolean; readsUsed: number }> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
   const cached = getCachedInventory(slug);
   const localTs = Number(localStorage.getItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, slug)) || 0);
 
@@ -379,14 +516,17 @@ export async function fetchInventorySmart(
 
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
-      if (!belongsToCompany(data.companyId, slug)) return;
+      if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
 
-      const code = (data.code || docSnap.id).trim();
+      let code = (data.code || '').trim();
+      if (!code) {
+        code = docSnap.id.includes('__') ? docSnap.id.split('__').slice(1).join('__') : docSnap.id;
+      }
       remoteCodes.add(code.toLowerCase());
 
       items.push({
         id: docSnap.id,
-        companyId: data.companyId || 'gosen',
+        companyId: data.companyId || slug,
         code,
         name: data.name || '',
         category: data.category || 'Otros',
@@ -405,32 +545,6 @@ export async function fetchInventorySmart(
         img: data.img || '',
       });
     });
-
-    // Auto-recover any items present in the client's local cache that failed to sync to Firestore earlier
-    if (!forceRefresh && cached && cached.length > 0) {
-      const missingLocalItems = cached.filter(
-        (localItem) =>
-          localItem &&
-          localItem.code &&
-          belongsToCompany(localItem.companyId || slug, slug) &&
-          !remoteCodes.has(localItem.code.trim().toLowerCase())
-      );
-
-      if (missingLocalItems.length > 0) {
-        missingLocalItems.forEach((localItem) => {
-          remoteCodes.add(localItem.code.trim().toLowerCase());
-          items.push({
-            ...localItem,
-            id: getScopedDocId(localItem.code, slug),
-            companyId: slug,
-          });
-        });
-        // Re-upload missing cached items to Firestore in the background
-        bulkSaveProductsToFirestore(missingLocalItems, [], slug).catch((err) =>
-          console.warn('Auto-sync of cached inventory items warning:', err)
-        );
-      }
-    }
 
     items.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
     const effectiveTs = Date.now();
@@ -457,7 +571,7 @@ export function subscribeToInventory(
   onError?: (err: any) => void,
   companyId = getActiveCompanyId()
 ) {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
   const collRef = collection(db, 'inventory');
   return onSnapshot(
     collRef,
@@ -465,11 +579,17 @@ export function subscribeToInventory(
       const items: Product[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        if (!belongsToCompany(data.companyId, slug)) return;
+        if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
+
+        let code = (data.code || '').trim();
+        if (!code) {
+          code = docSnap.id.includes('__') ? docSnap.id.split('__').slice(1).join('__') : docSnap.id;
+        }
+
         items.push({
           id: docSnap.id,
-          companyId: data.companyId || 'gosen',
-          code: data.code || docSnap.id,
+          companyId: data.companyId || slug,
+          code,
           name: data.name || '',
           category: data.category || 'Otros',
           size: data.size || '',
@@ -503,15 +623,41 @@ export async function saveProductToFirestore(
   oldCode?: string,
   companyId = getActiveCompanyId()
 ): Promise<void> {
-  const slug = normalizeCompanySlug(companyId);
+  const isGyG = isGyGAlias(companyId);
+  const slug = isGyG ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
+  const canonical = canonicalizeCompanySlug(slug);
   const docId = getScopedDocId(product.code, slug);
   const path = `inventory/${docId}`;
   try {
     const batch = writeBatch(db);
 
-    if (oldCode && oldCode.trim() !== product.code.trim()) {
-      const oldDocId = getScopedDocId(oldCode, slug);
-      batch.delete(doc(db, 'inventory', oldDocId));
+    // If changing SKU/code, remove the old document across all prefix variants
+    if (oldCode && oldCode.trim().toLowerCase() !== product.code.trim().toLowerCase()) {
+      const cleanOldCode = oldCode.trim();
+      const idsToDelete = new Set<string>([
+        getScopedDocId(cleanOldCode, slug),
+        getScopedDocId(cleanOldCode, canonical),
+        `${slug}__${cleanOldCode}`,
+        `${canonical}__${cleanOldCode}`,
+        cleanOldCode,
+        cleanOldCode.replace(/\//g, '_'),
+      ]);
+
+      if (isGyG) {
+        idsToDelete.add(`tiendagyg__${cleanOldCode}`);
+        idsToDelete.add(`comercial-gyg__${cleanOldCode}`);
+        idsToDelete.add(`comercialgyg__${cleanOldCode}`);
+        idsToDelete.add(`comercial_gyg__${cleanOldCode}`);
+        idsToDelete.add(`gyg__${cleanOldCode}`);
+      }
+
+      if (product.id && product.id !== docId) {
+        idsToDelete.add(product.id);
+      }
+
+      for (const idDel of idsToDelete) {
+        batch.delete(doc(db, 'inventory', idDel));
+      }
     }
 
     const docRef = doc(db, 'inventory', docId);
@@ -537,7 +683,12 @@ export async function saveProductToFirestore(
 
     batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
     await batch.commit();
+
     await touchInventorySyncStamp(undefined, slug);
+    if (isGyG) {
+      await touchInventorySyncStamp(undefined, 'comercial-gyg').catch(() => {});
+      await touchInventorySyncStamp(undefined, 'comercialgyg').catch(() => {});
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -548,17 +699,29 @@ export async function deleteProductFromFirestore(
   code?: string,
   companyId = getActiveCompanyId()
 ): Promise<void> {
-  const slug = normalizeCompanySlug(companyId);
+  const isGyG = isGyGAlias(companyId);
+  const slug = isGyG ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
+  const canonical = canonicalizeCompanySlug(slug);
   const idsToDelete = new Set<string>();
   if (id) {
     idsToDelete.add(id.trim());
     idsToDelete.add(getScopedDocId(id, slug));
+    idsToDelete.add(getScopedDocId(id, canonical));
   }
   if (code) {
-    idsToDelete.add(getScopedDocId(code, slug));
-    if (slug === 'gosen') {
-      idsToDelete.add(code.trim());
-      idsToDelete.add(code.trim().replace(/\//g, '_'));
+    const cleanCode = code.trim();
+    idsToDelete.add(getScopedDocId(cleanCode, slug));
+    idsToDelete.add(getScopedDocId(cleanCode, canonical));
+    idsToDelete.add(`${slug}__${cleanCode}`);
+    idsToDelete.add(`${canonical}__${cleanCode}`);
+    idsToDelete.add(cleanCode);
+    idsToDelete.add(cleanCode.replace(/\//g, '_'));
+    if (isGyG) {
+      idsToDelete.add(`tiendagyg__${cleanCode}`);
+      idsToDelete.add(`comercial-gyg__${cleanCode}`);
+      idsToDelete.add(`comercialgyg__${cleanCode}`);
+      idsToDelete.add(`comercial_gyg__${cleanCode}`);
+      idsToDelete.add(`gyg__${cleanCode}`);
     }
   }
 
@@ -569,6 +732,10 @@ export async function deleteProductFromFirestore(
   try {
     await batch.commit();
     await touchInventorySyncStamp(undefined, slug);
+    if (isGyG) {
+      await touchInventorySyncStamp(undefined, 'comercial-gyg').catch(() => {});
+      await touchInventorySyncStamp(undefined, 'comercialgyg').catch(() => {});
+    }
   } catch (error) {
     console.warn('Could not delete product doc in batch:', error);
   }
@@ -2705,7 +2872,8 @@ const SAAS_GLOBAL_CACHE_KEY = 'stockmaster_saas_global_config_v1';
 
 export const DEFAULT_SAAS_GLOBAL_CONFIG: SaaSGlobalConfig = {
   saasAdminPhone: '',
-  saasBrandName: 'Administración SaaS',
+  saasBrandName: 'MIAPPHN',
+  saasLogo: '/assets/aistudio/miapphn-logo-fondo-oscuro_c705844a.png',
   expiryWarningDays: 5,
   autoSuspendOverdue: true,
   gracePeriodDays: 3,
@@ -2733,7 +2901,7 @@ function sanitizeSaaSGlobalDoc(data: Record<string, any>): SaaSGlobalConfig {
         targetCompanySlug: String(a.targetCompanySlug || 'all'),
         isActive: a.isActive !== false,
         createdAt: Number(a.createdAt) || Date.now(),
-        author: a.author ? String(a.author) : 'Administrador SaaS',
+        author: a.author ? String(a.author) : 'Administrador MIAPPHN',
       }))
     : [];
 
@@ -2748,14 +2916,23 @@ function sanitizeSaaSGlobalDoc(data: Record<string, any>): SaaSGlobalConfig {
       }))
     : [];
 
+  const rawBrand = String(data.saasBrandName || data.storeName || '').trim();
+  const resolvedBrand =
+    !rawBrand || rawBrand === 'Administración SaaS' ? 'MIAPPHN' : rawBrand;
+
   return {
     saasAdminPhone: String(data.saasAdminPhone || ''),
-    saasBrandName: String(data.saasBrandName || data.storeName || 'Administración SaaS'),
+    saasBrandName: resolvedBrand,
+    saasLogo: data.saasLogo
+      ? String(data.saasLogo)
+      : '/assets/aistudio/miapphn-logo-fondo-oscuro_c705844a.png',
+    customDomain: data.customDomain ? String(data.customDomain) : undefined,
     expiryWarningDays: Math.max(1, Math.min(30, Number(data.expiryWarningDays) || 5)),
     autoSuspendOverdue: data.autoSuspendOverdue !== undefined ? Boolean(data.autoSuspendOverdue) : true,
     gracePeriodDays: Math.max(0, Math.min(30, Number(data.gracePeriodDays ?? 3))),
     bankAccounts,
     announcements,
+    contractDefaults: data.contractDefaults || undefined,
     updatedAt: Number(data.updatedAt) || Date.now(),
   };
 }
@@ -2805,11 +2982,13 @@ export async function saveSaaSGlobalConfigToFirestore(
   const normalized: SaaSGlobalConfig = {
     saasAdminPhone: (config.saasAdminPhone || '').trim(),
     saasBrandName: (config.saasBrandName || 'Administración SaaS').trim(),
+    customDomain: config.customDomain ? config.customDomain.trim() : undefined,
     expiryWarningDays: Math.max(1, Math.min(30, Number(config.expiryWarningDays) || 5)),
     autoSuspendOverdue: config.autoSuspendOverdue !== undefined ? Boolean(config.autoSuspendOverdue) : true,
     gracePeriodDays: Math.max(0, Math.min(30, Number(config.gracePeriodDays ?? 3))),
     bankAccounts: Array.isArray(config.bankAccounts) ? config.bankAccounts : [],
     announcements: Array.isArray(config.announcements) ? config.announcements : [],
+    contractDefaults: config.contractDefaults,
     updatedAt: Date.now(),
   };
 
@@ -2820,11 +2999,13 @@ export async function saveSaaSGlobalConfigToFirestore(
         storeName: normalized.saasBrandName.slice(0, 190), // satisfies isValidStoreSettings
         saasAdminPhone: normalized.saasAdminPhone,
         saasBrandName: normalized.saasBrandName,
+        customDomain: normalized.customDomain,
         expiryWarningDays: normalized.expiryWarningDays,
         autoSuspendOverdue: normalized.autoSuspendOverdue,
         gracePeriodDays: normalized.gracePeriodDays,
         bankAccounts: normalized.bankAccounts,
         announcements: normalized.announcements,
+        contractDefaults: normalized.contractDefaults,
         updatedAt: normalized.updatedAt,
       }),
       { merge: true }
@@ -2834,6 +3015,139 @@ export async function saveSaaSGlobalConfigToFirestore(
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'settings/saas_global_config');
   }
+}
+
+// ----------------- SAAS DEMO REQUESTS & COMMERCIAL LEADS (MIAPPHN.ONLINE) -----------------
+
+const SAAS_DEMO_REQUESTS_CACHE_KEY = 'stockmaster_saas_demo_requests_v1';
+
+export function getCachedSaaSDemoRequests(): SaaSDemoRequest[] {
+  const cached = safeReadCache<SaaSDemoRequest[]>(SAAS_DEMO_REQUESTS_CACHE_KEY);
+  return Array.isArray(cached) ? cached : [];
+}
+
+export function setCachedSaaSDemoRequests(requests: SaaSDemoRequest[]): void {
+  safeWriteCache(SAAS_DEMO_REQUESTS_CACHE_KEY, requests);
+}
+
+function sanitizeSaaSDemoRequestsDoc(data: Record<string, any>): SaaSDemoRequest[] {
+  const list = Array.isArray(data.requests) ? data.requests : [];
+  return list
+    .map((item: any): SaaSDemoRequest => ({
+      id: String(item.id || `demo_${Date.now()}`),
+      requestCode: String(item.requestCode || 'DEMO-001'),
+      contactName: String(item.contactName || ''),
+      businessName: String(item.businessName || ''),
+      phone: String(item.phone || ''),
+      email: item.email ? String(item.email) : '',
+      city: String(item.city || ''),
+      businessType: String(item.businessType || 'Comercio General'),
+      planInterest: ['prueba15', 'emprendedor', 'comercial', 'empresarial', 'anual', 'vitalicio'].includes(
+        item.planInterest
+      )
+        ? item.planInterest
+        : 'prueba15',
+      planLabel: String(item.planLabel || 'Demo Prueba 15 Días'),
+      notes: item.notes ? String(item.notes) : '',
+      status: ['pending', 'contacted', 'demo_created', 'converted', 'archived'].includes(item.status)
+        ? item.status
+        : 'pending',
+      createdTenantSlug: item.createdTenantSlug ? String(item.createdTenantSlug) : undefined,
+      createdTenantPassword: item.createdTenantPassword ? String(item.createdTenantPassword) : undefined,
+      createdAt: Number(item.createdAt) || Date.now(),
+      dateFormatted: String(item.dateFormatted || new Date().toLocaleDateString('es-HN')),
+      updatedAt: Number(item.updatedAt) || Date.now(),
+    }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function fetchSaaSDemoRequestsOnce(): Promise<SaaSDemoRequest[]> {
+  try {
+    const docRef = doc(db, 'settings', 'saas_demo_requests');
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const list = sanitizeSaaSDemoRequestsDoc(snap.data());
+      setCachedSaaSDemoRequests(list);
+      return list;
+    }
+    return getCachedSaaSDemoRequests();
+  } catch {
+    return getCachedSaaSDemoRequests();
+  }
+}
+
+export function subscribeToSaaSDemoRequests(
+  onData: (requests: SaaSDemoRequest[]) => void
+): () => void {
+  try {
+    const docRef = doc(db, 'settings', 'saas_demo_requests');
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const list = sanitizeSaaSDemoRequestsDoc(snap.data());
+          setCachedSaaSDemoRequests(list);
+          onData(list);
+        } else {
+          onData(getCachedSaaSDemoRequests());
+        }
+      },
+      (err) => {
+        console.warn('SaaS demo requests listener warning:', err);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+async function persistSaaSDemoRequestsList(list: SaaSDemoRequest[]): Promise<SaaSDemoRequest[]> {
+  const docRef = doc(db, 'settings', 'saas_demo_requests');
+  const trimmed = list
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 300);
+
+  try {
+    await setDoc(
+      docRef,
+      stripUndefinedDeep({
+        storeName: 'Solicitudes Demo SaaS', // satisfies isValidStoreSettings
+        requests: trimmed,
+        updatedAt: Date.now(),
+      }),
+      { merge: true }
+    );
+    setCachedSaaSDemoRequests(trimmed);
+    return trimmed;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'settings/saas_demo_requests');
+  }
+}
+
+export async function submitSaaSDemoRequest(
+  newReq: SaaSDemoRequest
+): Promise<SaaSDemoRequest[]> {
+  const current = await fetchSaaSDemoRequestsOnce();
+  const nextList = [newReq, ...current.filter((r) => r.id !== newReq.id)];
+  return persistSaaSDemoRequestsList(nextList);
+}
+
+export async function updateSaaSDemoRequestInFirestore(
+  updatedReq: SaaSDemoRequest
+): Promise<SaaSDemoRequest[]> {
+  const current = await fetchSaaSDemoRequestsOnce();
+  const nextList = current.map((r) =>
+    r.id === updatedReq.id ? { ...updatedReq, updatedAt: Date.now() } : r
+  );
+  return persistSaaSDemoRequestsList(nextList);
+}
+
+export async function deleteSaaSDemoRequestFromFirestore(
+  requestId: string
+): Promise<SaaSDemoRequest[]> {
+  const current = await fetchSaaSDemoRequestsOnce();
+  const nextList = current.filter((r) => r.id !== requestId);
+  return persistSaaSDemoRequestsList(nextList);
 }
 
 // ----------------- SAAS TENANT LIVE METRICS, CLONING & FULL BACKUP -----------------

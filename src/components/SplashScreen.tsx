@@ -1,6 +1,7 @@
 import React from 'react';
 import { StoreSettings } from '../types';
 import { normalizeCompanySlug } from '../firebase/firestoreService';
+import { MiAppHNBannerLogo, MiAppHNCashRegisterIcon } from './MiAppHNLogo';
 
 interface SplashScreenProps {
   storeSettings?: StoreSettings;
@@ -88,109 +89,6 @@ const GosenShoeSvg: React.FC<{ className?: string }> = ({ className = '' }) => (
   </svg>
 );
 
-/**
- * Neutral Commercial POS & Inventory Animated Emblem for ALL OTHER SaaS Clients (companyId !== 'gosen')
- */
-const ClientBusinessAnimationSvg: React.FC = () => (
-  <svg
-    viewBox="0 0 180 180"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    className="w-32 h-32 sm:w-36 sm:h-36 drop-shadow-[0_14px_28px_rgba(16,185,129,0.28)]"
-  >
-    <defs>
-      <linearGradient id="cubeTop" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stopColor="#34d399" />
-        <stop offset="100%" stopColor="#10b981" />
-      </linearGradient>
-      <linearGradient id="cubeLeft" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stopColor="#059669" />
-        <stop offset="100%" stopColor="#047857" />
-      </linearGradient>
-      <linearGradient id="cubeRight" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stopColor="#0f172a" />
-        <stop offset="100%" stopColor="#1e293b" />
-      </linearGradient>
-    </defs>
-
-    {/* Outer rotating radar ring */}
-    <circle
-      cx="90"
-      cy="90"
-      r="72"
-      stroke="#10b981"
-      strokeWidth="1.5"
-      strokeDasharray="8 6"
-      strokeOpacity="0.45"
-    />
-    <circle
-      cx="90"
-      cy="90"
-      r="58"
-      stroke="#38bdf8"
-      strokeWidth="1.2"
-      strokeOpacity="0.25"
-    />
-
-    {/* 3D Isometric Commercial Box / POS Emblem */}
-    <g>
-      {/* Top Face */}
-      <polygon
-        points="90,34 140,62 90,90 40,62"
-        fill="url(#cubeTop)"
-        stroke="#a7f3d0"
-        strokeWidth="1.5"
-      />
-      {/* Left Face */}
-      <polygon
-        points="40,62 90,90 90,144 40,116"
-        fill="url(#cubeLeft)"
-        stroke="#34d399"
-        strokeWidth="1.5"
-      />
-      {/* Right Face */}
-      <polygon
-        points="90,90 140,62 140,116 90,144"
-        fill="url(#cubeRight)"
-        stroke="#34d399"
-        strokeWidth="1.5"
-      />
-      {/* Barcode / POS Lines on Right Face */}
-      <line x1="104" y1="95" x2="104" y2="122" stroke="#34d399" strokeWidth="3" strokeLinecap="round" />
-      <line x1="114" y1="90" x2="114" y2="117" stroke="#e2e8f0" strokeWidth="2" strokeLinecap="round" />
-      <line x1="122" y1="85" x2="122" y2="112" stroke="#34d399" strokeWidth="3.5" strokeLinecap="round" />
-      <line x1="130" y1="80" x2="130" y2="107" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" />
-      {/* Checkmark badge */}
-      <circle cx="90" cy="62" r="10" fill="#0f172a" stroke="#6ee7b7" strokeWidth="2" />
-      <path d="M85 62 L88.5 65.5 L95.5 58.5" stroke="#34d399" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-    </g>
-  </svg>
-);
-
-/**
- * Executive SaaS Super-Admin Control Center Emblem (ONLY when logging into the SaaS Admin Portal)
- */
-const SaaSControlCenterSvg: React.FC = () => (
-  <svg
-    viewBox="0 0 180 180"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    className="w-32 h-32 sm:w-36 sm:h-36 drop-shadow-[0_14px_28px_rgba(20,184,166,0.35)]"
-  >
-    <circle cx="90" cy="90" r="70" stroke="#14b8a6" strokeWidth="1.5" strokeDasharray="10 6" strokeOpacity="0.5" />
-    <rect x="42" y="46" width="96" height="88" rx="16" fill="#0f172a" stroke="#2dd4bf" strokeWidth="2.2" />
-    <line x1="42" y1="68" x2="138" y2="68" stroke="#1e293b" strokeWidth="2" />
-    <circle cx="56" cy="57" r="3.5" fill="#f43f5e" />
-    <circle cx="68" cy="57" r="3.5" fill="#f59e0b" />
-    <circle cx="80" cy="57" r="3.5" fill="#10b981" />
-    <rect x="56" y="80" width="28" height="20" rx="5" fill="#134e4a" stroke="#2dd4bf" strokeWidth="1.5" />
-    <rect x="92" y="80" width="32" height="20" rx="5" fill="#1e293b" stroke="#38bdf8" strokeWidth="1.5" />
-    <rect x="56" y="106" width="68" height="14" rx="4" fill="#042f2e" stroke="#10b981" strokeWidth="1.5" />
-    <circle cx="126" cy="48" r="14" fill="#f59e0b" stroke="#0f172a" strokeWidth="3" />
-    <path d="M121 48 L124.5 51.5 L131.5 44.5" stroke="#0f172a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   storeSettings,
   companyId,
@@ -203,7 +101,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   const isGosenStore = !isSaaSAdmin && resolvedSlug === 'gosen';
 
   const storeName = isSaaSAdmin
-    ? 'PANEL CENTRAL SAAS'
+    ? 'MIAPPHN • CONSOLA CENTRAL'
     : isGosenStore
     ? storeSettings?.storeName || 'TIENDA GOSÉN'
     : storeSettings?.storeName || resolvedSlug.toUpperCase();
@@ -236,20 +134,20 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         <span className="text-[11px] font-bold uppercase tracking-widest text-emerald-400">
           {welcomeUser
             ? isSaaSAdmin
-              ? 'Acceso Maestro Propietario SaaS'
+              ? 'Acceso Maestro Propietario MIAPPHN'
               : `Acceso Autorizado • ${welcomeRole === 'admin' ? 'Administrador' : 'Colaborador'}`
             : isSaaSAdmin
-            ? 'Consola de Control Multi-Empresa'
-            : 'Sistema Inteligente de Inventario'}
+            ? 'MIAPPHN • Consola Multi-Empresa'
+            : 'MIAPPHN • Sistema Inteligente POS'}
         </span>
       </div>
 
       {/* Center Stage — Strictly Separated by Context */}
       <div className="relative z-10 flex flex-col items-center justify-center w-full max-w-md my-auto">
         {isSaaSAdmin ? (
-          /* 1. STANDALONE SAAS SUPER-ADMIN ANIMATION */
-          <div className="relative flex flex-col items-center justify-center mb-6 animate-pulse">
-            <SaaSControlCenterSvg />
+          /* 1. STANDALONE MIAPPHN SAAS SUPER-ADMIN BANNER & CASH REGISTER EMBLEM */
+          <div className="relative flex flex-col items-center justify-center gap-4 mb-6">
+            <MiAppHNBannerLogo className="h-16 sm:h-20 w-auto drop-shadow-[0_10px_24px_rgba(16,185,129,0.3)]" />
           </div>
         ) : isGosenStore ? (
           /* 2. EXCLUSIVE TIENDA GOSÉN WALKING METALLIC SHOE ANIMATION */
@@ -271,7 +169,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             </div>
           </div>
         ) : (
-          /* 3. OTHER SAAS CLIENTS — INDEPENDENT COMMERCIAL EMBLEM OR CLIENT LOGO (NO GOSÉN SHOE) */
+          /* 3. OTHER SAAS CLIENTS — CLIENT LOGO OR MIAPPHN CASH REGISTER SILHOUETTE EMBLEM */
           <div className="relative flex flex-col items-center justify-center mb-6">
             {clientLogoUrl ? (
               <div className="w-36 h-28 sm:w-44 sm:h-32 rounded-2xl bg-slate-900/90 border border-emerald-500/30 p-3 flex items-center justify-center shadow-2xl shadow-emerald-950/50">
@@ -282,7 +180,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
                 />
               </div>
             ) : (
-              <ClientBusinessAnimationSvg />
+              <MiAppHNCashRegisterIcon
+                className="w-28 h-28 sm:w-32 sm:h-32 rounded-3xl shadow-2xl shadow-emerald-500/30"
+                iconClassName="w-20 h-20 sm:w-22 sm:h-22"
+              />
             )}
           </div>
         )}

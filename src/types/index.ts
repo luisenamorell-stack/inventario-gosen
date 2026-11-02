@@ -199,6 +199,7 @@ export function getOfficialAppBaseUrl(customDomain?: string): string {
 export interface SaaSGlobalConfig {
   saasAdminPhone: string;
   saasBrandName: string;
+  saasLogo?: string;
   customDomain?: string;
   expiryWarningDays: number;
   autoSuspendOverdue?: boolean;
@@ -206,6 +207,26 @@ export interface SaaSGlobalConfig {
   bankAccounts?: SaaSBankAccount[];
   announcements: SaaSAnnouncement[];
   contractDefaults?: SaaSProviderContractDefaults;
+  updatedAt: number;
+}
+
+export interface SaaSDemoRequest {
+  id: string;
+  requestCode: string;
+  contactName: string;
+  businessName: string;
+  phone: string;
+  email?: string;
+  city: string;
+  businessType: string;
+  planInterest: 'prueba15' | 'emprendedor' | 'comercial' | 'empresarial' | 'anual' | 'vitalicio';
+  planLabel: string;
+  notes?: string;
+  status: 'pending' | 'contacted' | 'demo_created' | 'converted' | 'archived';
+  createdTenantSlug?: string;
+  createdTenantPassword?: string;
+  createdAt: number;
+  dateFormatted: string;
   updatedAt: number;
 }
 

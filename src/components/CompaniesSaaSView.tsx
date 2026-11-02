@@ -8,6 +8,7 @@ import {
   SaaSBankAccount,
   TenantUsageMetrics,
   SaaSGlobalConfig,
+  SaaSDemoRequest,
   OFFICIAL_SAAS_DOMAIN,
   getOfficialAppBaseUrl,
 } from '../types';
@@ -18,6 +19,11 @@ import {
   cloneStoreCatalogToTenant,
   seedStarterTemplateToTenant,
   STARTER_INDUSTRY_TEMPLATES,
+  getCachedSaaSDemoRequests,
+  fetchSaaSDemoRequestsOnce,
+  subscribeToSaaSDemoRequests,
+  updateSaaSDemoRequestInFirestore,
+  deleteSaaSDemoRequestFromFirestore,
 } from '../firebase/firestoreService';
 import {
   Building2,
@@ -73,6 +79,7 @@ import { WhatsAppIcon } from './SalesView';
 import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
 import { SecurityAuditPanel } from './SecurityAuditPanel';
 import { SaaSContractModal } from './SaaSContractModal';
+import { MiAppHNBannerLogo, MiAppHNCashRegisterIcon } from './MiAppHNLogo';
 
 export const SAAS_MODULE_OPTIONS: {
   id: ActiveTab;
@@ -243,6 +250,7 @@ interface CompaniesSaaSViewProps {
   onLockSuperAdmin?: () => void;
   onLogout?: () => void;
   onRefreshCompanies?: () => void;
+  onOpenSalesLanding?: () => void;
   isStandalonePortal?: boolean;
   showToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void;
 }
@@ -258,6 +266,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   onLockSuperAdmin,
   onLogout,
   onRefreshCompanies,
+  onOpenSalesLanding,
   isStandalonePortal = false,
   showToast,
 }) => {
@@ -349,6 +358,170 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   // SaaS Legal Usage Contract Modal State
   const [showContractModal, setShowContractModal] = useState<boolean>(false);
   const [contractModalCompany, setContractModalCompany] = useState<CompanyTenant | null>(null);
+
+  // SaaS Demo Requests & Prospects Modal State (from https://miapphn.online)
+  const [demoRequests, setDemoRequests] = useState<SaaSDemoRequest[]>(() =>
+    getCachedSaaSDemoRequests()
+  );
+  const [showDemoRequestsModal, setShowDemoRequestsModal] = useState<boolean>(false);
+  const [demoFilterStatus, setDemoFilterStatus] = useState<'all' | 'pending' | 'demo_created'>('all');
+  const [provisioningDemoId, setProvisioningDemoId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchSaaSDemoRequestsOnce().then(setDemoRequests).catch(() => {});
+    const unsub = subscribeToSaaSDemoRequests((list) => {
+      setDemoRequests(list);
+    });
+    return () => unsub();
+  }, []);
+
+  const pendingDemoRequestsCount = useMemo(
+    () => demoRequests.filter((r) => r.status === 'pending').length,
+    [demoRequests]
+  );
+
+  const inferStarterTemplateFromBusinessType = (
+    bType: string
+  ): keyof typeof STARTER_INDUSTRY_TEMPLATES => {
+    const lower = (bType || '').toLowerCase();
+    if (lower.includes('pulper') || lower.includes('abarrot') || lower.includes('super')) {
+      return 'pulperia_abarrotes';
+    }
+    if (lower.includes('ferret') || lower.includes('repuest') || lower.includes('herram')) {
+      return 'ferreteria_repuestos';
+    }
+    if (lower.includes('farmac') || lower.includes('cosmet') || lower.includes('perfum')) {
+      return 'farmacia_cosmeticos';
+    }
+    return 'ropa_calzado';
+  };
+
+  const handleSendDemoCredentialsWhatsApp = (
+    req: SaaSDemoRequest,
+    slugToUse: string,
+    passwordToUse: string,
+    expDateStr: string
+  ) => {
+    const base = getOfficialAppBaseUrl(saasGlobalConfig?.customDomain);
+    const storeUrl = `${base}/?empresa=${encodeURIComponent(slugToUse)}`;
+    const msg =
+      `🎉 *¡BIENVENIDO A TU DEMO DE 15 DÍAS — ${req.businessName.toUpperCase()}!*\n\n` +
+      `Hola *${req.contactName}*, hemos activado el sistema para tu negocio *${req.businessName}*.\n\n` +
+      `🔗 *Tu Enlace Exclusivo de Acceso:*\n${storeUrl}\n\n` +
+      `🔑 *Tus Credenciales de Administrador:*\n` +
+      `• *Código de Empresa:* \`${slugToUse}\`\n` +
+      `• *Contraseña Administrador:* \`${passwordToUse}\`\n` +
+      `• *Vencimiento de Prueba Gratis:* ${formatShortDateEs(expDateStr)} (15 días)\n\n` +
+      `📱 *Cómo instalar tu App:* Abre tu enlace exclusivo desde tu celular o computadora para entrar directamente a tu tienda con todos los módulos habilitados.`;
+
+    const cleanPhone = (req.phone || '').replace(/\D/g, '');
+    const formattedPhone = cleanPhone.length === 8 ? `504${cleanPhone}` : cleanPhone;
+    const waUrl = formattedPhone
+      ? `https://api.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(msg)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(waUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleInstantCreateDemoFromRequest = async (req: SaaSDemoRequest) => {
+    setProvisioningDemoId(req.id);
+    try {
+      let baseSlug = normalizeCompanySlug(req.businessName);
+      if (!baseSlug || baseSlug === 'gosen') {
+        baseSlug = `demo-${Math.floor(100 + Math.random() * 900)}`;
+      }
+      let finalSlug = baseSlug;
+      let suffix = 2;
+      while (companies.some((c) => c.slug === finalSlug)) {
+        finalSlug = `${baseSlug}-${suffix}`;
+        suffix += 1;
+      }
+
+      const randomPin = Math.floor(1000 + Math.random() * 9000);
+      const generatedPassword = `DEMO${randomPin}`;
+      const expDate = computeNextBillingDateFromCurrent(undefined, 'prueba');
+
+      const newTenant: CompanyTenant = {
+        id: finalSlug,
+        name: req.businessName.trim(),
+        slug: finalSlug,
+        ownerName: req.contactName.trim(),
+        phone: req.phone.trim(),
+        email: req.email || '',
+        plan: 'prueba',
+        price: 0,
+        nextBillingDate: expDate,
+        status: 'active',
+        autoSuspend: true,
+        adminPassword: generatedPassword,
+        logoUrl: '',
+        tagline: req.businessType || 'Control de Inventario y Ventas',
+        address: req.city || '',
+        notes: `Demo solicitado desde miapphn.online (${req.requestCode}) • Plan de interés: ${req.planLabel}${
+          req.notes ? ` • Nota: ${req.notes}` : ''
+        }`,
+        allowedModules: [...ALL_COMPANY_MODULES],
+        enableDeliveryDvolada: false,
+        maxProducts: 100,
+        maxUsers: 2,
+        paymentHistory: [],
+        createdAt: Date.now(),
+        isPrimary: false,
+      };
+
+      await onSaveCompany(newTenant);
+
+      // Seed starter industry products so the prospect sees a ready-to-test store
+      const tplKey = inferStarterTemplateFromBusinessType(req.businessType);
+      await seedStarterTemplateToTenant(tplKey, finalSlug).catch(() => {});
+
+      const updatedReq: SaaSDemoRequest = {
+        ...req,
+        status: 'demo_created',
+        createdTenantSlug: finalSlug,
+        createdTenantPassword: generatedPassword,
+        updatedAt: Date.now(),
+      };
+      const updatedList = await updateSaaSDemoRequestInFirestore(updatedReq);
+      setDemoRequests(updatedList);
+      await loadUsageMetrics();
+
+      showToast(
+        `¡Demo creado para "${req.businessName}"! Enviando link y clave por WhatsApp...`,
+        'success'
+      );
+      handleSendDemoCredentialsWhatsApp(updatedReq, finalSlug, generatedPassword, expDate);
+    } catch (err: any) {
+      showToast('Error al crear cuenta Demo: ' + (err?.message || 'desconocido'), 'error');
+    } finally {
+      setProvisioningDemoId(null);
+    }
+  };
+
+  const handleUpdateDemoRequestStatus = async (
+    req: SaaSDemoRequest,
+    newStatus: SaaSDemoRequest['status']
+  ) => {
+    try {
+      const updated = await updateSaaSDemoRequestInFirestore({
+        ...req,
+        status: newStatus,
+      });
+      setDemoRequests(updated);
+      showToast('Estado de solicitud actualizado.', 'success');
+    } catch {
+      showToast('No se pudo actualizar la solicitud.', 'error');
+    }
+  };
+
+  const handleDeleteDemoRequest = async (reqId: string) => {
+    try {
+      const updated = await deleteSaaSDemoRequestFromFirestore(reqId);
+      setDemoRequests(updated);
+      showToast('Solicitud eliminada.', 'info');
+    } catch {
+      showToast('No se pudo eliminar la solicitud.', 'error');
+    }
+  };
 
   const handleSaveMasterKey = () => {
     const clean = tempMasterKey.trim().toUpperCase();
@@ -1376,13 +1549,11 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       {/* Standalone SaaS Super-Admin Top Header Bar */}
       {isStandalonePortal && (
         <header className="bg-slate-950 text-white px-4 sm:px-6 py-3.5 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0 shadow-md">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-teal-500/20 border border-teal-400/40 flex items-center justify-center text-teal-300 shrink-0">
-              <Key className="w-5 h-5" />
-            </div>
-            <div className="min-w-0">
+          <div className="flex items-center gap-3.5 min-w-0">
+            <MiAppHNBannerLogo className="h-9 sm:h-11 w-auto shrink-0" alt="MIAPPHN" />
+            <div className="min-w-0 border-l border-slate-800 pl-3.5">
               <div className="flex items-center gap-2">
-                <span className="font-black text-sm sm:text-base tracking-wide text-white truncate">
+                <span className="font-black text-xs sm:text-sm tracking-wide text-white truncate">
                   CONSOLA CENTRAL SAAS
                 </span>
                 <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-400/30">
@@ -1426,13 +1597,14 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         {/* Main Action Header */}
         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-5 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start sm:items-center gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-600 shrink-0">
-              <Building2 className="w-6 h-6" />
-            </div>
+            <MiAppHNCashRegisterIcon
+              className="w-11 h-11 rounded-2xl"
+              iconClassName="w-8 h-8"
+            />
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
-                  Administración SaaS: Planes, Salud en Vivo, Cobros y Respaldos
+                  MIAPPHN • Administración SaaS: Planes, Salud en Vivo, Cobros y Respaldos
                 </h1>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
@@ -1442,6 +1614,41 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowDemoRequestsModal(true)}
+              className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl font-extrabold text-xs border shadow-xs transition-all cursor-pointer ${
+                pendingDemoRequestsCount > 0
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-500 animate-pulse'
+                  : 'bg-emerald-950 hover:bg-slate-900 text-emerald-300 border-emerald-500/40'
+              }`}
+              title="Ver prospectos y solicitudes de Demo registradas en el portal oficial miapphn.online"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Solicitudes Demo</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                  pendingDemoRequestsCount > 0
+                    ? 'bg-white text-rose-700'
+                    : 'bg-emerald-500/20 text-emerald-300'
+                }`}
+              >
+                {demoRequests.length}
+              </span>
+            </button>
+
+            {onOpenSalesLanding && (
+              <button
+                type="button"
+                onClick={onOpenSalesLanding}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-extrabold text-xs shadow-xs transition-all cursor-pointer"
+                title="Abrir el Panel Oficial de Venta de la App en miapphn.online"
+              >
+                <Globe className="w-4 h-4 text-teal-100" />
+                <span>Portal de Ventas</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {
@@ -1527,6 +1734,32 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Pending Demo Requests Banner from miapphn.online */}
+        {pendingDemoRequestsCount > 0 && (
+          <div className="bg-emerald-950 text-white rounded-2xl border border-emerald-500/50 p-3.5 sm:p-4 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center text-emerald-300 shrink-0">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div className="text-xs">
+                <div className="font-black text-emerald-200 text-sm">
+                  🚀 Tienes {pendingDemoRequestsCount} Solicitud(es) de Demo Pendiente(s) desde miapphn.online
+                </div>
+                <p className="text-emerald-100/80 mt-0.5">
+                  Nuevos prospectos registraron sus datos en tu página de ventas. Crea su cuenta Demo de 15 días con 1 clic y envíales su link por WhatsApp.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowDemoRequestsModal(true)}
+              className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer transition-all"
+            >
+              Ver Solicitudes ({pendingDemoRequestsCount})
+            </button>
+          </div>
+        )}
 
         {/* Automatic Suspension Alert Strip if any client is past their grace period */}
         {isAutoSuspendEnabled && overduePastGraceCompanies.length > 0 && (
@@ -4149,6 +4382,305 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         onSaveSaaSGlobalConfig={onSaveSaaSGlobalConfig}
         showToast={showToast}
       />
+
+      {/* SaaS Demo Requests & Commercial Leads Modal (from miapphn.online) */}
+      {showDemoRequestsModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden my-auto">
+            {/* Modal Header */}
+            <div className="bg-slate-950 text-white px-5 py-4 flex items-center justify-between gap-3 border-b border-slate-800">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-sm sm:text-base font-black text-white truncate">
+                    Solicitudes de Demo y Prospectos Registrados ({demoRequests.length})
+                  </h2>
+                  <p className="text-[11px] text-slate-400 truncate">
+                    Clientes potenciales registrados desde el Panel de Venta Oficial en{' '}
+                    <span className="text-emerald-400 font-mono">
+                      {getOfficialAppBaseUrl(saasGlobalConfig?.customDomain)}
+                    </span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDemoRequestsModal(false)}
+                className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Filter & Sales Portal Link Bar */}
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setDemoFilterStatus('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-extrabold cursor-pointer transition-colors ${
+                    demoFilterStatus === 'all'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Todas ({demoRequests.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDemoFilterStatus('pending')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-extrabold cursor-pointer transition-colors ${
+                    demoFilterStatus === 'pending'
+                      ? 'bg-rose-600 text-white'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Pendientes ({pendingDemoRequestsCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDemoFilterStatus('demo_created')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-extrabold cursor-pointer transition-colors ${
+                    demoFilterStatus === 'demo_created'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Demos Entregados (
+                  {demoRequests.filter((r) => r.status === 'demo_created').length})
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const salesUrl = getOfficialAppBaseUrl(saasGlobalConfig?.customDomain);
+                    navigator.clipboard?.writeText(salesUrl);
+                    showToast(`Enlace de ventas copiado: ${salesUrl}`, 'success');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold cursor-pointer"
+                >
+                  <Copy className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Copiar Link de Ventas</span>
+                </button>
+                {onOpenSalesLanding && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDemoRequestsModal(false);
+                      onOpenSalesLanding();
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold cursor-pointer"
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>Ver Página de Ventas</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Requests List */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 bg-slate-100/70">
+              {demoRequests
+                .filter((r) => {
+                  if (demoFilterStatus === 'pending') return r.status === 'pending';
+                  if (demoFilterStatus === 'demo_created') return r.status === 'demo_created';
+                  return true;
+                })
+                .map((req) => {
+                  const isProvisioning = provisioningDemoId === req.id;
+                  const base = getOfficialAppBaseUrl(saasGlobalConfig?.customDomain);
+                  return (
+                    <div
+                      key={req.id}
+                      className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 border-b border-slate-100 pb-3">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-[11px] font-black px-2 py-0.5 rounded bg-slate-900 text-emerald-400">
+                              {req.requestCode}
+                            </span>
+                            <h3 className="text-sm sm:text-base font-black text-slate-900">
+                              {req.businessName}
+                            </h3>
+                            <span
+                              className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
+                                req.status === 'pending'
+                                  ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                                  : req.status === 'demo_created'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : req.status === 'converted'
+                                  ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {req.status === 'pending'
+                                ? 'Pendiente de Activar'
+                                : req.status === 'demo_created'
+                                ? 'Demo Creado y Activo'
+                                : req.status === 'converted'
+                                ? 'Cliente Contratado'
+                                : req.status === 'contacted'
+                                ? 'Contactado'
+                                : 'Archivado'}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-500 mt-1">
+                            Propietario: <strong className="text-slate-800">{req.contactName}</strong> •
+                            WhatsApp: <strong className="text-emerald-700 font-mono">{req.phone}</strong> •
+                            Ciudad: <strong className="text-slate-700">{req.city}</strong>
+                          </div>
+                        </div>
+
+                        <div className="text-right text-[11px] text-slate-400 shrink-0">
+                          <div>{req.dateFormatted}</div>
+                          <div className="font-bold text-teal-700">{req.planLabel}</div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200/70">
+                        <div>
+                          <span className="text-slate-400 font-semibold">Rubro: </span>
+                          <span className="font-bold text-slate-700">{req.businessType}</span>
+                        </div>
+                        {req.email && (
+                          <div>
+                            <span className="text-slate-400 font-semibold">Correo: </span>
+                            <span className="font-bold text-slate-700">{req.email}</span>
+                          </div>
+                        )}
+                        {req.notes && (
+                          <div className="sm:col-span-2">
+                            <span className="text-slate-400 font-semibold">Comentarios: </span>
+                            <span className="font-semibold text-slate-700">{req.notes}</span>
+                          </div>
+                        )}
+                        {req.createdTenantSlug && (
+                          <div className="sm:col-span-2 pt-1.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-mono text-[11px] text-emerald-800">
+                              Link Demo:{' '}
+                              <strong>
+                                {base}/?empresa={req.createdTenantSlug}
+                              </strong>{' '}
+                              • Clave: <strong>{req.createdTenantPassword || 'DEMO'}</strong>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {req.status !== 'demo_created' ? (
+                            <button
+                              type="button"
+                              disabled={isProvisioning}
+                              onClick={() => handleInstantCreateDemoFromRequest(req)}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs shadow-xs cursor-pointer transition-all"
+                            >
+                              <Zap className="w-3.5 h-3.5" />
+                              <span>
+                                {isProvisioning
+                                  ? 'Creando Tienda Demo...'
+                                  : 'Crear Demo 15 Días y Enviar por WhatsApp'}
+                              </span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSendDemoCredentialsWhatsApp(
+                                  req,
+                                  req.createdTenantSlug || normalizeCompanySlug(req.businessName),
+                                  req.createdTenantPassword || 'ADMIN2026',
+                                  computeNextBillingDateFromCurrent(undefined, 'prueba')
+                                )
+                              }
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs cursor-pointer transition-all"
+                            >
+                              <WhatsAppIcon className="w-3.5 h-3.5" />
+                              <span>Reenviar Link Demo por WhatsApp</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const cleanPhone = (req.phone || '').replace(/\D/g, '');
+                              const formattedPhone =
+                                cleanPhone.length === 8 ? `504${cleanPhone}` : cleanPhone;
+                              const msg = `Hola *${req.contactName}*, te saludamos de *${
+                                saasGlobalConfig?.saasBrandName || 'MIAPPHN.ONLINE'
+                              }* respecto a tu solicitud de *${req.planLabel}* para tu negocio *${
+                                req.businessName
+                              }*.`;
+                              window.open(
+                                `https://api.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(
+                                  msg
+                                )}`,
+                                '_blank',
+                                'noopener,noreferrer'
+                              );
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                          >
+                            <WhatsAppIcon className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Contactar</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={req.status}
+                            onChange={(e) =>
+                              handleUpdateDemoRequestStatus(
+                                req,
+                                e.target.value as SaaSDemoRequest['status']
+                              )
+                            }
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700"
+                          >
+                            <option value="pending">Pendiente</option>
+                            <option value="contacted">Contactado</option>
+                            <option value="demo_created">Demo Creado</option>
+                            <option value="converted">Cliente Activo</option>
+                            <option value="archived">Archivado</option>
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDemoRequest(req.id)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                            title="Eliminar solicitud"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+              {demoRequests.length === 0 && (
+                <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 p-6 space-y-2">
+                  <Sparkles className="w-8 h-8 text-emerald-500 mx-auto" />
+                  <h3 className="text-sm font-black text-slate-800">
+                    Aún no hay solicitudes de Demo registradas
+                  </h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    Cuando tus prospectos entren a{' '}
+                    <strong>{getOfficialAppBaseUrl(saasGlobalConfig?.customDomain)}</strong> y
+                    registren sus datos para pedir un Demo o Plan, aparecerán aquí en tiempo real.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

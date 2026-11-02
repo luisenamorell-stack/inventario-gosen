@@ -34,12 +34,15 @@ import { PublicCatalogView } from './components/PublicCatalogView';
 import { UserManagementView } from './components/UserManagementView';
 import { ActivityLogView } from './components/ActivityLogView';
 import { CompaniesSaaSView, getDaysUntilBilling, formatShortDateEs } from './components/CompaniesSaaSView';
+import { SaaSLandingPage } from './components/SaaSLandingPage';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
 import {
   getActiveCompanyId,
   setActiveCompanyId,
   normalizeCompanySlug,
+  canonicalizeCompanySlug,
+  resolveCompanySlugFromInput,
   getScopedDocId,
   getCachedInventory,
   setCachedInventory,
@@ -67,6 +70,7 @@ import {
   subscribeToSaaSGlobalConfig,
   saveSaaSGlobalConfigToFirestore,
   fetchInventorySmart,
+  subscribeToInventory,
   fetchStoreSettingsOnce,
   fetchSuppliersOnce,
   fetchSalesOnce,
@@ -178,10 +182,38 @@ export const App: React.FC = () => {
   });
 
   // Dedicated SaaS Owner Console Link Detection (?saas=1)
-  const [isSaaSPortalUrl] = useState<boolean>(() => {
+  const [isSaaSPortalUrl, setIsSaaSPortalUrl] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
     return params.get('saas') === '1' || params.get('saas') === 'true' || params.get('panel') === 'saas';
+  });
+
+  // Official Commercial Sales & Demo Landing Page Detection (Root domain https://miapphn.online without ?empresa= or ?saas=1, or with ?ventas=1)
+  const [isSalesLandingMode, setIsSalesLandingMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    const hash = window.location.hash.toLowerCase();
+    if (
+      params.get('ventas') === '1' ||
+      params.get('landing') === '1' ||
+      params.get('demo') === '1'
+    ) {
+      return true;
+    }
+    const hasCompanyParam = Boolean(
+      params.get('empresa') || params.get('tienda') || params.get('cliente')
+    );
+    const hasCatalogParam =
+      window.location.search.toLowerCase().includes('catalogo') ||
+      window.location.search.toLowerCase().includes('catalog') ||
+      hash.includes('catalogo') ||
+      hash.includes('catalog');
+    const hasSaaSParam =
+      params.get('saas') === '1' ||
+      params.get('saas') === 'true' ||
+      params.get('panel') === 'saas';
+
+    return !hasCompanyParam && !hasCatalogParam && !hasSaaSParam;
   });
 
   const [isAdminPreviewMode, setIsAdminPreviewMode] = useState<boolean>(false);
@@ -320,7 +352,10 @@ export const App: React.FC = () => {
 
   // Sync dynamic multi-tenant PWA manifest, Apple Touch Icon, favicon, title, and ?empresa= URL parameter
   useEffect(() => {
-    syncDynamicPwaBranding(activeCompanyId, storeSettings, { isPublicCatalogMode }).catch((err) => {
+    syncDynamicPwaBranding(activeCompanyId, storeSettings, {
+      isPublicCatalogMode,
+      isSalesLandingMode,
+    }).catch((err) => {
       console.warn('Error syncing dynamic PWA branding:', err);
     });
   }, [
@@ -329,6 +364,7 @@ export const App: React.FC = () => {
     storeSettings.tagline,
     storeSettings.logoUrl,
     isPublicCatalogMode,
+    isSalesLandingMode,
   ]);
 
   useEffect(() => {
@@ -412,7 +448,8 @@ export const App: React.FC = () => {
 
   // Switch active company context (from LoginView or from Super Admin panel)
   const handleSelectCompanyContext = useCallback((companySlug: string) => {
-    const cleanSlug = setActiveCompanyId(companySlug);
+    const resolved = resolveCompanySlugFromInput(companySlug, companies);
+    const cleanSlug = setActiveCompanyId(resolved);
     setActiveCompanyIdState(cleanSlug);
     loadedModulesRef.current = {};
 
@@ -421,7 +458,12 @@ export const App: React.FC = () => {
     if (cachedSettings) {
       setStoreSettings(cachedSettings);
     } else {
-      const compObj = companies.find((c) => c.slug === cleanSlug);
+      const compObj = companies.find(
+        (c) =>
+          c.slug.toLowerCase() === cleanSlug.toLowerCase() ||
+          canonicalizeCompanySlug(c.slug) === canonicalizeCompanySlug(cleanSlug) ||
+          normalizeCompanySlug(c.slug) === normalizeCompanySlug(cleanSlug)
+      );
       setStoreSettings(
         cleanSlug === 'gosen'
           ? DEFAULT_STORE_SETTINGS
@@ -453,7 +495,7 @@ export const App: React.FC = () => {
 
   // Auth Handlers — Fluid login animation over instant background workspace mount
   const handleLoginSuccess = (session: UserSession, remember: boolean) => {
-    const sessionCompany = normalizeCompanySlug(session.companyId || activeCompanyId || 'gosen');
+    const sessionCompany = resolveCompanySlugFromInput(session.companyId || activeCompanyId || 'gosen', companies);
     if (sessionCompany !== activeCompanyId) {
       handleSelectCompanyContext(sessionCompany);
     }
@@ -470,7 +512,12 @@ export const App: React.FC = () => {
       }
     } catch {}
 
-    const compObj = companies.find((c) => normalizeCompanySlug(c.slug) === sessionCompany);
+    const compObj = companies.find(
+      (c) =>
+        c.slug.toLowerCase() === sessionCompany.toLowerCase() ||
+        canonicalizeCompanySlug(c.slug) === canonicalizeCompanySlug(sessionCompany) ||
+        normalizeCompanySlug(c.slug) === normalizeCompanySlug(sessionCompany)
+    );
     const compAllowed =
       compObj?.allowedModules && compObj.allowedModules.length > 0
         ? compObj.allowedModules
@@ -779,6 +826,19 @@ export const App: React.FC = () => {
     let unsubscribeSales: (() => void) | undefined;
     let unsubscribePosFinance: (() => void) | undefined;
     let unsubscribeWarehouses: (() => void) | undefined;
+    let unsubscribeInventory: (() => void) | undefined;
+
+    // Real-time inventory subscription for all sessions (updates catalog, POS, and inventory views immediately)
+    unsubscribeInventory = subscribeToInventory(
+      (liveInventory) => {
+        setInventory(liveInventory);
+        setCachedInventory(liveInventory, Date.now(), activeCompanyId);
+      },
+      (err) => {
+        console.warn('Inventory realtime listener warning:', err);
+      },
+      activeCompanyId
+    );
 
     if (!isPublicCatalogMode) {
       unsubscribeSales = subscribeToSales(
@@ -809,6 +869,7 @@ export const App: React.FC = () => {
     return () => {
       unsubscribeComps();
       unsubscribeGlobal();
+      if (unsubscribeInventory) unsubscribeInventory();
       if (unsubscribeSales) unsubscribeSales();
       if (unsubscribePosFinance) unsubscribePosFinance();
       if (unsubscribeWarehouses) unsubscribeWarehouses();
@@ -1204,11 +1265,19 @@ export const App: React.FC = () => {
 
   // Inventory Handlers (Optimistic local + cache update, 0 collection re-reads)
   const handleSaveProduct = async (product: Product, oldCode?: string) => {
+    const cleanOld = (oldCode || product.code || '').trim().toLowerCase();
+    const cleanNew = (product.code || '').trim().toLowerCase();
     const isExisting = inventory.some(
-      (p) => p.code.toLowerCase() === (oldCode || product.code).toLowerCase()
+      (p) =>
+        (product.id && p.id === product.id) ||
+        p.code.trim().toLowerCase() === cleanOld ||
+        p.code.trim().toLowerCase() === cleanNew
     );
     const activeComp = companies.find(
-      (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
+      (c) =>
+        c.slug.toLowerCase() === activeCompanyId.toLowerCase() ||
+        canonicalizeCompanySlug(c.slug) === canonicalizeCompanySlug(activeCompanyId) ||
+        normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
     );
     const effectiveMaxProducts = activeComp?.maxProducts || storeSettings.maxProducts || 0;
     if (!isExisting && effectiveMaxProducts > 0 && inventory.length >= effectiveMaxProducts) {
@@ -1228,7 +1297,12 @@ export const App: React.FC = () => {
       };
 
       setInventory((prev) => {
-        const index = prev.findIndex((p) => p.code.toLowerCase() === (oldCode || product.code).toLowerCase());
+        const index = prev.findIndex(
+          (p) =>
+            (product.id && p.id && p.id === product.id) ||
+            p.code.trim().toLowerCase() === cleanOld ||
+            p.code.trim().toLowerCase() === cleanNew
+        );
         let next: Product[];
         if (index >= 0) {
           next = [...prev];
@@ -1352,16 +1426,23 @@ export const App: React.FC = () => {
   const handleDeleteProduct = async (id: string) => {
     setIsSyncing(true);
     try {
-      const itemToDelete = inventory.find((p) => p.id === id);
-      const code = itemToDelete?.code;
+      const cleanTargetId = (id || '').trim();
+      const itemToDelete = inventory.find(
+        (p) => p.id === cleanTargetId || p.code.toLowerCase() === cleanTargetId.toLowerCase()
+      );
+      const code = itemToDelete?.code || (id.includes('__') ? id.split('__').slice(1).join('__') : id);
 
       setInventory((prev) => {
-        const next = prev.filter((p) => p.id !== id && (code ? p.code !== code : true));
+        const next = prev.filter(
+          (p) =>
+            p.id !== cleanTargetId &&
+            (!code || p.code.toLowerCase() !== code.toLowerCase())
+        );
         setCachedInventory(next, Date.now(), activeCompanyId);
         return next;
       });
 
-      await deleteProductFromFirestore(id, code, activeCompanyId);
+      await deleteProductFromFirestore(cleanTargetId, code, activeCompanyId);
       setLastSyncTime(new Date());
 
       logActivityInFirestore(
@@ -1953,6 +2034,68 @@ export const App: React.FC = () => {
     );
   }
 
+  // Official Commercial Sales & Demo Portal on Root Domain (https://miapphn.online)
+  if (isSalesLandingMode) {
+    return (
+      <div className="fixed inset-0 w-full h-full overflow-y-auto bg-slate-950">
+        <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
+        <SaaSLandingPage
+          saasGlobalConfig={saasGlobalConfig}
+          hasActiveSession={Boolean(isAuthenticated && userSession)}
+          activeSessionLabel={
+            userSession?.isSuperAdmin
+              ? 'Consola SaaS'
+              : userSession?.companyName || storeSettings.storeName || activeCompanyId.toUpperCase()
+          }
+          onResumeSession={() => {
+            setIsSalesLandingMode(false);
+          }}
+          onEnterClientStore={(companySlug) => {
+            const cleanSlug = normalizeCompanySlug(companySlug);
+            setIsSaaSPortalUrl(false);
+            setIsSalesLandingMode(false);
+            handleSelectCompanyContext(cleanSlug);
+            if (
+              userSession &&
+              (userSession.isStandaloneSaaS ||
+                normalizeCompanySlug(userSession.companyId) !== cleanSlug)
+            ) {
+              setIsAuthenticated(false);
+              setUserSession(null);
+            }
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('ventas');
+              url.searchParams.delete('landing');
+              url.searchParams.delete('demo');
+              url.searchParams.delete('saas');
+              url.searchParams.set('empresa', cleanSlug);
+              window.history.replaceState({}, '', url.toString());
+            } catch {}
+          }}
+          onOpenSaaSConsole={() => {
+            setIsSaaSPortalUrl(true);
+            setIsSalesLandingMode(false);
+            if (!userSession?.isSuperAdmin) {
+              setIsAuthenticated(false);
+              setUserSession(null);
+            }
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('ventas');
+              url.searchParams.delete('landing');
+              url.searchParams.delete('demo');
+              url.searchParams.delete('empresa');
+              url.searchParams.set('saas', '1');
+              window.history.replaceState({}, '', url.toString());
+            } catch {}
+          }}
+          showToast={showToast}
+        />
+      </div>
+    );
+  }
+
   // Login Screen if not authenticated
   if (!isAuthenticated || !userSession) {
     return (
@@ -2170,6 +2313,7 @@ export const App: React.FC = () => {
             setCompanies(fresh);
             showToast('Lista de clientes sincronizada desde la nube', 'success');
           }}
+          onOpenSalesLanding={() => setIsSalesLandingMode(true)}
           isStandalonePortal={true}
           showToast={showToast}
         />
@@ -2679,6 +2823,7 @@ export const App: React.FC = () => {
               onSwitchCompany={handleSwitchCompanyWorkspace}
               onSaveSaaSGlobalConfig={handleSaveSaaSGlobalConfig}
               onLockSuperAdmin={handleLockSuperAdmin}
+              onOpenSalesLanding={() => setIsSalesLandingMode(true)}
               showToast={showToast}
             />
           )}

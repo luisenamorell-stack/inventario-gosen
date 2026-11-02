@@ -14,6 +14,7 @@ import {
   Key,
   AlertTriangle
 } from 'lucide-react';
+import { MiAppHNBannerLogo, MiAppHNCashRegisterIcon } from './MiAppHNLogo';
 
 interface LoginViewProps {
   storeSettings?: StoreSettings;
@@ -64,7 +65,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   // Strict Branding Isolation: Each store link displays ONLY its own brand identity
   const storeName =
     loginMode === 'saas_owner'
-      ? 'Panel Central SaaS'
+      ? 'MIAPPHN • Panel Central SaaS'
       : selectedCompany?.name ||
         (isGosenSelected
           ? storeSettings?.storeName || 'Tienda Gosén'
@@ -357,10 +358,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
         {/* Store / Portal Branding Header (100% Isolated to this Link) */}
         <div className="flex flex-col items-center text-center mb-5">
           {loginMode === 'saas_owner' ? (
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-teal-600 to-amber-400 p-0.5 shadow-lg shadow-teal-500/20 flex items-center justify-center mb-3">
-              <div className="w-full h-full bg-slate-900 rounded-[14px] flex items-center justify-center">
-                <Key className="w-8 h-8 text-amber-400" />
-              </div>
+            <div className="flex flex-col items-center gap-2 mb-3">
+              <MiAppHNBannerLogo className="h-14 sm:h-16 w-auto" alt="MIAPPHN" />
             </div>
           ) : logoUrl ? (
             <div className="w-full max-w-[260px] h-20 sm:h-24 flex items-center justify-center overflow-hidden mb-3">
@@ -371,10 +370,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
               />
             </div>
           ) : (
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-600 to-emerald-400 p-0.5 shadow-lg shadow-emerald-500/20 flex items-center justify-center mb-3">
-              <div className="w-full h-full bg-slate-900 rounded-[14px] flex items-center justify-center">
-                <Boxes className="w-8 h-8 text-emerald-400" />
-              </div>
+            <div className="mb-3">
+              <MiAppHNCashRegisterIcon
+                className="w-16 h-16 rounded-2xl"
+                iconClassName="w-11 h-11"
+              />
             </div>
           )}
 

@@ -211,6 +211,85 @@ export async function generateTenantAppIconDataUrl(
   });
 }
 
+export function generateMiAppHNCashRegisterIconDataUrl(size = 512): string {
+  if (typeof document === 'undefined') return '/pwa-512x512.png';
+
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '/pwa-512x512.png';
+
+  // 1. Emerald rounded square gradient matching MIAPPHN official logo
+  const grad = ctx.createLinearGradient(0, 0, size, size);
+  grad.addColorStop(0, '#20e395');
+  grad.addColorStop(0.55, '#10b981');
+  grad.addColorStop(1, '#059669');
+
+  const r = Math.round(size * 0.22);
+  ctx.beginPath();
+  ctx.roundRect(0, 0, size, size, r);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // 2. Draw Black Cash Register Silhouette (scaled from 100x100 coordinate space)
+  const s = (v: number) => (v / 100) * size;
+  ctx.strokeStyle = '#091310';
+  ctx.fillStyle = '#091310';
+  ctx.lineWidth = s(6.5);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Wireless signal arcs at top-right of screen
+  ctx.beginPath();
+  ctx.arc(s(59), s(33), s(11), -Math.PI / 2, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(s(59), s(33), s(21), -Math.PI / 2, 0);
+  ctx.stroke();
+
+  // Top display monitor screen
+  ctx.beginPath();
+  ctx.roundRect(s(34), s(27), s(24), s(16), s(5.5));
+  ctx.stroke();
+
+  // Monitor stem
+  ctx.beginPath();
+  ctx.moveTo(s(46), s(43));
+  ctx.lineTo(s(46), s(50));
+  ctx.stroke();
+
+  // Trapezoid keypad body
+  ctx.beginPath();
+  ctx.moveTo(s(32), s(50));
+  ctx.lineTo(s(60), s(50));
+  ctx.lineTo(s(68), s(69));
+  ctx.lineTo(s(24), s(69));
+  ctx.closePath();
+  ctx.stroke();
+
+  // 3 keypad dots
+  [37, 46, 55].forEach((cx) => {
+    ctx.beginPath();
+    ctx.arc(s(cx), s(60), s(3.2), 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Cash drawer base
+  ctx.beginPath();
+  ctx.roundRect(s(18), s(69), s(56), s(19), s(6.5));
+  ctx.stroke();
+
+  // Cash drawer slot
+  ctx.beginPath();
+  ctx.moveTo(s(38), s(78.5));
+  ctx.lineTo(s(54), s(78.5));
+  ctx.stroke();
+
+  return canvas.toDataURL('image/png');
+}
+
 let activeManifestBlobUrl: string | null = null;
 
 /**
@@ -221,7 +300,7 @@ let activeManifestBlobUrl: string | null = null;
 export async function syncDynamicPwaBranding(
   companyId: string,
   storeSettings: StoreSettings,
-  options?: { isPublicCatalogMode?: boolean }
+  options?: { isPublicCatalogMode?: boolean; isSalesLandingMode?: boolean }
 ): Promise<{
   icon192: string;
   icon512: string;
@@ -231,23 +310,28 @@ export async function syncDynamicPwaBranding(
 }> {
   const normalizedSlug = (companyId || 'gosen').trim().toLowerCase();
   const isGosen = normalizedSlug === 'gosen';
-  const storeName =
-    (storeSettings?.storeName || '').trim() ||
-    (isGosen ? 'Tienda Gosén' : normalizedSlug.toUpperCase());
-  const tagline =
-    (storeSettings?.tagline || '').trim() || 'Sistema de Inventario y Punto de Venta';
+  const storeName = options?.isSalesLandingMode
+    ? 'MIAPPHN'
+    : (storeSettings?.storeName || '').trim() ||
+      (isGosen ? 'Tienda Gosén' : normalizedSlug.toUpperCase());
+  const tagline = options?.isSalesLandingMode
+    ? 'Sistema POS, Inventario y Multi-Bodegas en la Nube'
+    : (storeSettings?.tagline || '').trim() || 'Sistema de Inventario y Punto de Venta';
 
   // Build tenant-specific start path so launching from the mobile home screen
   // always boots directly into this client's isolated company workspace.
-  const startPath = `/?empresa=${encodeURIComponent(normalizedSlug)}`;
+  const startPath = options?.isSalesLandingMode
+    ? '/'
+    : `/?empresa=${encodeURIComponent(normalizedSlug)}`;
   const fullStartUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}${startPath}`
       : startPath;
 
   // Keep ?empresa=<slug> in the browser address bar for every store tenant
-  // (unless on the dedicated ?saas=1 portal) so each app link remains strictly separated.
-  if (typeof window !== 'undefined' && !options?.isPublicCatalogMode) {
+  // (unless on the dedicated ?saas=1 portal or official root sales landing page)
+  // so each app link remains strictly separated.
+  if (typeof window !== 'undefined' && !options?.isPublicCatalogMode && !options?.isSalesLandingMode) {
     try {
       const currentUrl = new URL(window.location.href);
       const isSaaSPortal =
@@ -264,16 +348,25 @@ export async function syncDynamicPwaBranding(
     }
   }
 
-  // Generate tenant-specific icons (180x180 for iOS, 192x192 & 512x512 for Android/Chrome)
-  const [appleIcon180, icon192, icon512] = await Promise.all([
-    generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 180),
-    generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 192),
-    generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 512),
-  ]);
+  // Generate tenant-specific icons (or official MIAPPHN cash register icons when on the root portal)
+  const [appleIcon180, icon192, icon512] = options?.isSalesLandingMode
+    ? [
+        generateMiAppHNCashRegisterIconDataUrl(180),
+        generateMiAppHNCashRegisterIconDataUrl(192),
+        generateMiAppHNCashRegisterIconDataUrl(512),
+      ]
+    : await Promise.all([
+        generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 180),
+        generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 192),
+        generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 512),
+      ]);
 
   if (typeof document !== 'undefined') {
     // 1. Update Document Title & Mobile App Title Meta Tags
-    document.title = `${storeName} | ${tagline}`;
+    const pageTitle = options?.isSalesLandingMode
+      ? 'MIAPPHN | Sistema POS, Inventario y Multi-Bodegas en la Nube'
+      : `${storeName} | ${tagline}`;
+    document.title = pageTitle;
 
     const setMetaContent = (selector: string, content: string) => {
       const el = document.querySelector<HTMLMetaElement>(selector);
@@ -282,7 +375,7 @@ export async function syncDynamicPwaBranding(
 
     setMetaContent('meta[name="application-name"]', storeName);
     setMetaContent('meta[name="apple-mobile-web-app-title"]', storeName);
-    setMetaContent('meta[property="og:title"]', `${storeName} | ${tagline}`);
+    setMetaContent('meta[property="og:title"]', pageTitle);
 
     // 2. Update Favicons
     const iconLinks = document.querySelectorAll<HTMLLinkElement>(

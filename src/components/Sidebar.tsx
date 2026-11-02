@@ -27,6 +27,7 @@ import {
   Key,
   EyeOff
 } from 'lucide-react';
+import { MiAppHNCashRegisterIcon } from './MiAppHNLogo';
 
 export interface SidebarProps {
   activeTab: ActiveTab;
@@ -239,23 +240,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="flex-1 flex items-center gap-3 text-left group overflow-hidden cursor-pointer min-w-0"
               title="Ajustes de tienda"
             >
-              <div
-                className={`h-10 rounded-xl flex items-center justify-center shrink-0 overflow-hidden ${
-                  storeSettings?.logoUrl
-                    ? 'min-w-10 max-w-[68px] bg-white/95 border border-slate-700/80 px-1 py-0.5 shadow-xs'
-                    : 'w-10 bg-emerald-500/10 border border-emerald-500/20'
-                }`}
-              >
-                {storeSettings?.logoUrl ? (
+              {storeSettings?.logoUrl ? (
+                <div className="h-10 min-w-10 max-w-[68px] rounded-xl bg-white/95 border border-slate-700/80 px-1 py-0.5 shadow-xs flex items-center justify-center shrink-0 overflow-hidden">
                   <img
                     src={storeSettings.logoUrl}
                     alt={storeName}
                     className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg"
                   />
-                ) : (
-                  <Boxes className="w-6 h-6 text-emerald-400" />
-                )}
-              </div>
+                </div>
+              ) : (
+                <MiAppHNCashRegisterIcon
+                  className="w-10 h-10 rounded-xl"
+                  iconClassName="w-7 h-7"
+                />
+              )}
               <span className="font-extrabold text-base sm:text-lg text-white tracking-wider uppercase truncate">
                 {storeName.toUpperCase()}
               </span>
@@ -377,25 +375,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="w-full h-full flex items-center justify-center text-left cursor-pointer rounded-xl hover:bg-slate-800/60 transition-colors group p-1"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div
-                  className={`h-10 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform overflow-hidden ${
-                    storeSettings?.logoUrl
-                      ? isCollapsed
+                {storeSettings?.logoUrl ? (
+                  <div
+                    className={`h-10 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform overflow-hidden ${
+                      isCollapsed
                         ? 'w-11 bg-white/95 border border-slate-700/80 p-1 shadow-xs'
                         : 'min-w-10 max-w-[68px] bg-white/95 border border-slate-700/80 px-1 py-0.5 shadow-xs'
-                      : 'w-10 bg-emerald-500/10 border border-emerald-500/20'
-                  }`}
-                >
-                  {storeSettings?.logoUrl ? (
+                    }`}
+                  >
                     <img
                       src={storeSettings.logoUrl}
                       alt={storeName}
                       className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg"
                     />
-                  ) : (
-                    <Boxes className="w-6 h-6 text-emerald-400" />
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <MiAppHNCashRegisterIcon
+                    className="w-10 h-10 rounded-xl group-hover:scale-105 transition-transform"
+                    iconClassName="w-7 h-7"
+                  />
+                )}
                 {!isCollapsed && (
                   <span className="font-extrabold text-sm lg:text-base text-white tracking-wider uppercase truncate">
                     {storeName.toUpperCase()}

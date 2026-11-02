@@ -358,12 +358,19 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // Filter & Sort inventory items (Mayor a menor stock, precio, costo, etc.)
   const filteredInventory = React.useMemo(() => {
     const query = deferredSearch.toLowerCase().trim();
+    const queryClean = query.replace(/[-_\s]/g, '');
     const filtered = inventory.filter((item) => {
+      const itemCode = (item.code || '').toLowerCase();
+      const itemCodeClean = itemCode.replace(/[-_\s]/g, '');
+      const itemName = (item.name || '').toLowerCase();
+      const itemSize = (item.size || '').toLowerCase();
+
       const matchesSearch =
         !query ||
-        item.code.toLowerCase().includes(query) ||
-        item.name.toLowerCase().includes(query) ||
-        (item.size && item.size.toLowerCase().includes(query));
+        itemCode.includes(query) ||
+        (queryClean.length > 0 && itemCodeClean.includes(queryClean)) ||
+        itemName.includes(query) ||
+        (item.size && itemSize.includes(query));
 
       const matchesCategory =
         selectedCategory === 'all' || item.category === selectedCategory;
