@@ -494,6 +494,8 @@ export interface PurchaseInvoice {
   timestamp: number;
   paymentCondition: 'cash' | 'credit';
   dueDate?: string;
+  warehouseId?: string;
+  warehouseName?: string;
   items: PurchaseItem[];
   totalItems: number;
   subtotal: number;

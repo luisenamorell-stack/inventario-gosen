@@ -47,6 +47,13 @@ import {
   normalizeSearchText,
   scoreProductSearchRelevance,
 } from '../utils/productSearch';
+import {
+  SequentialSkuConfig,
+  loadSequentialSkuConfig,
+  saveSequentialSkuConfig,
+  computeNextSequentialSku,
+  generateBarcodeBars,
+} from '../utils/sequentialSku';
 
 interface InventoryViewProps {
   inventory: Product[];
@@ -160,6 +167,36 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   });
   const [isCustomCategoryMode, setIsCustomCategoryMode] = useState<boolean>(false);
 
+  // Sequential SKU / Barcode ("SKU Corrido") configuration state
+  const [seqSkuConfig, setSeqSkuConfig] = useState<SequentialSkuConfig>(() =>
+    loadSequentialSkuConfig()
+  );
+
+  // Re-sync sequential SKU config if company changes
+  useEffect(() => {
+    setSeqSkuConfig(loadSequentialSkuConfig());
+  }, [storeSettings?.storeName]);
+
+  const nextSequentialInfo = useMemo(
+    () => computeNextSequentialSku(inventory, seqSkuConfig),
+    [inventory, seqSkuConfig]
+  );
+
+  const handleUpdateSeqSkuConfig = (
+    partial: Partial<SequentialSkuConfig>,
+    autoApplyToCurrentForm = false
+  ) => {
+    setSeqSkuConfig((prev) => {
+      const updated: SequentialSkuConfig = { ...prev, ...partial };
+      saveSequentialSkuConfig(updated);
+      if (autoApplyToCurrentForm && !editingProduct) {
+        const computed = computeNextSequentialSku(inventory, updated);
+        setFormData((f) => ({ ...f, code: computed.nextCode }));
+      }
+      return updated;
+    });
+  };
+
   useEffect(() => {
     if (initialSearchCode) {
       setSearchText(initialSearchCode);
@@ -188,11 +225,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       }
       return;
     }
+    const latestSeqConfig = loadSequentialSkuConfig();
+    setSeqSkuConfig(latestSeqConfig);
+    const autoSeqCode = latestSeqConfig.enabled
+      ? computeNextSequentialSku(inventory, latestSeqConfig).nextCode
+      : '';
+
     const defaultCategory =
       categories.length > 0 ? categories[0] : 'General';
     setEditingProduct(null);
     setFormData({
-      code: '',
+      code: autoSeqCode,
       name: '',
       category: defaultCategory,
       size: '',
@@ -285,6 +328,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   };
 
   const handleAutoGenerateCode = () => {
+    // Primary action: generate next ascending sequential SKU ("SKU Corrido")
+    const computed = computeNextSequentialSku(inventory, seqSkuConfig);
+    setFormData((prev) => ({ ...prev, code: computed.nextCode }));
+  };
+
+  const handleAutoGenerateCategoryCode = () => {
     const prefix = (formData.category || 'PROD').substring(0, 3).toUpperCase();
     const countWithPrefix = inventory.filter((p) => p.code.startsWith(prefix)).length + 1;
     const randomSuffix = Math.floor(100 + Math.random() * 900);
@@ -302,8 +351,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     return Math.min(basePrice, rawVal);
   }, [formData.price, formData.discountType, formData.discountValue]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const saveFormProduct = (keepOpenForNext: boolean) => {
     if (!formData.name.trim() || !formData.code.trim()) return;
 
     const enteredStock = Math.max(0, Math.round(Number(formData.stock) || 0));
@@ -357,7 +405,37 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     };
 
     onSaveProduct(savedItem, editingProduct?.code);
-    handleCloseModal();
+
+    if (keepOpenForNext && !editingProduct) {
+      // Immediately prepare the next sequential SKU passing savedItem.code as already used
+      const nextCodeAfterSave = seqSkuConfig.enabled
+        ? computeNextSequentialSku(inventory, seqSkuConfig, [savedItem.code]).nextCode
+        : '';
+      setFormData((prev) => ({
+        ...prev,
+        code: nextCodeAfterSave,
+        name: '',
+        size: '',
+        stock: 0,
+        cost: 0,
+        price: 0,
+        discountValue: 0,
+        img: '',
+      }));
+      if (showToast) {
+        showToast(
+          `Artículo "${savedItem.name}" (${savedItem.code}) guardado. Siguiente SKU: ${nextCodeAfterSave || 'listo'}`,
+          'success'
+        );
+      }
+    } else {
+      handleCloseModal();
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    saveFormProduct(false);
   };
 
   // Fast non-blocking search typing with useDeferredValue
@@ -1573,18 +1651,31 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   {/* Pricing and SKU column */}
                   <div className="space-y-4">
                     <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                          Código / SKU *
+                      <div className="flex flex-wrap justify-between items-center gap-1 mb-1">
+                        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <Barcode className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Código de Barra / SKU *</span>
                         </label>
-                        <button
-                          type="button"
-                          onClick={handleAutoGenerateCode}
-                          className="text-emerald-600 hover:text-emerald-700 hover:underline text-xs font-semibold flex items-center gap-1 cursor-pointer"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          <span>Generar Auto</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleAutoGenerateCode}
+                            className="text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Asignar siguiente código de barra / SKU corrido ascendente"
+                          >
+                            <Barcode className="w-3 h-3" />
+                            <span>SKU Corrido ({nextSequentialInfo.nextCode})</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleAutoGenerateCategoryCode}
+                            className="text-slate-500 hover:text-slate-700 hover:underline text-[11px] font-medium flex items-center gap-0.5 cursor-pointer"
+                            title="Generar código con prefijo de categoría"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            <span>Por Categoría</span>
+                          </button>
+                        </div>
                       </div>
                       <div className="relative">
                         <span className="absolute left-3 top-2.5 text-slate-400">
@@ -1595,9 +1686,140 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                           required
                           value={formData.code}
                           onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                          placeholder="Ingresa o escanea código"
-                          className="w-full p-2.5 pl-10 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-mono"
+                          placeholder="Ingresa, escanea o usa SKU corrido automático"
+                          className="w-full p-2.5 pl-10 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-mono font-bold text-slate-900"
                         />
+                      </div>
+
+                      {/* Configuración de Código de Barra / SKU Corrido Ascendente */}
+                      <div className="mt-2.5 p-3 bg-emerald-50/70 border border-emerald-200/90 rounded-xl space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={seqSkuConfig.enabled}
+                              onChange={(e) => {
+                                const enabled = e.target.checked;
+                                handleUpdateSeqSkuConfig({ enabled }, enabled);
+                              }}
+                              className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
+                            />
+                            <span className="text-xs font-extrabold text-emerald-950">
+                              SKU Corrido Automático al Crear Producto
+                            </span>
+                          </label>
+                          <span className="text-[11px] font-mono font-extrabold px-2 py-0.5 rounded bg-emerald-600 text-white shadow-2xs">
+                            Sig: {nextSequentialInfo.nextCode}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                          <div>
+                            <label className="block text-[10px] font-bold text-emerald-900 uppercase tracking-wider mb-1">
+                              Empezar a correr desde # (Ascendente)
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={seqSkuConfig.startFrom}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  handleUpdateSeqSkuConfig({ startFrom: val }, true);
+                                }}
+                                placeholder="Ej. 1, 001, 100, 1000"
+                                className="w-full px-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const computed = computeNextSequentialSku(inventory, seqSkuConfig);
+                                  setFormData((prev) => ({ ...prev, code: computed.nextCode }));
+                                }}
+                                className="px-2.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-bold whitespace-nowrap cursor-pointer transition-colors"
+                                title="Colocar el siguiente código corrido en este artículo"
+                              >
+                                Aplicar
+                              </button>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-emerald-900 uppercase tracking-wider mb-1">
+                              Modo de Secuencia Ascendente
+                            </label>
+                            <select
+                              value={seqSkuConfig.sequenceStrategy}
+                              onChange={(e) =>
+                                handleUpdateSeqSkuConfig(
+                                  {
+                                    sequenceStrategy:
+                                      e.target.value === 'first_available'
+                                        ? 'first_available'
+                                        : 'highest_plus_one',
+                                  },
+                                  true
+                                )
+                              }
+                              className="w-full px-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none cursor-pointer"
+                            >
+                              <option value="highest_plus_one">
+                                Continuo Ascendente (Último + 1)
+                              </option>
+                              <option value="first_available">
+                                Desde # Inicial (Usar 1er libre)
+                              </option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Quick Start Presets + Visual Barcode Strip */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/60">
+                          <div className="flex flex-wrap items-center gap-1 text-[10px]">
+                            <span className="text-emerald-800 font-semibold">Iniciar en:</span>
+                            {['1', '001', '100', '500', '1000'].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateSeqSkuConfig({ startFrom: preset }, true)
+                                }
+                                className={`px-1.5 py-0.5 rounded font-mono font-bold border transition-all cursor-pointer ${
+                                  seqSkuConfig.startFrom === preset
+                                    ? 'bg-emerald-700 text-white border-emerald-700'
+                                    : 'bg-white text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                                }`}
+                              >
+                                #{preset}
+                              </button>
+                            ))}
+                          </div>
+
+                          {formData.code.trim() && (
+                            <div
+                              className="flex items-center gap-2 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-2xs"
+                              title={`Código de barras: ${formData.code.trim()}`}
+                            >
+                              <div className="flex items-center h-5 gap-[1px]">
+                                {generateBarcodeBars(formData.code.trim())
+                                  .slice(0, 32)
+                                  .map((w, idx) => (
+                                    <span
+                                      key={idx}
+                                      className={
+                                        idx % 2 === 0
+                                          ? 'bg-slate-900 h-full inline-block'
+                                          : 'bg-transparent h-full inline-block'
+                                      }
+                                      style={{ width: `${Math.max(1, w)}px` }}
+                                    />
+                                  ))}
+                              </div>
+                              <span className="font-mono text-[11px] font-black text-slate-800 tracking-wider">
+                                {formData.code.trim()}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1821,14 +2043,26 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     <div></div>
                   )}
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
                     <button
                       type="button"
                       onClick={handleCloseModal}
-                      className="px-5 py-2.5 text-slate-600 font-medium hover:bg-slate-100 rounded-xl transition-colors text-sm cursor-pointer"
+                      className="px-4 py-2.5 text-slate-600 font-medium hover:bg-slate-100 rounded-xl transition-colors text-sm cursor-pointer"
                     >
                       Cancelar
                     </button>
+                    {!editingProduct && (
+                      <button
+                        type="button"
+                        disabled={isUploadingImage}
+                        onClick={() => saveFormProduct(true)}
+                        className="px-4 py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold hover:bg-indigo-100 rounded-xl transition-colors text-xs sm:text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                        title="Guarda este artículo y abre automáticamente el siguiente código SKU corrido ascendente"
+                      >
+                        <Barcode className="w-4 h-4" />
+                        <span>Guardar y Crear Siguiente (+1)</span>
+                      </button>
+                    )}
                     <button
                       type="submit"
                       disabled={isUploadingImage}

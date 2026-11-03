@@ -1,12 +1,21 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Product,
   Supplier,
   PurchaseInvoice,
   PurchaseItem,
   StoreSettings,
+  StoreWarehousesData,
   PrinterPaperFormat,
 } from '../types';
+import {
+  getDefaultWarehousesForStore,
+  getProductStockInWarehouse,
+} from '../firebase/firestoreService';
+import {
+  loadSequentialSkuConfig,
+  computeNextSequentialSku,
+} from '../utils/sequentialSku';
 import {
   PRINTER_FORMAT_OPTIONS,
   getPreferredPrinterFormat,
@@ -43,6 +52,7 @@ import {
   ArrowUpRight,
   Sparkles,
   FileSpreadsheet,
+  Boxes,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -53,6 +63,7 @@ interface PurchasesViewProps {
   suppliers: Supplier[];
   purchases: PurchaseInvoice[];
   storeSettings: StoreSettings;
+  warehousesData?: StoreWarehousesData;
   onRecordPurchase: (purchaseData: Omit<PurchaseInvoice, 'id'>) => Promise<PurchaseInvoice | void>;
   onCancelPurchase: (purchase: PurchaseInvoice) => Promise<void>;
   onSaveSupplier: (supplier: Supplier) => Promise<void>;
@@ -64,12 +75,42 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
   suppliers,
   purchases,
   storeSettings,
+  warehousesData,
   onRecordPurchase,
   onCancelPurchase,
   onSaveSupplier,
   showToast,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'history'>('create');
+
+  const activeWarehouses = useMemo(() => {
+    const raw =
+      Array.isArray(warehousesData?.warehouses) && warehousesData!.warehouses.length > 0
+        ? warehousesData!.warehouses
+        : getDefaultWarehousesForStore();
+    const active = raw.filter((w) => w.isActive !== false);
+    return active.length > 0 ? active : getDefaultWarehousesForStore();
+  }, [warehousesData]);
+
+  const mainWarehouse = useMemo(
+    () => activeWarehouses.find((w) => w.isMainSalesFloor) || activeWarehouses[0],
+    [activeWarehouses]
+  );
+
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>(
+    () => mainWarehouse?.id || 'principal'
+  );
+
+  useEffect(() => {
+    if (!activeWarehouses.some((w) => w.id === selectedWarehouseId)) {
+      setSelectedWarehouseId(mainWarehouse?.id || 'principal');
+    }
+  }, [activeWarehouses, mainWarehouse, selectedWarehouseId]);
+
+  const selectedWarehouseObj = useMemo(
+    () => activeWarehouses.find((w) => w.id === selectedWarehouseId) || mainWarehouse,
+    [activeWarehouses, selectedWarehouseId, mainWarehouse]
+  );
 
   // ------------------ INVOICE ENTRY FORM STATE ------------------
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>('');
@@ -118,6 +159,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
 
   const [historySearch, setHistorySearch] = useState<string>('');
   const [historySupplierFilter, setHistorySupplierFilter] = useState<string>('all');
+  const [historyWarehouseFilter, setHistoryWarehouseFilter] = useState<string>('all');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'completed' | 'cancelled'>('all');
   const [historyDateFilter, setHistoryDateFilter] = useState<'today' | 'week' | 'month' | 'all'>('month');
 
@@ -346,6 +388,9 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
     setIsSubmitting(true);
     try {
       const supplierName = currentSupplier?.name || 'Proveedor';
+      const targetWhId = selectedWarehouseObj?.id || 'principal';
+      const targetWhName = selectedWarehouseObj?.name || 'Tienda Principal';
+
       const purchasePayload: Omit<PurchaseInvoice, 'id'> = {
         invoiceNumber: invoiceNumber.trim(),
         supplierId: selectedSupplierId,
@@ -354,6 +399,8 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
         timestamp: Date.now(),
         paymentCondition,
         dueDate: paymentCondition === 'credit' ? dueDate : undefined,
+        warehouseId: targetWhId,
+        warehouseName: targetWhName,
         items,
         totalItems: totalItemsCount,
         subtotal: itemsSubtotal,
@@ -375,7 +422,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
       setShowInvoiceDetailsModal(true);
       handleClearInvoice();
       showToast(
-        `¡Factura ${invoiceNumber} ingresada con éxito! Se sumaron ${totalItemsCount} unidades al inventario.`,
+        `¡Factura ${invoiceNumber} ingresada con éxito! Se enviaron ${totalItemsCount} unidades a "${targetWhName}".`,
         'success'
       );
     } catch (err: any) {
@@ -406,19 +453,26 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
       // Supplier filter
       if (historySupplierFilter !== 'all' && p.supplierId !== historySupplierFilter) return false;
 
+      // Warehouse filter
+      if (historyWarehouseFilter !== 'all') {
+        const invWhId = p.warehouseId || mainWarehouse?.id || 'principal';
+        if (invWhId !== historyWarehouseFilter) return false;
+      }
+
       // Search query
       if (q) {
         const matchInvoice = p.invoiceNumber.toLowerCase().includes(q);
         const matchSupplier = p.supplierName.toLowerCase().includes(q);
+        const matchWarehouse = (p.warehouseName || '').toLowerCase().includes(q);
         const matchItem = p.items.some(
           (it) => it.name.toLowerCase().includes(q) || it.code.toLowerCase().includes(q)
         );
-        if (!matchInvoice && !matchSupplier && !matchItem) return false;
+        if (!matchInvoice && !matchSupplier && !matchWarehouse && !matchItem) return false;
       }
 
       return true;
     });
-  }, [purchases, historySearch, historySupplierFilter, historyStatusFilter, historyDateFilter]);
+  }, [purchases, historySearch, historySupplierFilter, historyWarehouseFilter, historyStatusFilter, historyDateFilter, mainWarehouse]);
 
   // Overall metrics for purchases
   const purchaseMetrics = useMemo(() => {
@@ -472,6 +526,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
       [
         'N° FACTURA',
         'PROVEEDOR',
+        'BODEGA DESTINO',
         'FECHA EMISIÓN',
         'CONDICIÓN PAGO',
         'FECHA VENCIMIENTO',
@@ -489,6 +544,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
       sheetAoA.push([
         p.invoiceNumber,
         p.supplierName,
+        p.warehouseName || mainWarehouse?.name || 'Tienda Principal',
         p.date,
         p.paymentCondition === 'credit' ? 'Crédito' : 'Contado',
         p.dueDate || '-',
@@ -507,17 +563,18 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
     const worksheet = XLSX.utils.aoa_to_sheet(sheetAoA);
 
     worksheet['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 11 } },
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 11 } },
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 12 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 12 } },
     ];
 
     worksheet['!autofilter'] = {
-      ref: `A4:L${sheetAoA.length}`,
+      ref: `A4:M${sheetAoA.length}`,
     };
 
     worksheet['!cols'] = [
       { wch: 16 }, // N° FACTURA
-      { wch: 26 }, // PROVEEDOR
+      { wch: 24 }, // PROVEEDOR
+      { wch: 22 }, // BODEGA DESTINO
       { wch: 16 }, // FECHA EMISIÓN
       { wch: 16 }, // CONDICIÓN PAGO
       { wch: 18 }, // FECHA VENCIMIENTO
@@ -578,6 +635,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
     text += `📋 *COMPROBANTE DE FACTURA DE COMPRA*\n`;
     text += `*N° Factura:* ${inv.invoiceNumber}\n`;
     text += `*Proveedor:* ${inv.supplierName}\n`;
+    text += `*Bodega Destino:* ${inv.warehouseName || mainWarehouse?.name || 'Tienda Principal'}\n`;
     text += `*Fecha:* ${inv.date}\n`;
     text += `*Condición de Pago:* ${inv.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}\n`;
     if (inv.dueDate) {
@@ -779,19 +837,90 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                     />
                   </div>
                 </div>
+
+                {/* Selector de Bodega de Destino para la Factura de Compra */}
+                <div className="p-3.5 rounded-2xl bg-indigo-50/80 border border-indigo-200/90 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                      <Boxes className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <span>¿A qué Bodega se enviará esta Factura de Artículos? *</span>
+                    </label>
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-800 bg-white px-2.5 py-0.5 rounded-full border border-indigo-200 shadow-2xs self-start sm:self-auto">
+                      <span>Destino Activo:</span>
+                      <strong className="text-indigo-950">
+                        {selectedWarehouseObj?.name || 'Tienda Principal'} ({selectedWarehouseObj?.code || 'BOD-01'})
+                      </strong>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                    {activeWarehouses.map((wh) => {
+                      const isSelected = wh.id === (selectedWarehouseObj?.id || selectedWarehouseId);
+                      return (
+                        <button
+                          key={wh.id}
+                          type="button"
+                          onClick={() => setSelectedWarehouseId(wh.id)}
+                          className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                              : 'bg-white text-slate-700 border-indigo-200/80 hover:border-indigo-400 hover:bg-indigo-50/40'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="text-xs font-extrabold truncate flex items-center gap-1.5">
+                              <span>{wh.name}</span>
+                              <span
+                                className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
+                                  isSelected
+                                    ? 'bg-indigo-500 text-white'
+                                    : 'bg-slate-100 text-slate-600'
+                                }`}
+                              >
+                                {wh.code}
+                              </span>
+                            </div>
+                            <div
+                              className={`text-[10px] mt-0.5 truncate ${
+                                isSelected ? 'text-indigo-100' : 'text-slate-400'
+                              }`}
+                            >
+                              {wh.isMainSalesFloor
+                                ? 'Sala de Ventas / Tienda Principal'
+                                : wh.address || 'Almacén / Bodega de Inventario'}
+                            </div>
+                          </div>
+                          {isSelected && <Check className="w-4 h-4 text-white shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
               {/* Card 2: Detalle de Artículos Recibidos */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
-                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-slate-900">
                     <Package className="w-4 h-4 text-indigo-600" />
-                    <span>2. Artículos a Ingresar al Inventario</span>
+                    <span>2. Artículos a Ingresar en</span>
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-indigo-100 text-indigo-800 text-xs font-extrabold">
+                      <Boxes className="w-3.5 h-3.5" />
+                      {selectedWarehouseObj?.name || 'Bodega Principal'}
+                    </span>
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => setShowNewProductModal(true)}
+                    onClick={() => {
+                      const seqConfig = loadSequentialSkuConfig();
+                      if (seqConfig.enabled) {
+                        const extraUsed = items.map((i) => i.code);
+                        const nextSeq = computeNextSequentialSku(inventory, seqConfig, extraUsed);
+                        setNewProdCode(nextSeq.nextCode);
+                      }
+                      setShowNewProductModal(true);
+                    }}
                     className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5 text-indigo-600" />
@@ -817,27 +946,37 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   {/* Autocomplete Dropdown */}
                   {showProductDropdown && matchingProducts.length > 0 && (
                     <div className="absolute left-0 right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-20 max-h-60 overflow-y-auto divide-y divide-slate-100">
-                      {matchingProducts.map((p) => (
-                        <div
-                          key={p.code}
-                          onClick={() => handleAddProductToInvoice(p)}
-                          className="p-3 hover:bg-indigo-50/70 transition-colors cursor-pointer flex items-center justify-between text-xs"
-                        >
-                          <div>
-                            <span className="font-bold text-slate-900 block">{p.name}</span>
-                            <div className="flex items-center gap-2 text-slate-500 mt-0.5">
-                              <span className="font-mono">{p.code}</span>
-                              <span>•</span>
-                              <span>Stock Actual: <strong>{p.stock}</strong></span>
-                              {p.size && <span>• Talla: {p.size}</span>}
+                      {matchingProducts.map((p) => {
+                        const whStock = getProductStockInWarehouse(
+                          p,
+                          selectedWarehouseObj?.id || 'principal',
+                          activeWarehouses
+                        );
+                        return (
+                          <div
+                            key={p.code}
+                            onClick={() => handleAddProductToInvoice(p)}
+                            className="p-3 hover:bg-indigo-50/70 transition-colors cursor-pointer flex items-center justify-between text-xs"
+                          >
+                            <div>
+                              <span className="font-bold text-slate-900 block">{p.name}</span>
+                              <div className="flex flex-wrap items-center gap-2 text-slate-500 mt-0.5">
+                                <span className="font-mono">{p.code}</span>
+                                <span>•</span>
+                                <span>
+                                  Stock en {selectedWarehouseObj?.name || 'Bodega'}:{' '}
+                                  <strong className="text-indigo-700">{whStock}</strong> (Total: {p.stock})
+                                </span>
+                                {p.size && <span>• Talla: {p.size}</span>}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[11px] text-slate-400 block">Costo Actual</span>
+                              <span className="font-bold text-indigo-700">L. {(Number(p.cost) || 0).toFixed(2)}</span>
                             </div>
                           </div>
-                          <div className="text-right">
-                            <span className="text-[11px] text-slate-400 block">Costo Actual</span>
-                            <span className="font-bold text-indigo-700">L. {(Number(p.cost) || 0).toFixed(2)}</span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -857,8 +996,14 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                     <div className="sm:hidden space-y-2.5">
                       {items.map((it) => {
                         const existingProd = inventory.find((p) => p.code === it.code);
-                        const currentStock = existingProd ? Number(existingProd.stock) || 0 : 0;
-                        const finalStock = currentStock + it.quantity;
+                        const currentWhStock = existingProd
+                          ? getProductStockInWarehouse(
+                              existingProd,
+                              selectedWarehouseObj?.id || 'principal',
+                              activeWarehouses
+                            )
+                          : 0;
+                        const finalWhStock = currentWhStock + it.quantity;
 
                         return (
                           <div
@@ -881,14 +1026,16 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                               </button>
                             </div>
 
-                            {/* Stock progression */}
+                            {/* Stock progression in selected warehouse */}
                             <div className="flex items-center justify-between bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                              <span className="text-slate-500 font-medium">Stock:</span>
-                              <span className="font-semibold text-slate-700">{currentStock}</span>
+                              <span className="text-slate-500 font-medium truncate max-w-[130px]">
+                                Stock ({selectedWarehouseObj?.name || 'Bodega'}):
+                              </span>
+                              <span className="font-semibold text-slate-700">{currentWhStock}</span>
                               <span className="text-slate-400">➔</span>
                               <span className="font-bold text-emerald-700 flex items-center gap-0.5">
                                 <ArrowUpRight className="w-3 h-3 text-emerald-600" />
-                                {finalStock} final
+                                {finalWhStock} final
                               </span>
                             </div>
 
@@ -942,9 +1089,13 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                       <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[10px] uppercase font-bold tracking-wider">
                         <tr>
                           <th className="py-2.5 px-3">Producto / Código</th>
-                          <th className="py-2.5 px-3 text-center">Stock Actual</th>
+                          <th className="py-2.5 px-3 text-center">
+                            Stock en {selectedWarehouseObj?.code || 'Bodega'}
+                          </th>
                           <th className="py-2.5 px-3 text-center w-24">Cantidad</th>
-                          <th className="py-2.5 px-3 text-center">Stock Final</th>
+                          <th className="py-2.5 px-3 text-center">
+                            Final en {selectedWarehouseObj?.code || 'Bodega'}
+                          </th>
                           <th className="py-2.5 px-3 text-right w-28">Costo Compra (L)</th>
                           <th className="py-2.5 px-3 text-right w-28">Precio Venta (L)</th>
                           <th className="py-2.5 px-3 text-right">Subtotal</th>
@@ -954,8 +1105,14 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                       <tbody className="divide-y divide-slate-100 text-slate-700">
                         {items.map((it) => {
                           const existingProd = inventory.find((p) => p.code === it.code);
-                          const currentStock = existingProd ? Number(existingProd.stock) || 0 : 0;
-                          const finalStock = currentStock + it.quantity;
+                          const currentWhStock = existingProd
+                            ? getProductStockInWarehouse(
+                                existingProd,
+                                selectedWarehouseObj?.id || 'principal',
+                                activeWarehouses
+                              )
+                            : 0;
+                          const finalWhStock = currentWhStock + it.quantity;
 
                           return (
                             <tr key={it.code} className="hover:bg-slate-50/70 transition-colors">
@@ -968,7 +1125,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
 
                               <td className="py-2.5 px-3 text-center">
                                 <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-mono font-semibold">
-                                  {currentStock}
+                                  {currentWhStock}
                                 </span>
                               </td>
 
@@ -987,7 +1144,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                               <td className="py-2.5 px-3 text-center">
                                 <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full font-mono font-bold flex items-center justify-center gap-1">
                                   <ArrowUpRight className="w-3 h-3 text-emerald-600" />
-                                  <span>{finalStock}</span>
+                                  <span>{finalWhStock}</span>
                                 </span>
                               </td>
 
@@ -1051,14 +1208,31 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   <span>Resumen de la Factura de Compra</span>
                 </div>
 
+                {/* Destination Warehouse Banner in Summary Card */}
+                <div className="p-3 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-extrabold text-emerald-950 uppercase tracking-wider text-[10px] flex items-center gap-1">
+                      <Boxes className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Bodega Destino de Factura:</span>
+                    </span>
+                    <span className="font-mono font-bold text-[10px] px-1.5 py-0.5 rounded bg-emerald-600 text-white">
+                      {selectedWarehouseObj?.code || 'BOD-01'}
+                    </span>
+                  </div>
+                  <div className="font-black text-sm text-emerald-900">
+                    {selectedWarehouseObj?.name || 'Tienda Principal'}
+                  </div>
+                </div>
+
                 {/* Information Callout */}
                 <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl text-xs text-indigo-950 space-y-1">
                   <div className="font-bold flex items-center gap-1.5 text-indigo-900">
                     <Info className="w-4 h-4 text-indigo-600" />
-                    <span>Afectación del Inventario</span>
+                    <span>Afectación del Inventario y Bodega</span>
                   </div>
                   <p className="text-[11px] text-indigo-800 leading-relaxed">
-                    Al confirmar esta factura, se <strong>sumará automáticamente</strong> la cantidad de cada artículo al stock de tu inventario en Firestore y se actualizará el costo unitario.
+                    Al confirmar esta factura, las <strong>{totalItemsCount} unidades</strong> se enviarán y sumarán directamente a{' '}
+                    <strong>"{selectedWarehouseObj?.name || 'Tienda Principal'}"</strong> y se actualizará el costo unitario.
                   </p>
                 </div>
 
@@ -1322,8 +1496,21 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                 </button>
               </div>
 
-              {/* Supplier & Status Filters */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex items-center gap-2">
+              {/* Supplier, Warehouse & Status Filters */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 lg:flex items-center gap-2">
+                <select
+                  value={historyWarehouseFilter}
+                  onChange={(e) => setHistoryWarehouseFilter(e.target.value)}
+                  className="bg-indigo-50/70 border border-indigo-200 rounded-xl px-3 py-2 text-indigo-950 font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="all">Bodega Destino: Todas</option>
+                  {activeWarehouses.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name} ({w.code})
+                    </option>
+                  ))}
+                </select>
+
                 <select
                   value={historySupplierFilter}
                   onChange={(e) => setHistorySupplierFilter(e.target.value)}
@@ -1394,6 +1581,12 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                             <div className="text-[11px] text-slate-400 mt-0.5">
                               {purchase.date} · {purchase.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}
                             </div>
+                            <div className="mt-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200/80 text-[10px] font-bold">
+                                <Boxes className="w-3 h-3 text-indigo-600" />
+                                <span>Enviado a: {purchase.warehouseName || mainWarehouse?.name || 'Tienda Principal'}</span>
+                              </span>
+                            </div>
                           </div>
                           <div className="text-right">
                             <span className="text-[10px] text-slate-400 block">Total Factura</span>
@@ -1449,6 +1642,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                     <tr>
                       <th className="py-3 px-4">N° Factura</th>
                       <th className="py-3 px-4">Proveedor</th>
+                      <th className="py-3 px-4">Bodega Destino</th>
                       <th className="py-3 px-4">Fecha</th>
                       <th className="py-3 px-4">Condición</th>
                       <th className="py-3 px-4">Artículos Recibidos</th>
@@ -1473,6 +1667,12 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                           </td>
                           <td className="py-3 px-4 font-semibold text-slate-900">
                             {purchase.supplierName}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-800 border border-indigo-200/80 text-xs font-bold">
+                              <Boxes className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                              <span>{purchase.warehouseName || mainWarehouse?.name || 'Tienda Principal'}</span>
+                            </span>
                           </td>
                           <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
                             {purchase.date}
@@ -1621,6 +1821,15 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   <div className="flex sm:block justify-between gap-2">
                     <span className="text-slate-400">N° Factura:</span>
                     <span className="font-mono font-bold text-slate-900 text-right sm:text-left break-all">{selectedInvoiceForModal.invoiceNumber}</span>
+                  </div>
+                  <div className="flex sm:block justify-between gap-2 sm:col-span-2 p-2 rounded-lg bg-indigo-50/80 border border-indigo-200/80">
+                    <span className="text-indigo-800 font-bold flex items-center gap-1">
+                      <Boxes className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Bodega de Destino (Recepción):</span>
+                    </span>
+                    <span className="font-extrabold text-indigo-950 text-right sm:text-left">
+                      {selectedInvoiceForModal.warehouseName || mainWarehouse?.name || 'Tienda Principal'}
+                    </span>
                   </div>
                   <div className="flex sm:block justify-between gap-2">
                     <span className="text-slate-400">Fecha de Compra:</span>

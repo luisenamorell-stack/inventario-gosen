@@ -1831,6 +1831,7 @@ export function buildPurchaseInvoiceHtml(
       <div style="font-size:10.5px;">
         <div style="display:flex;justify-content:space-between;"><span>Factura Prov:</span><strong>${invoice.invoiceNumber}</strong></div>
         <div style="display:flex;justify-content:space-between;"><span>Proveedor:</span><strong>${invoice.supplierName}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Bodega Destino:</span><strong>${invoice.warehouseName || 'Tienda Principal'}</strong></div>
         <div style="display:flex;justify-content:space-between;"><span>Fecha:</span><span>${invoice.date}</span></div>
         <div style="display:flex;justify-content:space-between;"><span>Condición:</span><span>${invoice.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}</span></div>
       </div>
@@ -1884,6 +1885,7 @@ export function buildPurchaseInvoiceHtml(
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11.5px;">
         <div>
           <div><span style="color:#64748b;">Proveedor Comercial:</span> <strong>${invoice.supplierName}</strong></div>
+          <div><span style="color:#64748b;">Bodega Destino de Artículos:</span> <strong style="color:#4338ca;">${invoice.warehouseName || 'Tienda Principal'}</strong></div>
           <div><span style="color:#64748b;">Recibido en Bodega por:</span> <strong>${invoice.receivedBy || 'Administrador'}</strong></div>
         </div>
         <div style="text-align:right;">
@@ -1972,33 +1974,37 @@ export async function downloadPurchaseInvoicePdf(
 
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(14, y, pageWidth - 28, 18, 2, 2, 'FD');
+  doc.roundedRect(14, y, pageWidth - 28, 22, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.setTextColor(15, 23, 42);
-  doc.text(`Proveedor: ${invoice.supplierName}`, 18, y + 6.5);
+  doc.text(`Proveedor: ${invoice.supplierName}`, 18, y + 6);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(67, 56, 202);
+  doc.text(`Bodega Destino: ${invoice.warehouseName || 'Tienda Principal'}`, 18, y + 12);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.2);
   doc.setTextColor(71, 85, 105);
-  doc.text(`Recibido en Inventario por: ${invoice.receivedBy || 'Administrador'}`, 18, y + 12.5);
+  doc.text(`Recibido en Inventario por: ${invoice.receivedBy || 'Administrador'}`, 18, y + 17.5);
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text(
     `Condición: ${invoice.paymentCondition === 'credit' ? 'CRÉDITO A PROVEEDOR' : 'CONTADO'}`,
     pageWidth - 18,
-    y + 6.5,
+    y + 6,
     { align: 'right' }
   );
   doc.setFont('helvetica', 'normal');
   doc.text(
     `Vencimiento: ${invoice.dueDate || 'Inmediato'}  |  Unidades: ${invoice.totalItems} uds`,
     pageWidth - 18,
-    y + 12.5,
+    y + 12,
     { align: 'right' }
   );
-  y += 23;
+  y += 27;
 
   autoTable(doc, {
     startY: y,
@@ -3310,6 +3316,7 @@ export function buildPurchasesReportHtml(
           <tr style="background:#1e1b4b;color:#ffffff;">
             <th>N° FACTURA</th>
             <th>PROVEEDOR</th>
+            <th>BODEGA DESTINO</th>
             <th>FECHA</th>
             ${isThermal ? '' : '<th>CONDICIÓN</th>'}
             <th class="text-center">UDS.</th>
@@ -3323,6 +3330,7 @@ export function buildPurchasesReportHtml(
               <tr style="border-bottom:1px solid #e2e8f0;background:${i % 2 === 0 ? '#ffffff' : '#f8fafc'};">
                 <td style="font-family:monospace;font-weight:700;">${p.invoiceNumber}</td>
                 <td><strong>${p.supplierName}</strong></td>
+                <td><strong style="color:#4338ca;">${p.warehouseName || 'Tienda Principal'}</strong></td>
                 <td>${p.date}</td>
                 ${isThermal ? '' : `<td>${p.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}</td>`}
                 <td class="text-center font-bold">${p.totalItems}</td>
@@ -3382,13 +3390,13 @@ export async function downloadPurchasesReportPdf(
 
   autoTable(doc, {
     startY: y,
-    head: [['N° Factura', 'Proveedor', 'Fecha Compra', 'Condición de Pago', 'Recibido por', 'Uds.', 'Total Factura']],
+    head: [['N° Factura', 'Proveedor', 'Bodega Destino', 'Fecha Compra', 'Condición de Pago', 'Uds.', 'Total Factura']],
     body: purchasesList.map((p) => [
       p.invoiceNumber,
       p.supplierName,
+      p.warehouseName || 'Tienda Principal',
       p.date,
       p.paymentCondition === 'credit' ? `Crédito (${p.dueDate || 'Pend.'})` : 'Contado',
-      p.receivedBy || 'Admin',
       String(p.totalItems),
       p.status === 'cancelled' ? `ANULADA (${formatCurrencyL(p.total)})` : formatCurrencyL(p.total),
     ]),
@@ -3398,6 +3406,7 @@ export async function downloadPurchasesReportPdf(
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
       0: { fontStyle: 'bold' },
+      2: { fontStyle: 'bold' },
       5: { halign: 'center', cellWidth: 16, fontStyle: 'bold' },
       6: { halign: 'right', cellWidth: 30, fontStyle: 'bold' },
     },

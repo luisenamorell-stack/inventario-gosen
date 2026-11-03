@@ -6,6 +6,10 @@ import {
   getProductStockInWarehouse,
 } from '../firebase/firestoreService';
 import {
+  loadSequentialSkuConfig,
+  computeNextSequentialSku,
+} from '../utils/sequentialSku';
+import {
   FileSpreadsheet,
   Upload,
   Download,
@@ -508,20 +512,28 @@ export const BulkStockImportModal: React.FC<BulkStockImportModalProps> = ({
 
   const handleAutoGenerateMissingCodes = () => {
     let generated = 0;
-    setRows((prev) =>
-      prev.map((row, index) => {
+    const seqConfig = loadSequentialSkuConfig();
+    setRows((prev) => {
+      const assignedCodes: string[] = prev
+        .map((r) => r.code.trim())
+        .filter(Boolean);
+
+      return prev.map((row) => {
         if (row.code.trim()) return row;
         generated++;
-        const prefix = (row.category || 'ART').substring(0, 3).toUpperCase();
-        const rand = Math.floor(100 + Math.random() * 900);
+        const nextSeq = computeNextSequentialSku(inventory, seqConfig, assignedCodes);
+        assignedCodes.push(nextSeq.nextCode);
         return {
           ...row,
-          code: `${prefix}-${String(inventory.length + index + 1).padStart(2, '0')}-${rand}`,
+          code: nextSeq.nextCode,
         };
-      })
-    );
+      });
+    });
     if (generated > 0) {
-      showToast?.(`Se generaron códigos automáticos para ${generated} filas`, 'info');
+      showToast?.(
+        `Se asignaron ${generated} códigos SKU corridos ascendentes automáticamente`,
+        'info'
+      );
     }
   };
 

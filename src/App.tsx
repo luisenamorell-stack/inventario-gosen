@@ -107,6 +107,7 @@ import {
   fetchStoreWarehousesOnce,
   subscribeToStoreWarehouses,
   saveStoreWarehousesToFirestore,
+  getDefaultWarehousesForStore,
   applyWarehouseStockDelta,
   seedInitialDataIfEmpty,
   pingFirestore
@@ -1895,7 +1896,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // Supplier Purchases Handlers (Direct local stock addition + cache update)
+  // Supplier Purchases Handlers (Direct local stock addition + warehouseStocks + cache update)
   const handleRecordPurchase = async (purchaseData: Omit<PurchaseInvoice, 'id'>) => {
     setIsSyncing(true);
     try {
@@ -1905,7 +1906,16 @@ export const App: React.FC = () => {
         receivedBy: activeUser,
       };
 
-      const recorded = await recordPurchaseInFirestore(payload, inventory);
+      const recorded = await recordPurchaseInFirestore(payload, inventory, activeCompanyId);
+
+      const activeWhList =
+        Array.isArray(warehousesData.warehouses) && warehousesData.warehouses.length > 0
+          ? warehousesData.warehouses
+          : getDefaultWarehousesForStore();
+      const targetWhId =
+        purchaseData.warehouseId ||
+        (activeWhList.find((w) => w.isMainSalesFloor) || activeWhList[0])?.id ||
+        'principal';
 
       setInventory((prev) => {
         const map = new Map<string, Product>();
@@ -1914,50 +1924,76 @@ export const App: React.FC = () => {
         purchaseData.items.forEach((item) => {
           const key = item.code.trim().toLowerCase();
           const existing = map.get(key);
+          const addedQty = Math.max(0, Math.round(Number(item.quantity) || 0));
+
           if (existing) {
-            map.set(key, {
+            const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+              existing,
+              addedQty,
+              targetWhId,
+              activeWhList
+            );
+            const updatedProd: Product = {
               ...existing,
-              stock: (Number(existing.stock) || 0) + (Number(item.quantity) || 0),
+              stock: newStock,
+              ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
               cost: Number(item.cost) || existing.cost,
               price: item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : existing.price,
               supplier: existing.supplier || purchaseData.supplierName,
-            });
+            };
+            recordLocalProductSave(updatedProd, existing.code, activeCompanyId);
+            map.set(key, updatedProd);
           } else {
-            map.set(key, {
-              id: item.code.trim().replace(/\//g, '_'),
+            const initialWhStocks: Record<string, number> = {};
+            activeWhList.forEach((w) => {
+              initialWhStocks[w.id] = w.id === targetWhId ? addedQty : 0;
+            });
+            const newProd: Product = {
+              id: getScopedDocId(item.code.trim(), activeCompanyId),
+              companyId: activeCompanyId,
               code: item.code.trim(),
               name: item.name.trim(),
               category: item.category?.trim() || 'General',
               size: item.size?.trim() || '',
               supplier: purchaseData.supplierName.trim(),
               cost: Number(item.cost) || 0,
-              price: item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : (Number(item.cost) || 0) * 1.35,
-              stock: Number(item.quantity) || 0,
+              price:
+                item.salePrice && item.salePrice > 0
+                  ? Number(item.salePrice)
+                  : (Number(item.cost) || 0) * 1.35,
+              stock: addedQty,
+              warehouseStocks: initialWhStocks,
               img: '',
-            });
+            };
+            recordLocalProductSave(newProd, undefined, activeCompanyId);
+            map.set(key, newProd);
           }
         });
 
         const nextInv = Array.from(map.values());
-        setCachedInventory(nextInv, Date.now());
+        setCachedInventory(nextInv, Date.now(), activeCompanyId);
         return nextInv;
       });
 
       setPurchases((prev) => {
-        const nextPurchases = [recorded, ...prev];
-        setCachedPurchases(nextPurchases);
+        const nextPurchases = [recorded, ...prev.filter((p) => p.id !== recorded.id)];
+        setCachedPurchases(nextPurchases, activeCompanyId);
         return nextPurchases;
       });
 
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: activeUser,
-        userRole: userSession?.role || 'collaborator',
-        action: `Registró compra/factura N° ${purchaseData.invoiceNumber} de ${purchaseData.supplierName}`,
-        module: 'purchases',
-        details: `Total: L. ${purchaseData.total.toFixed(2)} (${purchaseData.totalItems} ítems agregados a stock)`,
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: activeUser,
+          userRole: userSession?.role || 'collaborator',
+          action: `Registró compra/factura N° ${purchaseData.invoiceNumber} de ${purchaseData.supplierName}${purchaseData.warehouseName ? ` ➔ Bodega: ${purchaseData.warehouseName}` : ''}`,
+          module: 'purchases',
+          details: `Bodega Destino: ${purchaseData.warehouseName || 'Principal'} | Total: L. ${purchaseData.total.toFixed(2)} (${purchaseData.totalItems} ítems agregados a stock)`,
+        },
+        activeCompanyId
+      );
 
       return recorded;
     } finally {
@@ -1968,37 +2004,64 @@ export const App: React.FC = () => {
   const handleCancelPurchase = async (purchase: PurchaseInvoice) => {
     setIsSyncing(true);
     try {
-      await cancelPurchaseInFirestore(purchase, inventory);
+      await cancelPurchaseInFirestore(purchase, inventory, activeCompanyId);
+
+      const activeWhList =
+        Array.isArray(warehousesData.warehouses) && warehousesData.warehouses.length > 0
+          ? warehousesData.warehouses
+          : getDefaultWarehousesForStore();
+      const targetWhId =
+        purchase.warehouseId ||
+        (activeWhList.find((w) => w.isMainSalesFloor) || activeWhList[0])?.id ||
+        'principal';
 
       setInventory((prev) => {
         const nextInv = prev.map((prod) => {
           const purchasedItem = purchase.items.find(
-            (it) => it.code.trim().toLowerCase() === prod.code.trim().toLowerCase() || it.productId === prod.id
+            (it) =>
+              it.code.trim().toLowerCase() === prod.code.trim().toLowerCase() ||
+              it.productId === prod.id
           );
           if (!purchasedItem) return prod;
-          return {
+          const deductQty = Math.max(0, Math.round(Number(purchasedItem.quantity) || 0));
+          const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+            prod,
+            -deductQty,
+            targetWhId,
+            activeWhList
+          );
+          const updatedProd: Product = {
             ...prod,
-            stock: Math.max(0, (Number(prod.stock) || 0) - (Number(purchasedItem.quantity) || 0)),
+            stock: newStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           };
+          recordLocalProductSave(updatedProd, prod.code, activeCompanyId);
+          return updatedProd;
         });
-        setCachedInventory(nextInv, Date.now());
+        setCachedInventory(nextInv, Date.now(), activeCompanyId);
         return nextInv;
       });
 
       setPurchases((prev) => {
-        const nextPurchases = prev.map((p) => (p.id === purchase.id ? { ...p, status: 'cancelled' as const } : p));
-        setCachedPurchases(nextPurchases);
+        const nextPurchases = prev.map((p) =>
+          p.id === purchase.id ? { ...p, status: 'cancelled' as const } : p
+        );
+        setCachedPurchases(nextPurchases, activeCompanyId);
         return nextPurchases;
       });
 
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Usuario',
-        userRole: userSession?.role || 'admin',
-        action: `Anuló la factura de compra N° ${purchase.invoiceNumber}`,
-        module: 'purchases',
-      });
+      logActivityInFirestore(
+        {
+          companyId: activeCompanyId,
+          userName: userSession?.userName || 'Usuario',
+          userRole: userSession?.role || 'admin',
+          action: `Anuló la factura de compra N° ${purchase.invoiceNumber}${purchase.warehouseName ? ` (${purchase.warehouseName})` : ''}`,
+          module: 'purchases',
+        },
+        activeCompanyId
+      );
     } finally {
       setIsSyncing(false);
     }
@@ -2790,6 +2853,7 @@ export const App: React.FC = () => {
               inventory={inventory}
               purchases={purchases}
               storeSettings={storeSettings}
+              warehousesData={warehousesData}
               onRecordPurchase={handleRecordPurchase}
               onCancelPurchase={handleCancelPurchase}
               onSaveSupplier={handleSaveSupplier}

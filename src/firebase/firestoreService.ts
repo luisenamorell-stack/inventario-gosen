@@ -2815,6 +2815,8 @@ function parsePurchaseDocsFromSnapshot(snapshot: any, slug: string): PurchaseInv
       timestamp: Number(data.timestamp) || Date.now(),
       paymentCondition: data.paymentCondition === 'credit' ? 'credit' : 'cash',
       dueDate: data.dueDate || '',
+      warehouseId: data.warehouseId ? String(data.warehouseId) : undefined,
+      warehouseName: data.warehouseName ? String(data.warehouseName) : undefined,
       items: Array.isArray(data.items)
         ? data.items.map((it: any) => ({
             productId: it.productId || '',
@@ -2919,6 +2921,8 @@ export async function recordPurchaseInFirestore(
     timestamp: Number(purchaseData.timestamp) || Date.now(),
     paymentCondition: purchaseData.paymentCondition || 'cash',
     dueDate: String(purchaseData.dueDate || '').trim().slice(0, 50),
+    warehouseId: purchaseData.warehouseId ? String(purchaseData.warehouseId).trim().slice(0, 100) : undefined,
+    warehouseName: purchaseData.warehouseName ? String(purchaseData.warehouseName).trim().slice(0, 150) : undefined,
     items: (purchaseData.items || []).map((it) => ({
       productId: String(it.productId || ''),
       code: String(it.code || '').trim(),
@@ -2948,7 +2952,7 @@ export async function recordPurchaseInFirestore(
   setCachedPurchases([createdInvoice, ...prevPurchases.filter((p) => p.id !== purchaseId)], slug);
 
   try {
-    await setDoc(purchaseRef, invoicePayload);
+    await setDoc(purchaseRef, stripUndefinedDeep(invoicePayload));
   } catch (error) {
     if (isQuotaOrNetworkError(error)) {
       console.warn('Purchase saved in local cache; cloud sync deferred:', error);
@@ -2958,6 +2962,13 @@ export async function recordPurchaseInFirestore(
   }
 
   try {
+    const storeWhData = getCachedStoreWarehouses(slug);
+    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
+    const targetWhId =
+      purchaseData.warehouseId ||
+      (activeWhList.find((w) => w.isMainSalesFloor) || activeWhList[0])?.id ||
+      'principal';
+
     const batch = writeBatch(db);
     for (const item of purchaseData.items || []) {
       const productDocId = getScopedDocId(item.code, slug);
@@ -2967,9 +2978,15 @@ export async function recordPurchaseInFirestore(
         (p) => p.code.trim().toLowerCase() === item.code.trim().toLowerCase() || p.id === item.productId
       );
 
+      const addedQty = Math.max(0, Math.round(Number(item.quantity) || 0));
+
       if (existing) {
-        const currentStock = Number(existing.stock) || 0;
-        const newStock = Math.max(0, Math.round(currentStock + (Number(item.quantity) || 0)));
+        const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+          existing,
+          addedQty,
+          targetWhId,
+          activeWhList
+        );
 
         const updatePayload: Record<string, any> = {
           companyId: slug,
@@ -2977,6 +2994,7 @@ export async function recordPurchaseInFirestore(
           name: existing.name.trim().slice(0, 200),
           category: (existing.category || 'General').trim().slice(0, 100),
           stock: newStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           cost: Number(item.cost) || existing.cost || 0,
           price:
             item.salePrice && item.salePrice > 0
@@ -2990,6 +3008,11 @@ export async function recordPurchaseInFirestore(
 
         batch.set(productRef, updatePayload, { merge: true });
       } else {
+        const initialWhStocks: Record<string, number> = {};
+        activeWhList.forEach((w) => {
+          initialWhStocks[w.id] = w.id === targetWhId ? addedQty : 0;
+        });
+
         const newProductPayload: Record<string, any> = {
           companyId: slug,
           code: item.code.trim().slice(0, 100),
@@ -2999,7 +3022,8 @@ export async function recordPurchaseInFirestore(
           supplier: purchaseData.supplierName.trim().slice(0, 200),
           cost: Number(item.cost) || 0,
           price: item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : (Number(item.cost) || 0) * 1.35,
-          stock: Math.max(0, Math.round(Number(item.quantity) || 0)),
+          stock: addedQty,
+          warehouseStocks: initialWhStocks,
           img: '',
         };
 
@@ -3033,16 +3057,18 @@ export async function cancelPurchaseInFirestore(
   try {
     await setDoc(
       purchaseRef,
-      {
+      stripUndefinedDeep({
         invoiceNumber: String(purchase.invoiceNumber || 'FAC').slice(0, 100),
         supplierId: String(purchase.supplierId || 'sup').slice(0, 128),
         supplierName: String(purchase.supplierName || 'Proveedor').slice(0, 200),
         date: String(purchase.date || '').slice(0, 100),
         timestamp: Number(purchase.timestamp) || Date.now(),
+        warehouseId: purchase.warehouseId || undefined,
+        warehouseName: purchase.warehouseName || undefined,
         items: Array.isArray(purchase.items) ? purchase.items : [],
         total: Number(purchase.total) || 0,
         status: 'cancelled',
-      },
+      }),
       { merge: true }
     );
   } catch (error) {
@@ -3054,6 +3080,13 @@ export async function cancelPurchaseInFirestore(
   }
 
   try {
+    const storeWhData = getCachedStoreWarehouses(slug);
+    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
+    const targetWhId =
+      purchase.warehouseId ||
+      (activeWhList.find((w) => w.isMainSalesFloor) || activeWhList[0])?.id ||
+      'principal';
+
     const batch = writeBatch(db);
     for (const item of purchase.items || []) {
       const productDocId = getScopedDocId(item.code, slug);
@@ -3063,8 +3096,13 @@ export async function cancelPurchaseInFirestore(
         (p) => p.code.trim().toLowerCase() === item.code.trim().toLowerCase() || p.id === item.productId
       );
 
-      const currentStock = existing ? Number(existing.stock) || 0 : 0;
-      const newStock = Math.max(0, Math.round(currentStock - (Number(item.quantity) || 0)));
+      const deductQty = Math.max(0, Math.round(Number(item.quantity) || 0));
+      const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+        existing,
+        -deductQty,
+        targetWhId,
+        activeWhList
+      );
 
       batch.set(
         productRef,
@@ -3076,6 +3114,7 @@ export async function cancelPurchaseInFirestore(
           price: Number(existing?.price ?? item.salePrice ?? item.cost) || 0,
           cost: Number(existing?.cost ?? item.cost) || 0,
           stock: newStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
         },
         { merge: true }
       );
