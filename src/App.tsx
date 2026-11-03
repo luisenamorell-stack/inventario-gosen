@@ -1026,12 +1026,18 @@ export const App: React.FC = () => {
     if (isSyncing) return;
     setIsSyncing(true);
     try {
-      const [invResult, settings] = await Promise.all([
+      const [invResult, settings, freshWarehouses, freshSuppliers, freshPurchases] = await Promise.all([
         fetchInventorySmart(true, activeCompanyId),
         fetchStoreSettingsOnce(activeCompanyId),
+        fetchStoreWarehousesOnce(activeCompanyId),
+        fetchSuppliersOnce(true, activeCompanyId),
+        fetchPurchasesOnce(true, activeCompanyId),
       ]);
       setInventory(invResult.items);
       setStoreSettings(settings);
+      setWarehousesData(freshWarehouses);
+      setSuppliers(freshSuppliers);
+      setPurchases(freshPurchases);
 
       if (activeTab === 'sales' || activeTab === 'dashboard') {
         const [freshSales, freshPosFinance] = await Promise.all([
@@ -1040,27 +1046,6 @@ export const App: React.FC = () => {
         ]);
         setSales(freshSales);
         setPosFinanceData(freshPosFinance);
-      } else if (activeTab === 'purchases') {
-        const [freshPurchases, freshSuppliers] = await Promise.all([
-          fetchPurchasesOnce(true, activeCompanyId),
-          fetchSuppliersOnce(true, activeCompanyId),
-        ]);
-        setPurchases(freshPurchases);
-        setSuppliers(freshSuppliers);
-      } else if (activeTab === 'suppliers' || activeTab === 'inventory') {
-        const [freshSuppliers, freshWarehouses] = await Promise.all([
-          fetchSuppliersOnce(true, activeCompanyId),
-          fetchStoreWarehousesOnce(activeCompanyId),
-        ]);
-        setSuppliers(freshSuppliers);
-        setWarehousesData(freshWarehouses);
-      } else if (activeTab === 'warehouses') {
-        const [freshWarehouses, freshSuppliers] = await Promise.all([
-          fetchStoreWarehousesOnce(activeCompanyId),
-          fetchSuppliersOnce(true, activeCompanyId),
-        ]);
-        setWarehousesData(freshWarehouses);
-        setSuppliers(freshSuppliers);
       } else if (activeTab === 'audit') {
         const freshAudit = await fetchAuditHistoryOnce(true, activeCompanyId);
         setAuditHistory(freshAudit);
@@ -1075,9 +1060,16 @@ export const App: React.FC = () => {
         setCompanies(freshCompanies);
       }
 
-      setIsFirebaseConnected(true);
+      setIsFirebaseConnected(!invResult.quotaExceeded);
       setLastSyncTime(new Date());
-      showToast(`Inventario sincronizado con la nube (${invResult.items.length} artículos)`, 'success');
+      if (invResult.quotaExceeded) {
+        showToast(
+          `Cambios locales recuperados (${invResult.items.length} artículos). Cuota diaria de lectura en nube agotada temporalmente.`,
+          'warning'
+        );
+      } else {
+        showToast(`Sincronizado con la nube (${invResult.items.length} artículos actualizados)`, 'success');
+      }
     } catch (err: any) {
       console.error('Manual sync error:', err);
       showToast('No se pudo sincronizar con la nube. Usando datos en caché.', 'warning');

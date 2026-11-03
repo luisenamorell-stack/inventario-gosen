@@ -7,6 +7,7 @@ import {
   writeBatch,
   getDocs,
   getDocsFromCache,
+  getDocsFromServer,
   getDoc,
   getDocFromCache,
   getDocFromServer,
@@ -481,17 +482,56 @@ export async function loadInventoryFromIndexedDB(
         const idbMut = reqMut.result as PendingInventoryMutations | undefined;
         if (idbMut && typeof idbMut === 'object') {
           const currentMut = getPendingMutations(slug);
-          const mergedDeletedCodes = Array.from(
-            new Set([
-              ...(currentMut.deletedCodes || []),
-              ...(idbMut.deletedCodes || []),
-            ].map((c) => String(c || '').trim().toLowerCase()).filter(Boolean))
+          const isGyG = isGyGAlias(slug);
+          const mergedExplicitDeleted = Array.from(
+            new Set(
+              [
+                ...(currentMut.explicitDeletedCodes || []),
+                ...(idbMut.explicitDeletedCodes || []),
+              ]
+                .map((c) => String(c || '').trim().toLowerCase())
+                .filter(Boolean)
+            )
           );
-          const mergedDeletedIds = Array.from(
-            new Set([
-              ...(currentMut.deletedIds || []),
-              ...(idbMut.deletedIds || []),
-            ].map((id) => String(id || '').trim()).filter(Boolean))
+          const explicitSet = new Set(mergedExplicitDeleted);
+
+          const rawDeletedCodes = Array.from(
+            new Set(
+              [...(currentMut.deletedCodes || []), ...(idbMut.deletedCodes || [])]
+                .map((c) => String(c || '').trim().toLowerCase())
+                .filter(Boolean)
+            )
+          );
+          // For Comercial GYG, only keep auto-generated SKUs (e.g. SIL-71-735) or explicitly user-deleted codes
+          // so custom/sequential SKUs that were previously suppressed are restored
+          const mergedDeletedCodes = isGyG
+            ? rawDeletedCodes.filter(
+                (c) => explicitSet.has(c) || AUTO_GENERATED_SKU_REGEX.test(c)
+              )
+            : rawDeletedCodes;
+
+          const rawDeletedIds = Array.from(
+            new Set(
+              [...(currentMut.deletedIds || []), ...(idbMut.deletedIds || [])]
+                .map((id) => String(id || '').trim())
+                .filter(Boolean)
+            )
+          );
+          const mergedDeletedIds = isGyG
+            ? rawDeletedIds.filter((id) => {
+                const embedded = id.includes('__')
+                  ? id.split('__').slice(1).join('__').trim().toLowerCase()
+                  : id.toLowerCase();
+                return explicitSet.has(embedded) || AUTO_GENERATED_SKU_REGEX.test(embedded);
+              })
+            : rawDeletedIds;
+
+          const mergedUnsynced = Array.from(
+            new Set(
+              [...(currentMut.unsyncedCodes || []), ...(idbMut.unsyncedCodes || [])]
+                .map((c) => String(c || '').trim().toLowerCase())
+                .filter(Boolean)
+            )
           );
           const deletedSet = new Set(mergedDeletedCodes);
           const mergedUpserts: Record<string, Product> = {};
@@ -508,7 +548,11 @@ export async function loadInventoryFromIndexedDB(
             const cleanK = k.trim().toLowerCase();
             if (deletedSet.has(cleanK)) continue;
             const existingUpsert = mergedUpserts[cleanK];
-            const bestImg = v?.img || existingUpsert?.img || memoryImageMap.get(`${slug}__${cleanK}`) || '';
+            const bestImg =
+              v?.img ||
+              existingUpsert?.img ||
+              memoryImageMap.get(`${slug}__${cleanK}`) ||
+              '';
             if (bestImg) {
               memoryImageMap.set(`${slug}__${cleanK}`, bestImg);
             }
@@ -521,6 +565,8 @@ export async function loadInventoryFromIndexedDB(
 
           memoryPendingMutations.set(slug, {
             upserts: mergedUpserts,
+            unsyncedCodes: mergedUnsynced,
+            explicitDeletedCodes: mergedExplicitDeleted,
             deletedCodes: mergedDeletedCodes,
             deletedIds: mergedDeletedIds,
             updatedAt: Math.max(currentMut.updatedAt || 0, idbMut.updatedAt || 0),
@@ -534,11 +580,11 @@ export async function loadInventoryFromIndexedDB(
               memoryImageMap.set(`${slug}__${(p.code || '').trim().toLowerCase()}`, p.img);
             }
           });
-          const merged = applyPendingMutationsToInventory(result, slug);
+          const merged = applyPendingMutationsToInventory(result, slug, false);
           memoryInventoryCache.set(slug, merged);
           resolve(merged);
         } else {
-          const fromMutOnly = applyPendingMutationsToInventory([], slug);
+          const fromMutOnly = applyPendingMutationsToInventory([], slug, false);
           if (fromMutOnly.length > 0) {
             memoryInventoryCache.set(slug, fromMutOnly);
             resolve(fromMutOnly);
@@ -556,12 +602,15 @@ export async function loadInventoryFromIndexedDB(
 
 interface PendingInventoryMutations {
   upserts: Record<string, Product>;
+  unsyncedCodes?: string[];
+  explicitDeletedCodes?: string[];
   deletedCodes: string[];
   deletedIds: string[];
   updatedAt: number;
 }
 
 interface InventoryTombstones {
+  explicitDeletedCodes?: string[];
   deletedCodes: string[];
   deletedIds: string[];
   updatedAt: number;
@@ -587,6 +636,7 @@ function getPendingMutations(companyId = getActiveCompanyId()): PendingInventory
   const mem = memoryPendingMutations.get(slug);
   if (mem) return mem;
 
+  const isGyG = isGyGAlias(slug);
   const stored = safeReadCache<PendingInventoryMutations>(
     getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_MUTATIONS, slug)
   );
@@ -594,31 +644,62 @@ function getPendingMutations(companyId = getActiveCompanyId()): PendingInventory
     getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TOMBSTONES, slug)
   );
 
+  const explicitDeletedSet = new Set<string>();
   const deletedCodesSet = new Set<string>();
   const deletedIdsSet = new Set<string>();
+  const unsyncedSet = new Set<string>();
 
+  const addExplicit = (arr?: string[]) => {
+    if (!Array.isArray(arr)) return;
+    arr.forEach((c) => {
+      const clean = String(c || '').trim().toLowerCase();
+      if (clean) explicitDeletedSet.add(clean);
+    });
+  };
   const addCodes = (arr?: string[]) => {
     if (!Array.isArray(arr)) return;
     arr.forEach((c) => {
       const clean = String(c || '').trim().toLowerCase();
-      if (clean) deletedCodesSet.add(clean);
+      if (!clean) return;
+      if (isGyG && !explicitDeletedSet.has(clean) && !AUTO_GENERATED_SKU_REGEX.test(clean)) {
+        return;
+      }
+      deletedCodesSet.add(clean);
     });
   };
   const addIds = (arr?: string[]) => {
     if (!Array.isArray(arr)) return;
     arr.forEach((id) => {
       const clean = String(id || '').trim();
-      if (clean) deletedIdsSet.add(clean);
+      if (!clean) return;
+      if (isGyG) {
+        const embedded = clean.includes('__')
+          ? clean.split('__').slice(1).join('__').trim().toLowerCase()
+          : clean.toLowerCase();
+        if (!explicitDeletedSet.has(embedded) && !AUTO_GENERATED_SKU_REGEX.test(embedded)) {
+          return;
+        }
+      }
+      deletedIdsSet.add(clean);
     });
   };
 
+  addExplicit(stored?.explicitDeletedCodes);
+  addExplicit(tombstones?.explicitDeletedCodes);
   addCodes(stored?.deletedCodes);
   addCodes(tombstones?.deletedCodes);
   addIds(stored?.deletedIds);
   addIds(tombstones?.deletedIds);
 
-  // Also merge any legacy GYG alias tombstones/mutations so deletions across alias switches are preserved
-  if (isGyGAlias(slug)) {
+  if (Array.isArray(stored?.unsyncedCodes)) {
+    stored.unsyncedCodes.forEach((c) => {
+      const clean = String(c || '').trim().toLowerCase();
+      if (clean) unsyncedSet.add(clean);
+    });
+  }
+
+  // Also merge any legacy GYG alias tombstones/mutations
+  if (isGyG) {
     for (const alias of ['comercial-gyg', 'comercialgyg', 'gyg']) {
       const aliasMut = safeReadCache<PendingInventoryMutations>(
         `${BASE_CACHE_KEYS.INVENTORY_MUTATIONS}__${alias}`
@@ -626,6 +707,8 @@ function getPendingMutations(companyId = getActiveCompanyId()): PendingInventory
       const aliasTomb = safeReadCache<InventoryTombstones>(
         `${BASE_CACHE_KEYS.INVENTORY_TOMBSTONES}__${alias}`
       );
+      addExplicit(aliasMut?.explicitDeletedCodes);
+      addExplicit(aliasTomb?.explicitDeletedCodes);
       addCodes(aliasMut?.deletedCodes);
       addCodes(aliasTomb?.deletedCodes);
       addIds(aliasMut?.deletedIds);
@@ -638,6 +721,9 @@ function getPendingMutations(companyId = getActiveCompanyId()): PendingInventory
     for (const [k, v] of Object.entries(stored.upserts)) {
       const cleanK = k.trim().toLowerCase();
       if (!deletedCodesSet.has(cleanK) && v) {
+        if (v.img) {
+          memoryImageMap.set(`${slug}__${cleanK}`, v.img);
+        }
         cleanUpserts[cleanK] = v;
       }
     }
@@ -645,6 +731,8 @@ function getPendingMutations(companyId = getActiveCompanyId()): PendingInventory
 
   const initial: PendingInventoryMutations = {
     upserts: cleanUpserts,
+    unsyncedCodes: Array.from(unsyncedSet),
+    explicitDeletedCodes: Array.from(explicitDeletedSet),
     deletedCodes: Array.from(deletedCodesSet),
     deletedIds: Array.from(deletedIdsSet),
     updatedAt: Math.max(stored?.updatedAt || 0, tombstones?.updatedAt || 0),
@@ -660,6 +748,7 @@ function savePendingMutations(mutations: PendingInventoryMutations, companyId = 
   // 1. Always persist lightweight tombstones FIRST so deleted SKUs/IDs never fail on 5MB localStorage quota
   const tombstoneKey = getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TOMBSTONES, slug);
   const tombstonePayload: InventoryTombstones = {
+    explicitDeletedCodes: mutations.explicitDeletedCodes || [],
     deletedCodes: mutations.deletedCodes,
     deletedIds: mutations.deletedIds,
     updatedAt: mutations.updatedAt,
@@ -695,6 +784,27 @@ function savePendingMutations(mutations: PendingInventoryMutations, companyId = 
   }
 }
 
+export function markProductsSyncedToCloud(
+  codes: string[],
+  companyId = getActiveCompanyId()
+): void {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const mut = getPendingMutations(slug);
+  const syncedSet = new Set(codes.map((c) => (c || '').trim().toLowerCase()).filter(Boolean));
+  if (syncedSet.size === 0) return;
+
+  mut.unsyncedCodes = (mut.unsyncedCodes || []).filter((c) => !syncedSet.has(c));
+  for (const codeKey of syncedSet) {
+    const existingUp = mut.upserts[codeKey];
+    if (existingUp?.img) {
+      memoryImageMap.set(`${slug}__${codeKey}`, existingUp.img);
+    }
+    delete mut.upserts[codeKey];
+  }
+  mut.updatedAt = Date.now();
+  savePendingMutations(mut, slug);
+}
+
 export function recordLocalProductSave(
   product: Product,
   oldCode?: string,
@@ -702,11 +812,18 @@ export function recordLocalProductSave(
 ): void {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const mut = getPendingMutations(slug);
+  if (!mut.explicitDeletedCodes) mut.explicitDeletedCodes = [];
+  if (!mut.unsyncedCodes) mut.unsyncedCodes = [];
+
   const cleanNew = (product.code || '').trim().toLowerCase();
   const cleanOld = (oldCode || '').trim().toLowerCase();
 
   if (cleanOld && cleanOld !== cleanNew) {
     delete mut.upserts[cleanOld];
+    mut.unsyncedCodes = mut.unsyncedCodes.filter((c) => c !== cleanOld);
+    if (!mut.explicitDeletedCodes.includes(cleanOld)) {
+      mut.explicitDeletedCodes.push(cleanOld);
+    }
     if (!mut.deletedCodes.includes(cleanOld)) {
       mut.deletedCodes.push(cleanOld);
     }
@@ -717,6 +834,10 @@ export function recordLocalProductSave(
     const idEmbeddedCode = product.id.split('__').slice(1).join('__').trim().toLowerCase();
     if (idEmbeddedCode && idEmbeddedCode !== cleanNew) {
       delete mut.upserts[idEmbeddedCode];
+      mut.unsyncedCodes = mut.unsyncedCodes.filter((c) => c !== idEmbeddedCode);
+      if (!mut.explicitDeletedCodes.includes(idEmbeddedCode)) {
+        mut.explicitDeletedCodes.push(idEmbeddedCode);
+      }
       if (!mut.deletedCodes.includes(idEmbeddedCode)) {
         mut.deletedCodes.push(idEmbeddedCode);
       }
@@ -737,6 +858,7 @@ export function recordLocalProductSave(
           AUTO_GENERATED_SKU_REGEX.test(upProd.code || upCode)
         ) {
           delete mut.upserts[upCode];
+          mut.unsyncedCodes = mut.unsyncedCodes.filter((c) => c !== upCode);
           if (!mut.deletedCodes.includes(upCode)) {
             mut.deletedCodes.push(upCode);
           }
@@ -745,11 +867,19 @@ export function recordLocalProductSave(
     }
   }
 
+  mut.explicitDeletedCodes = mut.explicitDeletedCodes.filter((c) => c !== cleanNew);
   mut.deletedCodes = mut.deletedCodes.filter((c) => c !== cleanNew);
   const newScopedId = getScopedDocId(product.code, slug);
-  mut.deletedIds = mut.deletedIds.filter((id) => id !== newScopedId);
+  mut.deletedIds = mut.deletedIds.filter(
+    (id) =>
+      id !== newScopedId &&
+      (!id.includes('__') || id.split('__').slice(1).join('__').trim().toLowerCase() !== cleanNew)
+  );
   if (product.img) {
     memoryImageMap.set(`${slug}__${cleanNew}`, product.img);
+  }
+  if (!mut.unsyncedCodes.includes(cleanNew)) {
+    mut.unsyncedCodes.push(cleanNew);
   }
   mut.upserts[cleanNew] = {
     ...product,
@@ -771,6 +901,9 @@ export function recordLocalProductDelete(
 ): void {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const mut = getPendingMutations(slug);
+  if (!mut.explicitDeletedCodes) mut.explicitDeletedCodes = [];
+  if (!mut.unsyncedCodes) mut.unsyncedCodes = [];
+
   const trimmedId = (id || '').trim();
   const extractedFromId = trimmedId.includes('__')
     ? trimmedId.split('__').slice(1).join('__').trim()
@@ -779,6 +912,10 @@ export function recordLocalProductDelete(
 
   if (cleanCode) {
     delete mut.upserts[cleanCode];
+    mut.unsyncedCodes = mut.unsyncedCodes.filter((c) => c !== cleanCode);
+    if (!mut.explicitDeletedCodes.includes(cleanCode)) {
+      mut.explicitDeletedCodes.push(cleanCode);
+    }
     if (!mut.deletedCodes.includes(cleanCode)) {
       mut.deletedCodes.push(cleanCode);
     }
@@ -786,6 +923,10 @@ export function recordLocalProductDelete(
   if (extractedFromId && extractedFromId.toLowerCase() !== cleanCode) {
     const lowerExtracted = extractedFromId.toLowerCase();
     delete mut.upserts[lowerExtracted];
+    mut.unsyncedCodes = mut.unsyncedCodes.filter((c) => c !== lowerExtracted);
+    if (!mut.explicitDeletedCodes.includes(lowerExtracted)) {
+      mut.explicitDeletedCodes.push(lowerExtracted);
+    }
     if (!mut.deletedCodes.includes(lowerExtracted)) {
       mut.deletedCodes.push(lowerExtracted);
     }
@@ -816,18 +957,18 @@ export function recordLocalProductDelete(
   savePendingMutations(mut, slug);
 }
 
-function scoreCanonicalGyGProduct(item: Product, upserts: Record<string, Product>): number {
+function scoreCanonicalGyGProduct(item: Product, unsyncedSet: Set<string>): number {
   const codeKey = (item.code || '').trim().toLowerCase();
   const rawCode = (item.code || '').trim();
   let score = 0;
-  // 1. Explicitly saved/edited in local upserts
-  if (upserts[codeKey]) score += 1000;
+  // 1. Not an auto-generated bulk SKU (e.g. not SIL-71-735)
+  if (!AUTO_GENERATED_SKU_REGEX.test(rawCode)) score += 600;
   // 2. Has product image (valid Comercial GYG articles have their custom SKU + image)
   if (item.img && item.img.trim().length > 5) score += 500;
-  // 3. Not an auto-generated bulk SKU (e.g. not SIL-71-735)
-  if (!AUTO_GENERATED_SKU_REGEX.test(rawCode)) score += 300;
-  // 4. Short numeric or clean custom SKU (e.g. 001..999)
-  if (/^\d{1,5}$/.test(rawCode)) score += 150;
+  // 3. Pending unsynced local save on this device
+  if (unsyncedSet.has(codeKey)) score += 250;
+  // 4. Short numeric or clean sequential SKU (e.g. 001..9999)
+  if (/^\d{1,6}$/.test(rawCode)) score += 150;
   // 5. Has commercial data
   if ((Number(item.price) || 0) > 0) score += 40;
   if ((Number(item.cost) || 0) > 0) score += 20;
@@ -840,7 +981,10 @@ const pendingOrphanCleanupInFlight = new Set<string>();
 function scheduleOrphanCleanupInFirestore(slug: string, orphanItems: Product[]): void {
   if (orphanItems.length === 0) return;
   const toClean = orphanItems.filter((item) => {
-    const key = `${slug}__${(item.code || '').trim().toLowerCase()}`;
+    const cleanCode = (item.code || '').trim();
+    // Safety guard: ONLY auto-delete from Firestore if the SKU is an auto-generated bulk SKU (e.g. SIL-71-735)
+    if (!AUTO_GENERATED_SKU_REGEX.test(cleanCode)) return false;
+    const key = `${slug}__${cleanCode.toLowerCase()}`;
     if (pendingOrphanCleanupInFlight.has(key)) return false;
     pendingOrphanCleanupInFlight.add(key);
     return true;
@@ -883,12 +1027,17 @@ function scheduleOrphanCleanupInFirestore(slug: string, orphanItems: Product[]):
 
 export function applyPendingMutationsToInventory(
   items: Product[],
-  companyId = getActiveCompanyId()
+  companyId = getActiveCompanyId(),
+  fromServer = false
 ): Product[] {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const mut = getPendingMutations(slug);
+  const explicitDeletedSet = new Set(
+    (mut.explicitDeletedCodes || []).map((c) => c.toLowerCase())
+  );
   const deletedCodeSet = new Set(mut.deletedCodes.map((c) => c.toLowerCase()));
   const deletedIdSet = new Set(mut.deletedIds);
+  const unsyncedSet = new Set((mut.unsyncedCodes || []).map((c) => c.toLowerCase()));
 
   const byCode = new Map<string, Product>();
 
@@ -900,20 +1049,30 @@ export function applyPendingMutationsToInventory(
         ? item.id.split('__').slice(1).join('__').trim().toLowerCase()
         : '';
 
-    if (
+    const isAutoSku = AUTO_GENERATED_SKU_REGEX.test(item.code || '');
+    const isExplicitlyDeleted =
+      explicitDeletedSet.has(codeKey) ||
+      (idEmbeddedCode ? explicitDeletedSet.has(idEmbeddedCode) : false);
+
+    // If coming fresh from Firestore server, only suppress if explicitly deleted by user or if it's a tombstoned auto-generated SKU
+    if (fromServer && isGyGAlias(slug)) {
+      if (isExplicitlyDeleted || (isAutoSku && deletedCodeSet.has(codeKey))) {
+        continue;
+      }
+    } else if (
       deletedCodeSet.has(codeKey) ||
       (idEmbeddedCode && deletedCodeSet.has(idEmbeddedCode)) ||
       (item.id && deletedIdSet.has(item.id))
     ) {
       continue;
     }
+
     const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
     const existing = byCode.get(codeKey);
     if (existing) {
-      // If duplicate codeKey exists from multiple companyId aliases, keep the richer record without summing stock
       const pickNew =
-        scoreCanonicalGyGProduct(item, mut.upserts) >=
-        scoreCanonicalGyGProduct(existing, mut.upserts);
+        scoreCanonicalGyGProduct(item, unsyncedSet) >=
+        scoreCanonicalGyGProduct(existing, unsyncedSet);
       const chosen = pickNew ? item : existing;
       const fallbackImg = item.img || existing.img || memImg || '';
       byCode.set(codeKey, {
@@ -936,18 +1095,29 @@ export function applyPendingMutationsToInventory(
     if (deletedCodeSet.has(codeKey)) continue;
     const existing = byCode.get(codeKey);
     const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
-    byCode.set(codeKey, {
-      ...(existing || {}),
-      ...upserted,
-      category: (upserted.category || existing?.category || 'Otros').trim(),
-      supplier: (upserted.supplier ?? existing?.supplier ?? '').trim(),
-      img: upserted.img || memImg || existing?.img || '',
-    });
+
+    if (existing && !unsyncedSet.has(codeKey)) {
+      // Live Firestore document or latest inventory state takes precedence over old cached upsert;
+      // only preserve cached image if existing.img was empty.
+      byCode.set(codeKey, {
+        ...existing,
+        img: existing.img || upserted.img || memImg || '',
+      });
+    } else {
+      byCode.set(codeKey, {
+        ...(existing || {}),
+        ...upserted,
+        category: (upserted.category || existing?.category || 'Otros').trim(),
+        supplier: (upserted.supplier ?? existing?.supplier ?? '').trim(),
+        img: upserted.img || memImg || existing?.img || '',
+      });
+    }
   }
 
   // Smart Deduplication for Comercial GYG:
-  // Suppress orphaned auto-generated SKUs (e.g. SIL-71-735 for "SILLA SIN BRAZO PRIMA")
-  // when the product already exists under its new SKU / with its image.
+  // ONLY suppress orphaned auto-generated SKUs (e.g. SIL-71-735 for "SILLA SIN BRAZO PRIMA")
+  // when the product already exists under a real custom/sequential SKU.
+  // Never suppress or tombstone legitimate custom/sequential SKUs!
   if (isGyGAlias(slug)) {
     const byNormName = new Map<string, Product[]>();
     for (const item of byCode.values()) {
@@ -967,26 +1137,24 @@ export function applyPendingMutationsToInventory(
       // Sort highest-scoring canonical item first
       group.sort(
         (a, b) =>
-          scoreCanonicalGyGProduct(b, mut.upserts) -
-          scoreCanonicalGyGProduct(a, mut.upserts)
+          scoreCanonicalGyGProduct(b, unsyncedSet) -
+          scoreCanonicalGyGProduct(a, unsyncedSet)
       );
 
       const winner = group[0];
-      const winnerCodeKey = (winner.code || '').trim().toLowerCase();
-      const winnerSize = (winner.size || '').trim().toLowerCase();
+      const winnerCode = (winner.code || '').trim();
+      const winnerCodeKey = winnerCode.toLowerCase();
+      const winnerHasCustomSku = !AUTO_GENERATED_SKU_REGEX.test(winnerCode);
 
       for (let i = 1; i < group.length; i++) {
         const candidate = group[i];
         const candCode = (candidate.code || '').trim();
         const candCodeKey = candCode.toLowerCase();
-        const candSize = (candidate.size || '').trim().toLowerCase();
         const isAutoGeneratedSku = AUTO_GENERATED_SKU_REGEX.test(candCode);
-        const isSameOrEmptySize =
-          !candSize || !winnerSize || candSize === winnerSize;
 
-        // If the duplicate has an auto-generated bulk SKU (like SIL-71-735) or shares the same size
-        // while the winner has a better SKU/image, suppress and tombstone the duplicate without doubling stock
-        if (isAutoGeneratedSku || isSameOrEmptySize) {
+        // Strictly only suppress when the duplicate has an auto-generated bulk SKU (like SIL-71-735)
+        // and the canonical item has a real custom/sequential SKU
+        if (isAutoGeneratedSku && winnerHasCustomSku) {
           if (!winner.img && candidate.img) {
             winner.img = candidate.img;
             byCode.set(winnerCodeKey, winner);
@@ -1166,6 +1334,16 @@ function getScopedCollectionQuery(collectionName: string, slug: string) {
         'comercialgyg',
         'comercial_gyg',
         'gyg',
+        'tienda-gyg',
+        'tienda_gyg',
+        'comercial gyg',
+        'Comercial GYG',
+        'Comercial GyG',
+        'COMERCIAL GYG',
+        'Tienda GYG',
+        'Tienda GyG',
+        'TIENDAGYG',
+        'comercialgyghn',
       ])
     );
   }
@@ -1181,7 +1359,7 @@ function getScopedInventoryQuery(slug: string) {
   return getScopedCollectionQuery('inventory', slug);
 }
 
-function parseInventorySnapshotDocs(snapshot: any, slug: string): Product[] {
+function parseInventorySnapshotDocs(snapshot: any, slug: string, fromServer = true): Product[] {
   const items: Product[] = [];
   snapshot.forEach((docSnap: any) => {
     const data = docSnap.data();
@@ -1213,7 +1391,78 @@ function parseInventorySnapshotDocs(snapshot: any, slug: string): Product[] {
       img: data.img || '',
     });
   });
-  return applyPendingMutationsToInventory(items, slug);
+  return applyPendingMutationsToInventory(items, slug, fromServer);
+}
+
+export async function flushPendingInventoryToFirestore(
+  companyId = getActiveCompanyId()
+): Promise<number> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const mut = getPendingMutations(slug);
+  const unsyncedList = Array.from(new Set(mut.unsyncedCodes || []));
+  if (unsyncedList.length === 0) return 0;
+
+  const toPush: Product[] = [];
+  for (const codeKey of unsyncedList) {
+    const prod = mut.upserts[codeKey];
+    if (prod && prod.code && prod.name) {
+      toPush.push(prod);
+    }
+  }
+  if (toPush.length === 0) return 0;
+
+  let pushedCount = 0;
+  const CHUNK_SIZE = 350;
+  try {
+    for (let i = 0; i < toPush.length; i += CHUNK_SIZE) {
+      const chunk = toPush.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      const pushedCodes: string[] = [];
+
+      for (const product of chunk) {
+        const cleanCode = product.code.trim();
+        if (!cleanCode) continue;
+        const docId = getScopedDocId(cleanCode, slug);
+        const docRef = doc(db, 'inventory', docId);
+        const safeImg =
+          product.img && product.img.length <= 900_000 ? product.img.trim() : '';
+
+        const payload: Record<string, any> = {
+          companyId: slug,
+          code: cleanCode,
+          name: product.name.trim(),
+          category: (product.category || 'Otros').trim(),
+          cost: Math.max(0, Number(product.cost) || 0),
+          price: Math.max(0, Number(product.price) || 0),
+          discount: Math.max(0, Number(product.discount) || 0),
+          discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
+          discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
+          stock: Math.max(0, Math.round(Number(product.stock) || 0)),
+        };
+        if (product.size?.trim()) payload.size = product.size.trim();
+        if (product.supplier?.trim()) payload.supplier = product.supplier.trim();
+        if (safeImg) payload.img = safeImg;
+        if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
+          payload.warehouseStocks = product.warehouseStocks;
+        }
+
+        batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
+        pushedCodes.push(cleanCode);
+      }
+
+      if (pushedCodes.length > 0) {
+        await batch.commit();
+        markProductsSyncedToCloud(pushedCodes, slug);
+        pushedCount += pushedCodes.length;
+      }
+    }
+    if (pushedCount > 0) {
+      await touchInventorySyncStamp(undefined, slug);
+    }
+  } catch (err) {
+    console.warn('Could not flush pending local products to Firestore:', err);
+  }
+  return pushedCount;
 }
 
 export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = getActiveCompanyId()): Promise<number> {
@@ -1242,7 +1491,7 @@ export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = ge
 export async function fetchInventorySmart(
   forceRefresh = false,
   companyId = getActiveCompanyId()
-): Promise<{ items: Product[]; fromCache: boolean; readsUsed: number }> {
+): Promise<{ items: Product[]; fromCache: boolean; readsUsed: number; quotaExceeded?: boolean }> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
   const idbCached = await loadInventoryFromIndexedDB(slug);
   const cached = idbCached && idbCached.length > 0 ? idbCached : getCachedInventory(slug);
@@ -1250,57 +1499,112 @@ export async function fetchInventorySmart(
   const scopedQuery = getScopedInventoryQuery(slug);
 
   try {
+    if (forceRefresh) {
+      await flushPendingInventoryToFirestore(slug);
+    }
+
     const syncRef = doc(db, 'settings', getSyncStateDocId(slug));
     let remoteTs = 0;
-    try {
-      const syncSnap = await getDoc(syncRef);
-      remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
-    } catch {
-      const cachedSync = await getDocFromCache(syncRef).catch(() => null);
-      remoteTs = cachedSync && cachedSync.exists() ? Number(cachedSync.data()?.updatedAt || 0) : 0;
+    if (!forceRefresh) {
+      try {
+        const syncSnap = await getDoc(syncRef);
+        remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
+      } catch {
+        const cachedSync = await getDocFromCache(syncRef).catch(() => null);
+        remoteTs = cachedSync && cachedSync.exists() ? Number(cachedSync.data()?.updatedAt || 0) : 0;
+      }
+
+      if (cached && cached.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
+        return { items: applyPendingMutationsToInventory(cached, slug, false), fromCache: true, readsUsed: 1 };
+      }
     }
 
-    if (!forceRefresh && cached && cached.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
-      return { items: applyPendingMutationsToInventory(cached, slug), fromCache: true, readsUsed: 1 };
-    }
+    const snapshot = forceRefresh
+      ? await getDocsFromServer(scopedQuery).catch(() => getDocs(scopedQuery))
+      : await getDocs(scopedQuery);
 
-    const snapshot = await getDocs(scopedQuery);
-    const items = parseInventorySnapshotDocs(snapshot, slug);
+    const serverCodeSet = new Set<string>();
+    snapshot.forEach((docSnap: any) => {
+      const data = docSnap.data();
+      if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
+      const c = (
+        data.code ||
+        (docSnap.id.includes('__') ? docSnap.id.split('__').slice(1).join('__') : docSnap.id)
+      )
+        .trim()
+        .toLowerCase();
+      if (c) serverCodeSet.add(c);
+    });
+
+    const items = parseInventorySnapshotDocs(snapshot, slug, true);
+
+    // If user manually clicked Sincronizar and there were locally saved products in upserts that had not
+    // reached Firestore yet (missing from serverCodeSet), push them to Firestore now so all devices see them
+    if (forceRefresh) {
+      const mut = getPendingMutations(slug);
+      const explicitDel = new Set((mut.explicitDeletedCodes || []).map((c) => c.toLowerCase()));
+      const delSet = new Set(mut.deletedCodes.map((c) => c.toLowerCase()));
+      const missingInCloud: string[] = [];
+
+      for (const [codeKey, upProd] of Object.entries(mut.upserts)) {
+        if (
+          !serverCodeSet.has(codeKey) &&
+          !explicitDel.has(codeKey) &&
+          !delSet.has(codeKey) &&
+          !AUTO_GENERATED_SKU_REGEX.test(upProd.code || codeKey)
+        ) {
+          missingInCloud.push(codeKey);
+        }
+      }
+
+      if (missingInCloud.length > 0) {
+        mut.unsyncedCodes = Array.from(new Set([...(mut.unsyncedCodes || []), ...missingInCloud]));
+        savePendingMutations(mut, slug);
+        await flushPendingInventoryToFirestore(slug);
+      }
+
+      // Sync local upserts with server items so stale local copies never override future cloud updates
+      const syncedCodes = Array.from(serverCodeSet);
+      if (syncedCodes.length > 0) {
+        markProductsSyncedToCloud(syncedCodes, slug);
+      }
+    }
 
     const effectiveTs = Date.now();
     setCachedInventory(items, effectiveTs, slug);
 
-    if (remoteTs === 0) {
+    if (!forceRefresh && remoteTs === 0) {
       await setDoc(syncRef, { storeName: `Sync ${slug}`, updatedAt: effectiveTs }, { merge: true }).catch(() => {});
     }
 
-    return { items, fromCache: false, readsUsed: items.length + 1 };
+    return { items, fromCache: false, readsUsed: items.length + (forceRefresh ? 0 : 1) };
   } catch (error) {
+    const quotaHit = isQuotaOrNetworkError(error);
     // Prefer our clean IndexedDB / localStorage inventory (which already has local deletions and SKU changes applied)
     if (cached && cached.length > 0) {
-      const cleanedCached = applyPendingMutationsToInventory(cached, slug);
+      const cleanedCached = applyPendingMutationsToInventory(cached, slug, false);
       setCachedInventory(cleanedCached, undefined, slug);
-      return { items: cleanedCached, fromCache: true, readsUsed: 0 };
+      return { items: cleanedCached, fromCache: true, readsUsed: 0, quotaExceeded: quotaHit };
     }
 
     try {
       const cacheSnap = await getDocsFromCache(scopedQuery);
       if (!cacheSnap.empty) {
-        const itemsFromFsCache = parseInventorySnapshotDocs(cacheSnap, slug);
+        const itemsFromFsCache = parseInventorySnapshotDocs(cacheSnap, slug, false);
         if (itemsFromFsCache.length > 0) {
           setCachedInventory(itemsFromFsCache, undefined, slug);
-          return { items: itemsFromFsCache, fromCache: true, readsUsed: 0 };
+          return { items: itemsFromFsCache, fromCache: true, readsUsed: 0, quotaExceeded: quotaHit };
         }
       }
     } catch {}
 
-    const pendingOnly = applyPendingMutationsToInventory([], slug);
+    const pendingOnly = applyPendingMutationsToInventory([], slug, false);
     if (pendingOnly.length > 0) {
-      return { items: pendingOnly, fromCache: true, readsUsed: 0 };
+      return { items: pendingOnly, fromCache: true, readsUsed: 0, quotaExceeded: quotaHit };
     }
 
     console.warn('Inventory fetch fallback empty:', error);
-    return { items: [], fromCache: true, readsUsed: 0 };
+    return { items: [], fromCache: true, readsUsed: 0, quotaExceeded: quotaHit };
   }
 }
 
@@ -1316,7 +1620,7 @@ export function subscribeToInventory(
   return onSnapshot(
     scopedQuery,
     (snapshot) => {
-      const items = parseInventorySnapshotDocs(snapshot, slug);
+      const items = parseInventorySnapshotDocs(snapshot, slug, true);
       setCachedInventory(items, undefined, slug);
       onData(items);
     },
@@ -1336,7 +1640,7 @@ export function subscribeToInventory(
       try {
         const cacheSnap = await getDocsFromCache(scopedQuery);
         if (!cacheSnap.empty) {
-          const items = parseInventorySnapshotDocs(cacheSnap, slug);
+          const items = parseInventorySnapshotDocs(cacheSnap, slug, false);
           setCachedInventory(items, undefined, slug);
           onData(items);
         }
@@ -1356,6 +1660,31 @@ export async function saveProductToFirestore(
   const docId = getScopedDocId(product.code, slug);
 
   recordLocalProductSave(product, oldCode, slug);
+
+  const buildPayload = (includeImage: boolean): Record<string, any> => {
+    const payload: Record<string, any> = {
+      companyId: slug,
+      code: product.code.trim(),
+      name: product.name.trim(),
+      category: (product.category || 'Otros').trim(),
+      cost: Number(product.cost) || 0,
+      price: Number(product.price) || 0,
+      discount: Math.max(0, Number(product.discount) || 0),
+      discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
+      discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
+      stock: Math.max(0, Math.round(Number(product.stock) || 0)),
+    };
+
+    if (product.size?.trim()) payload.size = product.size.trim();
+    if (product.supplier?.trim()) payload.supplier = product.supplier.trim();
+    if (includeImage && product.img?.trim() && product.img.trim().length <= 920_000) {
+      payload.img = product.img.trim();
+    }
+    if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
+      payload.warehouseStocks = product.warehouseStocks;
+    }
+    return stripUndefinedDeep(payload);
+  };
 
   try {
     const batch = writeBatch(db);
@@ -1389,28 +1718,9 @@ export async function saveProductToFirestore(
     }
 
     const docRef = doc(db, 'inventory', docId);
-    const payload: Record<string, any> = {
-      companyId: slug,
-      code: product.code.trim(),
-      name: product.name.trim(),
-      category: (product.category || 'Otros').trim(),
-      cost: Number(product.cost) || 0,
-      price: Number(product.price) || 0,
-      discount: Math.max(0, Number(product.discount) || 0),
-      discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
-      discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
-      stock: Math.max(0, Math.round(Number(product.stock) || 0)),
-    };
-
-    if (product.size?.trim()) payload.size = product.size.trim();
-    if (product.supplier?.trim()) payload.supplier = product.supplier.trim();
-    if (product.img?.trim()) payload.img = product.img.trim();
-    if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
-      payload.warehouseStocks = product.warehouseStocks;
-    }
-
-    batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
+    batch.set(docRef, buildPayload(true), { merge: true });
     await batch.commit();
+    markProductsSyncedToCloud([product.code], slug);
 
     await touchInventorySyncStamp(undefined, slug);
     if (isGyG) {
@@ -1418,6 +1728,16 @@ export async function saveProductToFirestore(
       await touchInventorySyncStamp(undefined, 'comercialgyg').catch(() => {});
     }
   } catch (error) {
+    // If commit failed due to oversized base64 image exceeding 1MB limit, retry without the oversized image
+    if (product.img && product.img.length > 200_000 && !isQuotaOrNetworkError(error)) {
+      try {
+        const docRef = doc(db, 'inventory', docId);
+        await setDoc(docRef, buildPayload(false), { merge: true });
+        markProductsSyncedToCloud([product.code], slug);
+        await touchInventorySyncStamp(undefined, slug);
+        return;
+      } catch {}
+    }
     console.warn('Product saved in local cache; cloud sync deferred:', error);
   }
 }
@@ -1516,6 +1836,7 @@ export async function bulkSaveProductsToFirestore(
     for (let i = 0; i < products.length; i += CHUNK_SIZE) {
       const chunk = products.slice(i, i + CHUNK_SIZE);
       const batch = writeBatch(db);
+      const chunkCodes: string[] = [];
 
       chunk.forEach((product) => {
         if (!product.code.trim()) return;
@@ -1536,15 +1857,19 @@ export async function bulkSaveProductsToFirestore(
 
         if (product.size !== undefined) payload.size = product.size.trim();
         if (product.supplier !== undefined) payload.supplier = product.supplier.trim();
-        if (product.img?.trim()) payload.img = product.img.trim();
+        if (product.img?.trim() && product.img.trim().length <= 920_000) {
+          payload.img = product.img.trim();
+        }
         if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
           payload.warehouseStocks = product.warehouseStocks;
         }
 
         batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
+        chunkCodes.push(product.code.trim());
       });
 
       await batch.commit();
+      markProductsSyncedToCloud(chunkCodes, slug);
     }
     await touchInventorySyncStamp(undefined, slug);
   } catch (error) {
@@ -1555,14 +1880,16 @@ export async function bulkSaveProductsToFirestore(
 // ----------------- SUPPLIERS (ON-DEMAND & REAL-TIME) -----------------
 
 export async function fetchSuppliersOnce(
-  _forceRefresh = false,
+  forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<Supplier[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const cached = getCachedSuppliers(slug);
   const scopedQuery = getScopedCollectionQuery('suppliers', slug);
   try {
-    const snapshot = await getDocs(scopedQuery);
+    const snapshot = forceRefresh
+      ? await getDocsFromServer(scopedQuery).catch(() => getDocs(scopedQuery))
+      : await getDocs(scopedQuery);
     const suppliers: Supplier[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
@@ -2256,14 +2583,16 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
 }
 
 export async function fetchSalesOnce(
-  _forceRefresh = false,
+  forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const cached = getCachedSales(slug);
   const scopedQuery = getScopedCollectionQuery('sales', slug);
   try {
-    const snapshot = await getDocs(scopedQuery);
+    const snapshot = forceRefresh
+      ? await getDocsFromServer(scopedQuery).catch(() => getDocs(scopedQuery))
+      : await getDocs(scopedQuery);
     const records = parseSaleDocsFromSnapshot(snapshot, slug);
     setCachedSales(records, slug);
     return records;
@@ -2845,14 +3174,16 @@ function parsePurchaseDocsFromSnapshot(snapshot: any, slug: string): PurchaseInv
 }
 
 export async function fetchPurchasesOnce(
-  _forceRefresh = false,
+  forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<PurchaseInvoice[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const cached = getCachedPurchases(slug);
   const scopedQuery = getScopedCollectionQuery('purchases', slug);
   try {
-    const snapshot = await getDocs(scopedQuery);
+    const snapshot = forceRefresh
+      ? await getDocsFromServer(scopedQuery).catch(() => getDocs(scopedQuery))
+      : await getDocs(scopedQuery);
     const records = parsePurchaseDocsFromSnapshot(snapshot, slug);
     setCachedPurchases(records, slug);
     return records;
