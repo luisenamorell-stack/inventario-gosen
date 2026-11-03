@@ -74,14 +74,29 @@ export interface FirestoreErrorInfo {
   };
 }
 
+let firestoreReadQuotaExhaustedUntil = 0;
+
+export function isFirestoreQuotaExhausted(): boolean {
+  return Date.now() < firestoreReadQuotaExhaustedUntil;
+}
+
+export function markFirestoreQuotaExhausted(): void {
+  firestoreReadQuotaExhaustedUntil = Date.now() + 10 * 60 * 1000;
+}
+
 export function isQuotaOrNetworkError(error: unknown): boolean {
   const msg = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
   const code = String((error as any)?.code || '').toLowerCase();
-  return (
+  const isQuota =
     code === 'resource-exhausted' ||
-    code === 'unavailable' ||
     msg.includes('quota') ||
-    msg.includes('resource-exhausted') ||
+    msg.includes('resource-exhausted');
+  if (isQuota) {
+    markFirestoreQuotaExhausted();
+  }
+  return (
+    isQuota ||
+    code === 'unavailable' ||
     msg.includes('offline') ||
     msg.includes('failed to get document')
   );
@@ -793,13 +808,14 @@ export function markProductsSyncedToCloud(
   const syncedSet = new Set(codes.map((c) => (c || '').trim().toLowerCase()).filter(Boolean));
   if (syncedSet.size === 0) return;
 
+  // Keep mut.upserts intact (with updatedAt) so local edits/creations are never lost if Firestore read quota is exhausted;
+  // only clear from unsyncedCodes queue.
   mut.unsyncedCodes = (mut.unsyncedCodes || []).filter((c) => !syncedSet.has(c));
   for (const codeKey of syncedSet) {
     const existingUp = mut.upserts[codeKey];
     if (existingUp?.img) {
       memoryImageMap.set(`${slug}__${codeKey}`, existingUp.img);
     }
-    delete mut.upserts[codeKey];
   }
   mut.updatedAt = Date.now();
   savePendingMutations(mut, slug);
@@ -881,6 +897,7 @@ export function recordLocalProductSave(
   if (!mut.unsyncedCodes.includes(cleanNew)) {
     mut.unsyncedCodes.push(cleanNew);
   }
+  const nowTs = Date.now();
   mut.upserts[cleanNew] = {
     ...product,
     id: newScopedId,
@@ -889,8 +906,9 @@ export function recordLocalProductSave(
     name: product.name.trim(),
     category: (product.category || 'Otros').trim(),
     supplier: (product.supplier || '').trim(),
-  };
-  mut.updatedAt = Date.now();
+    updatedAt: nowTs,
+  } as Product;
+  mut.updatedAt = nowTs;
   savePendingMutations(mut, slug);
 }
 
@@ -1092,13 +1110,21 @@ export function applyPendingMutationsToInventory(
   }
 
   for (const [codeKey, upserted] of Object.entries(mut.upserts)) {
-    if (deletedCodeSet.has(codeKey)) continue;
+    if (deletedCodeSet.has(codeKey) || explicitDeletedSet.has(codeKey)) continue;
     const existing = byCode.get(codeKey);
     const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
+    const upsertedTs = Number((upserted as any)?.updatedAt || 0);
+    const existingTs = Number((existing as any)?.updatedAt || 0);
 
-    if (existing && !unsyncedSet.has(codeKey)) {
-      // Live Firestore document or latest inventory state takes precedence over old cached upsert;
-      // only preserve cached image if existing.img was empty.
+    // When merging local cache (fromServer === false), mut.upserts ALWAYS wins over stale cache.
+    // When merging fresh server items (fromServer === true), mut.upserts wins if it is unsynced or has a newer updatedAt.
+    const preferUpsert =
+      !fromServer ||
+      !existing ||
+      unsyncedSet.has(codeKey) ||
+      (upsertedTs > 0 && upsertedTs >= existingTs);
+
+    if (!preferUpsert && existing) {
       byCode.set(codeKey, {
         ...existing,
         img: existing.img || upserted.img || memImg || '',
@@ -1488,13 +1514,237 @@ export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = ge
   return now;
 }
 
+// ----------------- BACKEND MULTI-DEVICE CLOUD SYNC HUB HELPERS -----------------
+
+export async function fetchBackendSyncStatus(
+  companyId = getActiveCompanyId()
+): Promise<{
+  ok: boolean;
+  updatedAt: number;
+  inventoryCount: number;
+  purchasesCount: number;
+  salesCount: number;
+  suppliersCount: number;
+} | null> {
+  if (typeof window === 'undefined') return null;
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  try {
+    const res = await fetch(`/api/cloud-sync/status?companyId=${encodeURIComponent(slug)}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function syncInventoryWithBackendHub(
+  localItems: Product[],
+  companyId = getActiveCompanyId()
+): Promise<Product[] | null> {
+  if (typeof window === 'undefined') return null;
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const mut = getPendingMutations(slug);
+
+  // Hydrate any cached memory images before sending to the backend hub
+  const enrichedItems = (localItems || []).map((p) => {
+    const codeKey = (p.code || '').trim().toLowerCase();
+    const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
+    return memImg && !p.img ? { ...p, img: memImg } : p;
+  });
+
+  const enrichedUpserts: Record<string, Product> = {};
+  for (const [k, v] of Object.entries(mut.upserts || {})) {
+    const memImg = memoryImageMap.get(`${slug}__${k}`);
+    enrichedUpserts[k] = memImg && !v.img ? { ...v, img: memImg } : v;
+  }
+
+  try {
+    const res = await fetch('/api/cloud-sync/inventory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        companyId: slug,
+        items: enrichedItems,
+        upserts: enrichedUpserts,
+        unsyncedCodes: mut.unsyncedCodes || [],
+        explicitDeletedCodes: mut.explicitDeletedCodes || [],
+        deletedCodes: mut.deletedCodes || [],
+        deletedIds: mut.deletedIds || [],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.ok || !Array.isArray(data.items)) return null;
+
+    // Update local tombstones from server's authoritative list
+    if (Array.isArray(data.explicitDeletedCodes)) {
+      mut.explicitDeletedCodes = data.explicitDeletedCodes;
+    }
+    if (Array.isArray(data.deletedCodes)) {
+      mut.deletedCodes = data.deletedCodes;
+    }
+    if (Array.isArray(data.deletedIds)) {
+      mut.deletedIds = data.deletedIds;
+    }
+    // Also update local upserts with latest server values so stale local upserts never revert newer edits from other devices
+    const serverByCode = new Map<string, Product>();
+    for (const srvItem of data.items as Product[]) {
+      const ck = (srvItem.code || '').trim().toLowerCase();
+      if (!ck) continue;
+      serverByCode.set(ck, srvItem);
+      if (srvItem.img) {
+        memoryImageMap.set(`${slug}__${ck}`, srvItem.img);
+      }
+      if (mut.upserts[ck]) {
+        mut.upserts[ck] = { ...mut.upserts[ck], ...srvItem };
+      }
+    }
+    mut.unsyncedCodes = [];
+    savePendingMutations(mut, slug);
+
+    return data.items as Product[];
+  } catch (err) {
+    console.warn('Backend hub inventory sync warning:', err);
+    return null;
+  }
+}
+
+export async function pushProductSaveToBackendHub(
+  product?: Product,
+  oldCode?: string,
+  companyId = getActiveCompanyId(),
+  products?: Product[]
+): Promise<void> {
+  if (typeof window === 'undefined') return;
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  try {
+    await fetch('/api/cloud-sync/product-save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        companyId: slug,
+        product,
+        products,
+        oldCode,
+      }),
+    });
+  } catch {}
+}
+
+export async function pushProductDeleteToBackendHub(
+  id: string,
+  code?: string,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  if (typeof window === 'undefined') return;
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  try {
+    await fetch('/api/cloud-sync/product-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        companyId: slug,
+        id,
+        code,
+      }),
+    });
+  } catch {}
+}
+
+export async function syncCollectionsWithBackendHub(
+  payload: {
+    suppliers?: Supplier[];
+    purchases?: PurchaseInvoice[];
+    sales?: SaleRecord[];
+    users?: UserAccount[];
+    warehouses?: StoreWarehousesData;
+    settings?: StoreSettings;
+    posFinance?: POSFinanceStoreData;
+    companies?: CompanyTenant[];
+    deleteSupplierId?: string;
+    deletePurchaseId?: string;
+    deleteSaleId?: string;
+    deleteUserId?: string;
+  },
+  companyId = getActiveCompanyId()
+): Promise<{
+  suppliers: Supplier[];
+  purchases: PurchaseInvoice[];
+  sales: SaleRecord[];
+  users: UserAccount[];
+  warehouses: StoreWarehousesData | null;
+  settings: StoreSettings | null;
+  posFinance: POSFinanceStoreData | null;
+  companies: CompanyTenant[];
+  updatedAt: number;
+} | null> {
+  if (typeof window === 'undefined') return null;
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  try {
+    const res = await fetch('/api/cloud-sync/collections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        companyId: slug,
+        ...payload,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.ok) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchInventorySmart(
   forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<{ items: Product[]; fromCache: boolean; readsUsed: number; quotaExceeded?: boolean }> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
   const idbCached = await loadInventoryFromIndexedDB(slug);
-  const cached = idbCached && idbCached.length > 0 ? idbCached : getCachedInventory(slug);
+  const lsCached = getCachedInventory(slug);
+
+  // Combine IndexedDB + localStorage + pending local mutations first so zero local items are ever left behind
+  const localMap = new Map<string, Product>();
+  if (lsCached && lsCached.length > 0) {
+    for (const p of lsCached) {
+      const k = (p.code || '').trim().toLowerCase();
+      if (k) localMap.set(k, p);
+    }
+  }
+  if (idbCached && idbCached.length > 0) {
+    for (const p of idbCached) {
+      const k = (p.code || '').trim().toLowerCase();
+      if (!k) continue;
+      const prev = localMap.get(k);
+      localMap.set(k, prev ? { ...prev, ...p, img: p.img || prev.img || '' } : p);
+    }
+  }
+  const combinedLocal = applyPendingMutationsToInventory(
+    Array.from(localMap.values()),
+    slug,
+    false
+  );
+
+  // 1. Always synchronize bidirectionally with our Express Multi-Device Sync Hub (/api/cloud-sync/inventory)
+  // This works 100% of the time across PC, Tablet, and Mobile even when Firestore's 50k daily read quota is exhausted!
+  const hubItems = await syncInventoryWithBackendHub(combinedLocal, slug);
+  const baseItems = hubItems && hubItems.length > 0 ? hubItems : combinedLocal;
+
+  // If Firestore read quota is currently known to be exhausted, skip doomed Firestore reads and return the live Hub-synced inventory immediately!
+  if (isFirestoreQuotaExhausted()) {
+    const mergedHub = applyPendingMutationsToInventory(baseItems, slug, true);
+    setCachedInventory(mergedHub, Date.now(), slug);
+    return {
+      items: mergedHub,
+      fromCache: !hubItems,
+      readsUsed: 0,
+      quotaExceeded: !hubItems,
+    };
+  }
+
   const localTs = Number(localStorage.getItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TS, slug)) || 0);
   const scopedQuery = getScopedInventoryQuery(slug);
 
@@ -1509,13 +1759,20 @@ export async function fetchInventorySmart(
       try {
         const syncSnap = await getDoc(syncRef);
         remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
-      } catch {
+      } catch (err) {
+        if (isQuotaOrNetworkError(err)) {
+          const mergedHub = applyPendingMutationsToInventory(baseItems, slug, true);
+          setCachedInventory(mergedHub, Date.now(), slug);
+          return { items: mergedHub, fromCache: false, readsUsed: 0, quotaExceeded: false };
+        }
         const cachedSync = await getDocFromCache(syncRef).catch(() => null);
         remoteTs = cachedSync && cachedSync.exists() ? Number(cachedSync.data()?.updatedAt || 0) : 0;
       }
 
-      if (cached && cached.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
-        return { items: applyPendingMutationsToInventory(cached, slug, false), fromCache: true, readsUsed: 1 };
+      if (baseItems.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
+        const merged = applyPendingMutationsToInventory(baseItems, slug, true);
+        setCachedInventory(merged, undefined, slug);
+        return { items: merged, fromCache: true, readsUsed: 1 };
       }
     }
 
@@ -1536,23 +1793,27 @@ export async function fetchInventorySmart(
       if (c) serverCodeSet.add(c);
     });
 
-    const items = parseInventorySnapshotDocs(snapshot, slug, true);
+    const fsItems = parseInventorySnapshotDocs(snapshot, slug, true);
+    // Merge Firestore items with Backend Hub items so both sources stay 100% unified
+    const syncedWithHub = (await syncInventoryWithBackendHub(fsItems, slug)) || fsItems;
+    const finalItems = applyPendingMutationsToInventory(syncedWithHub, slug, true);
 
-    // If user manually clicked Sincronizar and there were locally saved products in upserts that had not
-    // reached Firestore yet (missing from serverCodeSet), push them to Firestore now so all devices see them
     if (forceRefresh) {
       const mut = getPendingMutations(slug);
       const explicitDel = new Set((mut.explicitDeletedCodes || []).map((c) => c.toLowerCase()));
       const delSet = new Set(mut.deletedCodes.map((c) => c.toLowerCase()));
       const missingInCloud: string[] = [];
 
-      for (const [codeKey, upProd] of Object.entries(mut.upserts)) {
+      for (const item of finalItems) {
+        const codeKey = (item.code || '').trim().toLowerCase();
         if (
+          codeKey &&
           !serverCodeSet.has(codeKey) &&
           !explicitDel.has(codeKey) &&
           !delSet.has(codeKey) &&
-          !AUTO_GENERATED_SKU_REGEX.test(upProd.code || codeKey)
+          !AUTO_GENERATED_SKU_REGEX.test(item.code || codeKey)
         ) {
+          mut.upserts[codeKey] = item;
           missingInCloud.push(codeKey);
         }
       }
@@ -1563,7 +1824,6 @@ export async function fetchInventorySmart(
         await flushPendingInventoryToFirestore(slug);
       }
 
-      // Sync local upserts with server items so stale local copies never override future cloud updates
       const syncedCodes = Array.from(serverCodeSet);
       if (syncedCodes.length > 0) {
         markProductsSyncedToCloud(syncedCodes, slug);
@@ -1571,20 +1831,25 @@ export async function fetchInventorySmart(
     }
 
     const effectiveTs = Date.now();
-    setCachedInventory(items, effectiveTs, slug);
+    setCachedInventory(finalItems, effectiveTs, slug);
 
     if (!forceRefresh && remoteTs === 0) {
       await setDoc(syncRef, { storeName: `Sync ${slug}`, updatedAt: effectiveTs }, { merge: true }).catch(() => {});
     }
 
-    return { items, fromCache: false, readsUsed: items.length + (forceRefresh ? 0 : 1) };
+    return { items: finalItems, fromCache: false, readsUsed: finalItems.length + (forceRefresh ? 0 : 1) };
   } catch (error) {
     const quotaHit = isQuotaOrNetworkError(error);
-    // Prefer our clean IndexedDB / localStorage inventory (which already has local deletions and SKU changes applied)
-    if (cached && cached.length > 0) {
-      const cleanedCached = applyPendingMutationsToInventory(cached, slug, false);
-      setCachedInventory(cleanedCached, undefined, slug);
-      return { items: cleanedCached, fromCache: true, readsUsed: 0, quotaExceeded: quotaHit };
+    // Even if Firestore threw resource-exhausted, hubItems already synchronized with our Backend Multi-Device Hub!
+    if (baseItems && baseItems.length > 0) {
+      const cleanedBase = applyPendingMutationsToInventory(baseItems, slug, Boolean(hubItems));
+      setCachedInventory(cleanedBase, Date.now(), slug);
+      return {
+        items: cleanedBase,
+        fromCache: !hubItems,
+        readsUsed: 0,
+        quotaExceeded: quotaHit && !hubItems,
+      };
     }
 
     try {
@@ -1592,19 +1857,31 @@ export async function fetchInventorySmart(
       if (!cacheSnap.empty) {
         const itemsFromFsCache = parseInventorySnapshotDocs(cacheSnap, slug, false);
         if (itemsFromFsCache.length > 0) {
-          setCachedInventory(itemsFromFsCache, undefined, slug);
-          return { items: itemsFromFsCache, fromCache: true, readsUsed: 0, quotaExceeded: quotaHit };
+          const syncedCache = (await syncInventoryWithBackendHub(itemsFromFsCache, slug)) || itemsFromFsCache;
+          setCachedInventory(syncedCache, Date.now(), slug);
+          return {
+            items: syncedCache,
+            fromCache: !hubItems,
+            readsUsed: 0,
+            quotaExceeded: quotaHit && !hubItems,
+          };
         }
       }
     } catch {}
 
     const pendingOnly = applyPendingMutationsToInventory([], slug, false);
     if (pendingOnly.length > 0) {
-      return { items: pendingOnly, fromCache: true, readsUsed: 0, quotaExceeded: quotaHit };
+      const syncedPending = (await syncInventoryWithBackendHub(pendingOnly, slug)) || pendingOnly;
+      setCachedInventory(syncedPending, Date.now(), slug);
+      return {
+        items: syncedPending,
+        fromCache: !hubItems,
+        readsUsed: 0,
+        quotaExceeded: quotaHit && !hubItems,
+      };
     }
 
-    console.warn('Inventory fetch fallback empty:', error);
-    return { items: [], fromCache: true, readsUsed: 0, quotaExceeded: quotaHit };
+    return { items: [], fromCache: true, readsUsed: 0, quotaExceeded: quotaHit && !hubItems };
   }
 }
 
@@ -1616,35 +1893,33 @@ export function subscribeToInventory(
   companyId = getActiveCompanyId()
 ) {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : resolveCompanySlugFromInput(companyId);
+  if (isFirestoreQuotaExhausted()) {
+    return () => {};
+  }
   const scopedQuery = getScopedInventoryQuery(slug);
   return onSnapshot(
     scopedQuery,
     (snapshot) => {
       const items = parseInventorySnapshotDocs(snapshot, slug, true);
       setCachedInventory(items, undefined, slug);
+      syncInventoryWithBackendHub(items, slug).catch(() => {});
       onData(items);
     },
     async (error) => {
+      isQuotaOrNetworkError(error);
       if (onError) onError(error);
-      console.warn('Inventory realtime listener fallback to cache:', error);
       const idbItems = await loadInventoryFromIndexedDB(slug);
-      if (idbItems && idbItems.length > 0) {
-        onData(idbItems);
-        return;
-      }
       const lsItems = getCachedInventory(slug);
-      if (lsItems && lsItems.length > 0) {
-        onData(lsItems);
+      const base = idbItems && idbItems.length > 0 ? idbItems : lsItems || [];
+      const hubSynced = await syncInventoryWithBackendHub(base, slug);
+      if (hubSynced && hubSynced.length > 0) {
+        setCachedInventory(hubSynced, undefined, slug);
+        onData(hubSynced);
         return;
       }
-      try {
-        const cacheSnap = await getDocsFromCache(scopedQuery);
-        if (!cacheSnap.empty) {
-          const items = parseInventorySnapshotDocs(cacheSnap, slug, false);
-          setCachedInventory(items, undefined, slug);
-          onData(items);
-        }
-      } catch {}
+      if (base.length > 0) {
+        onData(base);
+      }
     }
   );
 }
@@ -1660,6 +1935,7 @@ export async function saveProductToFirestore(
   const docId = getScopedDocId(product.code, slug);
 
   recordLocalProductSave(product, oldCode, slug);
+  pushProductSaveToBackendHub(product, oldCode, slug).catch(() => {});
 
   const buildPayload = (includeImage: boolean): Record<string, any> => {
     const payload: Record<string, any> = {
@@ -1752,6 +2028,7 @@ export async function deleteProductFromFirestore(
   const canonical = canonicalizeCompanySlug(slug);
 
   recordLocalProductDelete(id, code, slug);
+  pushProductDeleteToBackendHub(id, code, slug).catch(() => {});
 
   const idsToDelete = new Set<string>();
   if (id) {
@@ -1805,6 +2082,10 @@ export async function bulkSaveProductsToFirestore(
       recordLocalProductSave(p, undefined, slug);
     }
   });
+  pushProductSaveToBackendHub(undefined, undefined, slug, products).catch(() => {});
+  if (newSuppliers.length > 0) {
+    syncCollectionsWithBackendHub({ suppliers: newSuppliers }, slug).catch(() => {});
+  }
 
   const CHUNK_SIZE = 400;
   try {
@@ -1884,7 +2165,15 @@ export async function fetchSuppliersOnce(
   companyId = getActiveCompanyId()
 ): Promise<Supplier[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
-  const cached = getCachedSuppliers(slug);
+  const cached = getCachedSuppliers(slug) || [];
+  const hubSync = await syncCollectionsWithBackendHub({ suppliers: cached }, slug);
+  const baseSups = hubSync?.suppliers && hubSync.suppliers.length > 0 ? hubSync.suppliers : cached;
+
+  if (isFirestoreQuotaExhausted()) {
+    setCachedSuppliers(baseSups, slug);
+    return baseSups;
+  }
+
   const scopedQuery = getScopedCollectionQuery('suppliers', slug);
   try {
     const snapshot = forceRefresh
@@ -1904,33 +2193,17 @@ export async function fetchSuppliersOnce(
         address: data.address || '',
       });
     });
-    suppliers.sort((a, b) => a.name.localeCompare(b.name));
-    setCachedSuppliers(suppliers, slug);
-    return suppliers;
+    const mergedHub = await syncCollectionsWithBackendHub({ suppliers }, slug);
+    const finalSups = mergedHub?.suppliers && mergedHub.suppliers.length > 0 ? mergedHub.suppliers : suppliers;
+    finalSups.sort((a, b) => a.name.localeCompare(b.name));
+    setCachedSuppliers(finalSups, slug);
+    return finalSups;
   } catch (error) {
-    try {
-      const cacheSnap = await getDocsFromCache(scopedQuery);
-      if (!cacheSnap.empty) {
-        const suppliers: Supplier[] = [];
-        cacheSnap.forEach((docSnap) => {
-          const data = docSnap.data();
-          if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
-          suppliers.push({
-            id: docSnap.id,
-            companyId: data.companyId || slug,
-            name: (data.name || '').trim(),
-            contact: data.contact || '',
-            phone: data.phone || '',
-            email: data.email || '',
-            address: data.address || '',
-          });
-        });
-        suppliers.sort((a, b) => a.name.localeCompare(b.name));
-        setCachedSuppliers(suppliers, slug);
-        return suppliers;
-      }
-    } catch {}
-    if (cached) return cached;
+    isQuotaOrNetworkError(error);
+    if (baseSups.length > 0) {
+      setCachedSuppliers(baseSups, slug);
+      return baseSups;
+    }
     return [];
   }
 }
@@ -1987,6 +2260,7 @@ export async function saveSupplierToFirestore(
     { ...supplier, id: docId, companyId: slug, name: supplier.name.trim() },
   ].sort((a, b) => a.name.localeCompare(b.name));
   setCachedSuppliers(nextSups, slug);
+  syncCollectionsWithBackendHub({ suppliers: nextSups }, slug).catch(() => {});
 
   try {
     const docRef = doc(db, 'suppliers', docId);
@@ -2032,6 +2306,7 @@ export async function deleteSupplierFromFirestore(
   companyId = getActiveCompanyId()
 ): Promise<void> {
   const slug = normalizeCompanySlug(companyId);
+  syncCollectionsWithBackendHub({ deleteSupplierId: id }, slug).catch(() => {});
   const idsToDelete = new Set<string>();
   if (id) {
     idsToDelete.add(id.trim());
@@ -2313,13 +2588,22 @@ export function getDefaultStoreSettingsForCompany(companyId = getActiveCompanyId
 
 export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): Promise<StoreSettings> {
   const slug = normalizeCompanySlug(companyId);
+  const cached = getCachedStoreSettings(slug);
+  const hubSync = await syncCollectionsWithBackendHub(cached ? { settings: cached } : {}, slug);
+  if (isFirestoreQuotaExhausted()) {
+    if (hubSync?.settings) {
+      setCachedStoreSettings(hubSync.settings, slug);
+      return hubSync.settings;
+    }
+    if (cached) return cached;
+    return getDefaultStoreSettingsForCompany(slug);
+  }
   try {
     const docRef = doc(db, 'settings', getStoreProfileDocId(slug));
     const snapshot = await getDoc(docRef);
     if (snapshot.exists()) {
       const data = snapshot.data();
       const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
-      // Never leak Tienda Gosén's /store-logo.jpg into another client company
       const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
       const settings: StoreSettings = {
         companyId: slug,
@@ -2344,10 +2628,10 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
         updatedAt: Number(data.updatedAt) || Date.now(),
       };
       setCachedStoreSettings(settings, slug);
+      syncCollectionsWithBackendHub({ settings }, slug).catch(() => {});
       return settings;
     }
 
-    // If non-gosen company doesn't have settings doc yet, check companies collection
     if (slug !== 'gosen') {
       const compSnap = await getDoc(doc(db, 'companies', slug));
       if (compSnap.exists()) {
@@ -2374,13 +2658,22 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           updatedAt: Date.now(),
         };
         setCachedStoreSettings(fallbackSettings, slug);
+        syncCollectionsWithBackendHub({ settings: fallbackSettings }, slug).catch(() => {});
         return fallbackSettings;
       }
     }
 
+    if (hubSync?.settings) {
+      setCachedStoreSettings(hubSync.settings, slug);
+      return hubSync.settings;
+    }
     return getDefaultStoreSettingsForCompany(slug);
   } catch (error) {
-    const cached = getCachedStoreSettings(slug);
+    isQuotaOrNetworkError(error);
+    if (hubSync?.settings) {
+      setCachedStoreSettings(hubSync.settings, slug);
+      return hubSync.settings;
+    }
     if (cached) return cached;
     return getDefaultStoreSettingsForCompany(slug);
   }
@@ -2468,7 +2761,8 @@ export async function saveStoreSettingsToFirestore(
     payload.maxUsers = Math.max(0, Number(settings.maxUsers) || 0);
   }
 
-  setCachedStoreSettings( { ...settings, ...payload }, slug);
+  setCachedStoreSettings({ ...settings, ...payload }, slug);
+  syncCollectionsWithBackendHub({ settings: { ...settings, ...payload } }, slug).catch(() => {});
 
   try {
     await setDoc(docRef, payload, { merge: true });
@@ -2587,25 +2881,31 @@ export async function fetchSalesOnce(
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
-  const cached = getCachedSales(slug);
+  const cached = getCachedSales(slug) || [];
+  const hubSync = await syncCollectionsWithBackendHub({ sales: cached }, slug);
+  const baseSales = hubSync?.sales && hubSync.sales.length > 0 ? hubSync.sales : cached;
+
+  if (isFirestoreQuotaExhausted()) {
+    setCachedSales(baseSales, slug);
+    return baseSales;
+  }
+
   const scopedQuery = getScopedCollectionQuery('sales', slug);
   try {
     const snapshot = forceRefresh
       ? await getDocsFromServer(scopedQuery).catch(() => getDocs(scopedQuery))
       : await getDocs(scopedQuery);
     const records = parseSaleDocsFromSnapshot(snapshot, slug);
-    setCachedSales(records, slug);
-    return records;
+    const mergedHub = await syncCollectionsWithBackendHub({ sales: records }, slug);
+    const finalSales = mergedHub?.sales && mergedHub.sales.length > 0 ? mergedHub.sales : records;
+    setCachedSales(finalSales, slug);
+    return finalSales;
   } catch (error) {
-    try {
-      const cacheSnap = await getDocsFromCache(scopedQuery);
-      if (!cacheSnap.empty) {
-        const records = parseSaleDocsFromSnapshot(cacheSnap, slug);
-        setCachedSales(records, slug);
-        return records;
-      }
-    } catch {}
-    if (cached) return cached;
+    isQuotaOrNetworkError(error);
+    if (baseSales.length > 0) {
+      setCachedSales(baseSales, slug);
+      return baseSales;
+    }
     return [];
   }
 }
@@ -2616,25 +2916,21 @@ export function subscribeToSales(
   companyId = getActiveCompanyId()
 ) {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  if (isFirestoreQuotaExhausted()) {
+    return () => {};
+  }
   const scopedQuery = getScopedCollectionQuery('sales', slug);
   return onSnapshot(
     scopedQuery,
     (snapshot) => {
       const records = parseSaleDocsFromSnapshot(snapshot, slug);
       setCachedSales(records, slug);
+      syncCollectionsWithBackendHub({ sales: records }, slug).catch(() => {});
       onData(records);
     },
     async (error) => {
+      isQuotaOrNetworkError(error);
       if (onError) onError(error);
-      try {
-        const cacheSnap = await getDocsFromCache(scopedQuery);
-        if (!cacheSnap.empty) {
-          const records = parseSaleDocsFromSnapshot(cacheSnap, slug);
-          setCachedSales(records, slug);
-          onData(records);
-          return;
-        }
-      } catch {}
       const cached = getCachedSales(slug);
       if (cached) {
         onData(cached);
@@ -2710,7 +3006,9 @@ export async function recordSaleInFirestore(
     ...payload,
   };
   const prevSales = getCachedSales(slug) || [];
-  setCachedSales([createdRecord, ...prevSales.filter((s) => s.id !== saleId)], slug);
+  const nextSalesList = [createdRecord, ...prevSales.filter((s) => s.id !== saleId)];
+  setCachedSales(nextSalesList, slug);
+  syncCollectionsWithBackendHub({ sales: [createdRecord] }, slug).catch(() => {});
 
   try {
     // 1. Save the sale document first so billing never fails due to an inventory doc ID mismatch
@@ -3178,25 +3476,33 @@ export async function fetchPurchasesOnce(
   companyId = getActiveCompanyId()
 ): Promise<PurchaseInvoice[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
-  const cached = getCachedPurchases(slug);
+  const cached = getCachedPurchases(slug) || [];
+  const hubSync = await syncCollectionsWithBackendHub({ purchases: cached }, slug);
+  const basePurchases =
+    hubSync?.purchases && hubSync.purchases.length > 0 ? hubSync.purchases : cached;
+
+  if (isFirestoreQuotaExhausted()) {
+    setCachedPurchases(basePurchases, slug);
+    return basePurchases;
+  }
+
   const scopedQuery = getScopedCollectionQuery('purchases', slug);
   try {
     const snapshot = forceRefresh
       ? await getDocsFromServer(scopedQuery).catch(() => getDocs(scopedQuery))
       : await getDocs(scopedQuery);
     const records = parsePurchaseDocsFromSnapshot(snapshot, slug);
-    setCachedPurchases(records, slug);
-    return records;
+    const mergedHub = await syncCollectionsWithBackendHub({ purchases: records }, slug);
+    const finalPurchases =
+      mergedHub?.purchases && mergedHub.purchases.length > 0 ? mergedHub.purchases : records;
+    setCachedPurchases(finalPurchases, slug);
+    return finalPurchases;
   } catch (error) {
-    try {
-      const cacheSnap = await getDocsFromCache(scopedQuery);
-      if (!cacheSnap.empty) {
-        const records = parsePurchaseDocsFromSnapshot(cacheSnap, slug);
-        setCachedPurchases(records, slug);
-        return records;
-      }
-    } catch {}
-    if (cached) return cached;
+    isQuotaOrNetworkError(error);
+    if (basePurchases.length > 0) {
+      setCachedPurchases(basePurchases, slug);
+      return basePurchases;
+    }
     return [];
   }
 }
@@ -3207,25 +3513,21 @@ export function subscribeToPurchases(
   companyId = getActiveCompanyId()
 ) {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  if (isFirestoreQuotaExhausted()) {
+    return () => {};
+  }
   const scopedQuery = getScopedCollectionQuery('purchases', slug);
   return onSnapshot(
     scopedQuery,
     (snapshot) => {
       const records = parsePurchaseDocsFromSnapshot(snapshot, slug);
       setCachedPurchases(records, slug);
+      syncCollectionsWithBackendHub({ purchases: records }, slug).catch(() => {});
       onData(records);
     },
     async (error) => {
+      isQuotaOrNetworkError(error);
       if (onError) onError(error);
-      try {
-        const cacheSnap = await getDocsFromCache(scopedQuery);
-        if (!cacheSnap.empty) {
-          const records = parsePurchaseDocsFromSnapshot(cacheSnap, slug);
-          setCachedPurchases(records, slug);
-          onData(records);
-          return;
-        }
-      } catch {}
       const cached = getCachedPurchases(slug);
       if (cached) {
         onData(cached);
@@ -3281,6 +3583,7 @@ export async function recordPurchaseInFirestore(
   };
   const prevPurchases = getCachedPurchases(slug) || [];
   setCachedPurchases([createdInvoice, ...prevPurchases.filter((p) => p.id !== purchaseId)], slug);
+  syncCollectionsWithBackendHub({ purchases: [createdInvoice] }, slug).catch(() => {});
 
   try {
     await setDoc(purchaseRef, stripUndefinedDeep(invoicePayload));
@@ -4972,17 +5275,36 @@ export async function fetchStoreWarehousesOnce(
   companyId = getActiveCompanyId()
 ): Promise<StoreWarehousesData> {
   const slug = normalizeCompanySlug(companyId);
+  const cached = getCachedStoreWarehouses(slug);
+  const hubSync = await syncCollectionsWithBackendHub({ warehouses: cached }, slug);
+  if (isFirestoreQuotaExhausted()) {
+    if (hubSync?.warehouses) {
+      setCachedStoreWarehouses(hubSync.warehouses, slug);
+      return hubSync.warehouses;
+    }
+    return cached;
+  }
   try {
     const docRef = doc(db, 'settings', getWarehousesDocId(slug));
     const snap = await getDoc(docRef);
     if (snap.exists()) {
       const parsed = sanitizeWarehousesDoc(slug, snap.data());
       setCachedStoreWarehouses(parsed, slug);
+      syncCollectionsWithBackendHub({ warehouses: parsed }, slug).catch(() => {});
       return parsed;
     }
-    return getCachedStoreWarehouses(slug);
-  } catch {
-    return getCachedStoreWarehouses(slug);
+    if (hubSync?.warehouses) {
+      setCachedStoreWarehouses(hubSync.warehouses, slug);
+      return hubSync.warehouses;
+    }
+    return cached;
+  } catch (error) {
+    isQuotaOrNetworkError(error);
+    if (hubSync?.warehouses) {
+      setCachedStoreWarehouses(hubSync.warehouses, slug);
+      return hubSync.warehouses;
+    }
+    return cached;
   }
 }
 
@@ -4991,6 +5313,9 @@ export function subscribeToStoreWarehouses(
   companyId = getActiveCompanyId()
 ): () => void {
   const slug = normalizeCompanySlug(companyId);
+  if (isFirestoreQuotaExhausted()) {
+    return () => {};
+  }
   try {
     const docRef = doc(db, 'settings', getWarehousesDocId(slug));
     return onSnapshot(
@@ -4999,12 +5324,14 @@ export function subscribeToStoreWarehouses(
         if (snap.exists()) {
           const parsed = sanitizeWarehousesDoc(slug, snap.data());
           setCachedStoreWarehouses(parsed, slug);
+          syncCollectionsWithBackendHub({ warehouses: parsed }, slug).catch(() => {});
           onData(parsed);
         } else {
           onData(getCachedStoreWarehouses(slug));
         }
       },
       (err) => {
+        isQuotaOrNetworkError(err);
         console.warn('Store warehouses listener warning:', err);
       }
     );
@@ -5030,6 +5357,7 @@ export async function saveStoreWarehousesToFirestore(
   };
 
   setCachedStoreWarehouses(normalized, slug);
+  syncCollectionsWithBackendHub({ warehouses: normalized }, slug).catch(() => {});
 
   try {
     await setDoc(

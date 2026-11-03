@@ -23,7 +23,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '35mb' }));
+app.use(express.json({ limit: '80mb' }));
 
 // Initialize Google GenAI
 const apiKey = process.env.GEMINI_API_KEY || '';
@@ -375,6 +375,661 @@ try {
       ok: false,
       error: err?.message || 'No se pudo enviar el trabajo a la cola de impresión.',
     });
+  }
+});
+
+// ============================================================================
+// MOTOR DE SINCRONIZACIÓN MULTIDISPOSITIVO EN TIEMPO REAL (/api/cloud-sync/*)
+// Garantiza sincronización instantánea entre PC, Tablet y Móvil incluso cuando
+// la cuota diaria gratuita de lecturas de Firestore (50k/día) se agota.
+// ============================================================================
+
+const DATA_DIR = path.resolve(__dirname, '.data');
+const SYNC_DB_FILE = path.join(DATA_DIR, 'cloud_sync_db.json');
+
+interface ServerTenantStore {
+  companyId: string;
+  inventory: Record<string, any>;
+  explicitDeletedCodes: string[];
+  deletedCodes: string[];
+  deletedIds: string[];
+  suppliers: Record<string, any>;
+  purchases: Record<string, any>;
+  sales: Record<string, any>;
+  users: Record<string, any>;
+  warehouses: any | null;
+  settings: any | null;
+  posFinance: any | null;
+  updatedAt: number;
+}
+
+interface ServerSyncDatabase {
+  tenants: Record<string, ServerTenantStore>;
+  companies: Record<string, any>;
+  updatedAt: number;
+}
+
+const AUTO_GENERATED_SKU_SERVER_REGEX = /^[A-ZÑÁÉÍÓÚ0-9\s]{1,4}-\d{1,4}-\d{3}$/i;
+
+function isServerGyGAlias(raw?: string | null): boolean {
+  if (!raw) return false;
+  const c = String(raw)
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+  if (!c || c === 'gosen' || c === 'tiendagosen' || c === 'gosentienda') return false;
+  return (
+    c === 'tiendagyg' ||
+    c === 'comercialgyg' ||
+    c === 'gyg' ||
+    c === 'comercial' ||
+    c === 'comercialgyghn' ||
+    c === 'tiendacomercialgyg' ||
+    c === 'gygcomercial' ||
+    c.includes('tiendagyg') ||
+    c.includes('comercialgyg') ||
+    (c.includes('gyg') && (c.includes('comercial') || c.includes('tienda')))
+  );
+}
+
+function normalizeServerCompanySlug(raw?: string | null): string {
+  if (!raw) return 'gosen';
+  if (isServerGyGAlias(raw)) return 'tiendagyg';
+  const trimmed = String(raw)
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const slugified = trimmed.replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+  if (!slugified || slugified === 'tiendagosen' || slugified === 'tienda-gosen' || slugified === 'tienda_gosen') {
+    return 'gosen';
+  }
+  return slugified;
+}
+
+function normalizeNameForServerDedup(name?: string): string {
+  return String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function scoreServerProduct(item: any): number {
+  const rawCode = String(item?.code || '').trim();
+  let score = 0;
+  if (!AUTO_GENERATED_SKU_SERVER_REGEX.test(rawCode)) score += 600;
+  if (item?.img && String(item.img).trim().length > 5) score += 500;
+  if (/^\d{1,6}$/.test(rawCode)) score += 150;
+  if ((Number(item?.price) || 0) > 0) score += 40;
+  if ((Number(item?.cost) || 0) > 0) score += 20;
+  if ((Number(item?.stock) || 0) > 0) score += 10;
+  return score;
+}
+
+const syncDbMemory: ServerSyncDatabase = (() => {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(SYNC_DB_FILE)) {
+      const raw = fs.readFileSync(SYNC_DB_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && parsed.tenants) {
+        return parsed as ServerSyncDatabase;
+      }
+    }
+  } catch (err) {
+    console.warn('Could not load initial sync_db.json, starting fresh:', err);
+  }
+  return { tenants: {}, companies: {}, updatedAt: Date.now() };
+})();
+
+let saveSyncDbTimer: NodeJS.Timeout | null = null;
+function schedulePersistSyncDb(): void {
+  if (saveSyncDbTimer) return;
+  saveSyncDbTimer = setTimeout(() => {
+    saveSyncDbTimer = null;
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(SYNC_DB_FILE, JSON.stringify(syncDbMemory), 'utf-8');
+    } catch (err) {
+      console.warn('Could not persist cloud_sync_db.json:', err);
+    }
+  }, 250);
+}
+
+function getTenantStore(companyId?: string): ServerTenantStore {
+  const slug = normalizeServerCompanySlug(companyId);
+  if (!syncDbMemory.tenants[slug]) {
+    syncDbMemory.tenants[slug] = {
+      companyId: slug,
+      inventory: {},
+      explicitDeletedCodes: [],
+      deletedCodes: [],
+      deletedIds: [],
+      suppliers: {},
+      purchases: {},
+      sales: {},
+      users: {},
+      warehouses: null,
+      settings: null,
+      posFinance: null,
+      updatedAt: 0,
+    };
+  }
+  return syncDbMemory.tenants[slug];
+}
+
+function cleanAndDeduplicateTenantInventory(tenant: ServerTenantStore): any[] {
+  const isGyG = isServerGyGAlias(tenant.companyId);
+  const explicitSet = new Set(
+    (tenant.explicitDeletedCodes || []).map((c) => String(c || '').trim().toLowerCase()).filter(Boolean)
+  );
+
+  // Heal false-positive tombstones in Comercial GYG
+  if (isGyG) {
+    tenant.deletedCodes = (tenant.deletedCodes || []).filter((c) => {
+      const clean = String(c || '').trim().toLowerCase();
+      return clean && (explicitSet.has(clean) || AUTO_GENERATED_SKU_SERVER_REGEX.test(clean));
+    });
+  }
+
+  const deletedSet = new Set(
+    (tenant.deletedCodes || []).map((c) => String(c || '').trim().toLowerCase()).filter(Boolean)
+  );
+
+  for (const key of Object.keys(tenant.inventory)) {
+    if (explicitSet.has(key) || deletedSet.has(key)) {
+      delete tenant.inventory[key];
+    }
+  }
+
+  if (isGyG) {
+    const byNormName = new Map<string, any[]>();
+    for (const item of Object.values(tenant.inventory)) {
+      const normName = normalizeNameForServerDedup(item?.name);
+      if (!normName) continue;
+      const list = byNormName.get(normName) || [];
+      list.push(item);
+      byNormName.set(normName, list);
+    }
+
+    for (const [, group] of byNormName.entries()) {
+      if (group.length <= 1) continue;
+      group.sort((a, b) => scoreServerProduct(b) - scoreServerProduct(a));
+      const winner = group[0];
+      const winnerCode = String(winner?.code || '').trim();
+      const winnerKey = winnerCode.toLowerCase();
+      const winnerHasCustomSku = !AUTO_GENERATED_SKU_SERVER_REGEX.test(winnerCode);
+
+      for (let i = 1; i < group.length; i++) {
+        const cand = group[i];
+        const candCode = String(cand?.code || '').trim();
+        const candKey = candCode.toLowerCase();
+        if (AUTO_GENERATED_SKU_SERVER_REGEX.test(candCode) && winnerHasCustomSku) {
+          if (!winner.img && cand.img) {
+            winner.img = cand.img;
+            tenant.inventory[winnerKey] = winner;
+          }
+          delete tenant.inventory[candKey];
+          if (!deletedSet.has(candKey)) {
+            deletedSet.add(candKey);
+            tenant.deletedCodes.push(candKey);
+          }
+        }
+      }
+    }
+  }
+
+  const list = Object.values(tenant.inventory);
+  list.sort(
+    (a, b) =>
+      String(a?.name || '').localeCompare(String(b?.name || '')) ||
+      String(a?.code || '').localeCompare(String(b?.code || ''))
+  );
+  return list;
+}
+
+// 1. Lightweight status check for real-time cross-device polling
+app.get('/api/cloud-sync/status', (req, res) => {
+  const slug = normalizeServerCompanySlug(String(req.query.companyId || 'gosen'));
+  const tenant = getTenantStore(slug);
+  res.json({
+    ok: true,
+    companyId: slug,
+    updatedAt: tenant.updatedAt || 0,
+    inventoryCount: Object.keys(tenant.inventory).length,
+    purchasesCount: Object.keys(tenant.purchases).length,
+    salesCount: Object.keys(tenant.sales).length,
+    suppliersCount: Object.keys(tenant.suppliers).length,
+  });
+});
+
+// 2. Bidirectional Inventory Sync (merges client items + upserts + tombstones with server)
+app.post('/api/cloud-sync/inventory', (req, res) => {
+  try {
+    const {
+      companyId,
+      items = [],
+      upserts = {},
+      unsyncedCodes = [],
+      explicitDeletedCodes = [],
+      deletedCodes = [],
+      deletedIds = [],
+    } = req.body || {};
+
+    const slug = normalizeServerCompanySlug(companyId);
+    const tenant = getTenantStore(slug);
+    const isGyG = isServerGyGAlias(slug);
+    let changed = false;
+
+    const explicitSet = new Set(tenant.explicitDeletedCodes.map((c) => c.toLowerCase()));
+    if (Array.isArray(explicitDeletedCodes)) {
+      for (const raw of explicitDeletedCodes) {
+        const clean = String(raw || '').trim().toLowerCase();
+        if (clean && !explicitSet.has(clean)) {
+          explicitSet.add(clean);
+          tenant.explicitDeletedCodes.push(clean);
+          changed = true;
+        }
+      }
+    }
+
+    const delCodeSet = new Set(tenant.deletedCodes.map((c) => c.toLowerCase()));
+    if (Array.isArray(deletedCodes)) {
+      for (const raw of deletedCodes) {
+        const clean = String(raw || '').trim().toLowerCase();
+        if (!clean) continue;
+        if (isGyG && !explicitSet.has(clean) && !AUTO_GENERATED_SKU_SERVER_REGEX.test(clean)) {
+          continue;
+        }
+        if (!delCodeSet.has(clean)) {
+          delCodeSet.add(clean);
+          tenant.deletedCodes.push(clean);
+          changed = true;
+        }
+      }
+    }
+
+    const delIdSet = new Set(tenant.deletedIds);
+    if (Array.isArray(deletedIds)) {
+      for (const raw of deletedIds) {
+        const clean = String(raw || '').trim();
+        if (clean && !delIdSet.has(clean)) {
+          delIdSet.add(clean);
+          tenant.deletedIds.push(clean);
+        }
+      }
+    }
+
+    const unsyncedSet = new Set(
+      (Array.isArray(unsyncedCodes) ? unsyncedCodes : [])
+        .map((c) => String(c || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+
+    const mergeIncomingItem = (rawItem: any, isUpsert: boolean) => {
+      if (!rawItem || typeof rawItem !== 'object') return;
+      const code = String(rawItem.code || '').trim();
+      const name = String(rawItem.name || '').trim();
+      if (!code || !name) return;
+      const codeKey = code.toLowerCase();
+
+      // If this item is actively in the client's upserts/unsyncedCodes, un-tombstone it if it was not an auto-SKU
+      if (isUpsert && unsyncedSet.has(codeKey)) {
+        if (explicitSet.has(codeKey)) {
+          explicitSet.delete(codeKey);
+          tenant.explicitDeletedCodes = tenant.explicitDeletedCodes.filter((c) => c !== codeKey);
+        }
+        if (delCodeSet.has(codeKey)) {
+          delCodeSet.delete(codeKey);
+          tenant.deletedCodes = tenant.deletedCodes.filter((c) => c !== codeKey);
+        }
+      }
+
+      if (explicitSet.has(codeKey) || delCodeSet.has(codeKey)) {
+        return;
+      }
+
+      const existing = tenant.inventory[codeKey];
+      const incomingTs = Number(rawItem.updatedAt) || (isUpsert ? Date.now() : 0);
+      const existingTs = Number(existing?.updatedAt) || 0;
+
+      if (!existing) {
+        tenant.inventory[codeKey] = {
+          ...rawItem,
+          id: rawItem.id || `${slug === 'gosen' ? '' : `${slug}__`}${code.replace(/\//g, '_')}`,
+          companyId: slug,
+          code,
+          name,
+          category: String(rawItem.category || 'Otros').trim(),
+          supplier: String(rawItem.supplier || '').trim(),
+          size: String(rawItem.size || '').trim(),
+          cost: Number(rawItem.cost) || 0,
+          price: Number(rawItem.price) || 0,
+          stock: Number(rawItem.stock) || 0,
+          img: rawItem.img || '',
+          updatedAt: incomingTs || Date.now(),
+        };
+        changed = true;
+      } else {
+        const shouldPreferIncoming =
+          isUpsert ||
+          unsyncedSet.has(codeKey) ||
+          incomingTs > existingTs ||
+          (incomingTs === existingTs &&
+            (Number(rawItem.stock) !== Number(existing.stock) ||
+              Number(rawItem.price) !== Number(existing.price) ||
+              String(rawItem.name).trim() !== String(existing.name).trim() ||
+              (!existing.img && Boolean(rawItem.img))));
+
+        const winner = shouldPreferIncoming ? rawItem : existing;
+        const bestImg = rawItem.img || existing.img || '';
+        const bestWarehouseStocks =
+          (shouldPreferIncoming ? rawItem.warehouseStocks : existing.warehouseStocks) ||
+          rawItem.warehouseStocks ||
+          existing.warehouseStocks ||
+          undefined;
+
+        const mergedItem = {
+          ...existing,
+          ...winner,
+          id: winner.id || existing.id,
+          companyId: slug,
+          code: String(winner.code || code).trim(),
+          name: String(winner.name || name).trim(),
+          category: String(winner.category || existing.category || 'Otros').trim(),
+          supplier: String(winner.supplier ?? existing.supplier ?? '').trim(),
+          size: String(winner.size ?? existing.size ?? '').trim(),
+          cost: Number(winner.cost ?? existing.cost) || 0,
+          price: Number(winner.price ?? existing.price) || 0,
+          stock: Number(winner.stock ?? existing.stock) || 0,
+          ...(bestWarehouseStocks ? { warehouseStocks: bestWarehouseStocks } : {}),
+          img: bestImg,
+          updatedAt: Math.max(incomingTs, existingTs, 1),
+        };
+
+        if (
+          mergedItem.name !== existing.name ||
+          mergedItem.price !== existing.price ||
+          mergedItem.cost !== existing.cost ||
+          mergedItem.stock !== existing.stock ||
+          mergedItem.img !== existing.img ||
+          JSON.stringify(mergedItem.warehouseStocks || {}) !==
+            JSON.stringify(existing.warehouseStocks || {})
+        ) {
+          changed = true;
+        }
+        tenant.inventory[codeKey] = mergedItem;
+      }
+    };
+
+    if (Array.isArray(items)) {
+      for (const it of items) {
+        mergeIncomingItem(it, false);
+      }
+    }
+    if (upserts && typeof upserts === 'object') {
+      for (const upItem of Object.values(upserts)) {
+        mergeIncomingItem(upItem, true);
+      }
+    }
+
+    const mergedList = cleanAndDeduplicateTenantInventory(tenant);
+    if (changed || tenant.updatedAt === 0) {
+      tenant.updatedAt = Date.now();
+      syncDbMemory.updatedAt = tenant.updatedAt;
+      schedulePersistSyncDb();
+    }
+
+    return res.json({
+      ok: true,
+      companyId: slug,
+      items: mergedList,
+      explicitDeletedCodes: tenant.explicitDeletedCodes,
+      deletedCodes: tenant.deletedCodes,
+      deletedIds: tenant.deletedIds,
+      updatedAt: tenant.updatedAt,
+    });
+  } catch (err: any) {
+    console.error('Error in /api/cloud-sync/inventory:', err);
+    return res.status(500).json({ ok: false, error: err?.message || 'Sync error' });
+  }
+});
+
+// 3. Direct Single/Bulk Product Save on Server
+app.post('/api/cloud-sync/product-save', (req, res) => {
+  try {
+    const { companyId, product, products, oldCode } = req.body || {};
+    const slug = normalizeServerCompanySlug(companyId);
+    const tenant = getTenantStore(slug);
+    const now = Date.now();
+
+    if (oldCode) {
+      const cleanOld = String(oldCode).trim().toLowerCase();
+      const cleanNew = String(product?.code || '').trim().toLowerCase();
+      if (cleanOld && cleanOld !== cleanNew) {
+        delete tenant.inventory[cleanOld];
+        if (!tenant.explicitDeletedCodes.includes(cleanOld)) {
+          tenant.explicitDeletedCodes.push(cleanOld);
+        }
+        if (!tenant.deletedCodes.includes(cleanOld)) {
+          tenant.deletedCodes.push(cleanOld);
+        }
+      }
+    }
+
+    const listToSave = Array.isArray(products) ? products : product ? [product] : [];
+    for (const p of listToSave) {
+      if (!p || !p.code) continue;
+      const cleanCode = String(p.code).trim();
+      const codeKey = cleanCode.toLowerCase();
+      tenant.explicitDeletedCodes = tenant.explicitDeletedCodes.filter((c) => c !== codeKey);
+      tenant.deletedCodes = tenant.deletedCodes.filter((c) => c !== codeKey);
+      const prev = tenant.inventory[codeKey];
+      tenant.inventory[codeKey] = {
+        ...(prev || {}),
+        ...p,
+        companyId: slug,
+        code: cleanCode,
+        name: String(p.name || prev?.name || '').trim(),
+        img: p.img || prev?.img || '',
+        updatedAt: now,
+      };
+    }
+
+    const mergedList = cleanAndDeduplicateTenantInventory(tenant);
+    tenant.updatedAt = now;
+    syncDbMemory.updatedAt = now;
+    schedulePersistSyncDb();
+
+    return res.json({ ok: true, count: mergedList.length, updatedAt: now });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message || 'Product save error' });
+  }
+});
+
+// 4. Direct Product Delete on Server
+app.post('/api/cloud-sync/product-delete', (req, res) => {
+  try {
+    const { companyId, id, code } = req.body || {};
+    const slug = normalizeServerCompanySlug(companyId);
+    const tenant = getTenantStore(slug);
+    const rawCode =
+      code ||
+      (typeof id === 'string' && id.includes('__') ? id.split('__').slice(1).join('__') : id) ||
+      '';
+    const cleanCode = String(rawCode).trim().toLowerCase();
+
+    if (cleanCode) {
+      delete tenant.inventory[cleanCode];
+      if (!tenant.explicitDeletedCodes.includes(cleanCode)) {
+        tenant.explicitDeletedCodes.push(cleanCode);
+      }
+      if (!tenant.deletedCodes.includes(cleanCode)) {
+        tenant.deletedCodes.push(cleanCode);
+      }
+    }
+    if (id && !tenant.deletedIds.includes(String(id).trim())) {
+      tenant.deletedIds.push(String(id).trim());
+    }
+
+    tenant.updatedAt = Date.now();
+    syncDbMemory.updatedAt = tenant.updatedAt;
+    schedulePersistSyncDb();
+
+    return res.json({ ok: true, updatedAt: tenant.updatedAt });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message || 'Product delete error' });
+  }
+});
+
+// 5. Bidirectional Sync for Secondary Collections (purchases, suppliers, sales, warehouses, settings, users)
+app.post('/api/cloud-sync/collections', (req, res) => {
+  try {
+    const {
+      companyId,
+      suppliers,
+      purchases,
+      sales,
+      users,
+      warehouses,
+      settings,
+      posFinance,
+      companies,
+      deleteSupplierId,
+      deletePurchaseId,
+      deleteSaleId,
+      deleteUserId,
+    } = req.body || {};
+
+    const slug = normalizeServerCompanySlug(companyId);
+    const tenant = getTenantStore(slug);
+    let changed = false;
+
+    if (deleteSupplierId) {
+      delete tenant.suppliers[String(deleteSupplierId)];
+      changed = true;
+    }
+    if (deletePurchaseId) {
+      delete tenant.purchases[String(deletePurchaseId)];
+      changed = true;
+    }
+    if (deleteSaleId) {
+      delete tenant.sales[String(deleteSaleId)];
+      changed = true;
+    }
+    if (deleteUserId) {
+      delete tenant.users[String(deleteUserId)];
+      changed = true;
+    }
+
+    const mergeRecordList = (
+      targetMap: Record<string, any>,
+      incomingList: any[] | undefined,
+      idField = 'id'
+    ) => {
+      if (!Array.isArray(incomingList)) return;
+      for (const item of incomingList) {
+        if (!item || typeof item !== 'object') continue;
+        const id = String(item[idField] || item.code || item.invoiceNumber || item.saleNumber || '').trim();
+        if (!id) continue;
+        const prev = targetMap[id];
+        const incTs = Number(item.updatedAt || item.timestamp || 0);
+        const prevTs = Number(prev?.updatedAt || prev?.timestamp || 0);
+        if (!prev || incTs >= prevTs || item.status !== prev.status) {
+          targetMap[id] = { ...(prev || {}), ...item, companyId: slug };
+          changed = true;
+        }
+      }
+    };
+
+    mergeRecordList(tenant.suppliers, suppliers);
+    mergeRecordList(tenant.purchases, purchases);
+    mergeRecordList(tenant.sales, sales);
+    mergeRecordList(tenant.users, users);
+
+    if (warehouses && typeof warehouses === 'object') {
+      const incTs = Number(warehouses.updatedAt || 0);
+      const prevTs = Number(tenant.warehouses?.updatedAt || 0);
+      if (
+        !tenant.warehouses ||
+        incTs >= prevTs ||
+        (Array.isArray(warehouses.transfers) &&
+          warehouses.transfers.length > (tenant.warehouses.transfers?.length || 0)) ||
+        (Array.isArray(warehouses.warehouses) &&
+          warehouses.warehouses.length !== (tenant.warehouses.warehouses?.length || 0))
+      ) {
+        tenant.warehouses = { ...warehouses, companyId: slug };
+        changed = true;
+      }
+    }
+
+    if (settings && typeof settings === 'object') {
+      const incTs = Number(settings.updatedAt || 0);
+      const prevTs = Number(tenant.settings?.updatedAt || 0);
+      if (!tenant.settings || incTs >= prevTs) {
+        tenant.settings = { ...settings, companyId: slug };
+        changed = true;
+      }
+    }
+
+    if (posFinance && typeof posFinance === 'object') {
+      const incTs = Number(posFinance.updatedAt || 0);
+      const prevTs = Number(tenant.posFinance?.updatedAt || 0);
+      if (!tenant.posFinance || incTs >= prevTs) {
+        tenant.posFinance = { ...posFinance, companyId: slug };
+        changed = true;
+      }
+    }
+
+    if (Array.isArray(companies)) {
+      for (const comp of companies) {
+        if (comp && comp.slug) {
+          const cSlug = normalizeServerCompanySlug(comp.slug);
+          syncDbMemory.companies[cSlug] = { ...(syncDbMemory.companies[cSlug] || {}), ...comp };
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      tenant.updatedAt = Date.now();
+      syncDbMemory.updatedAt = tenant.updatedAt;
+      schedulePersistSyncDb();
+    }
+
+    return res.json({
+      ok: true,
+      companyId: slug,
+      suppliers: Object.values(tenant.suppliers).sort((a, b) =>
+        String(a.name || '').localeCompare(String(b.name || ''))
+      ),
+      purchases: Object.values(tenant.purchases).sort(
+        (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+      ),
+      sales: Object.values(tenant.sales).sort(
+        (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+      ),
+      users: Object.values(tenant.users).sort((a, b) =>
+        String(a.name || '').localeCompare(String(b.name || ''))
+      ),
+      warehouses: tenant.warehouses,
+      settings: tenant.settings,
+      posFinance: tenant.posFinance,
+      companies: Object.values(syncDbMemory.companies),
+      updatedAt: tenant.updatedAt,
+    });
+  } catch (err: any) {
+    console.error('Error in /api/cloud-sync/collections:', err);
+    return res.status(500).json({ ok: false, error: err?.message || 'Collections sync error' });
   }
 });
 

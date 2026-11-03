@@ -110,7 +110,9 @@ import {
   getDefaultWarehousesForStore,
   applyWarehouseStockDelta,
   seedInitialDataIfEmpty,
-  pingFirestore
+  pingFirestore,
+  fetchBackendSyncStatus,
+  pushProductSaveToBackendHub
 } from './firebase/firestoreService';
 import {
   Database,
@@ -999,26 +1001,57 @@ export const App: React.FC = () => {
     loadTabDependencies();
   }, [activeTab, isAuthenticated, isPublicCatalogMode, activeCompanyId]);
 
-  // 4. Lightweight 1-Read Sync Check When Returning to Tab After > 5 Minutes
+  // 4. Real-Time Multi-Device Sync Polling (every 6s + on tab focus, 0 Firestore reads!)
+  const lastHubUpdatedAtRef = useRef<number>(0);
   useEffect(() => {
+    let isMounted = true;
+    lastHubUpdatedAtRef.current = 0;
+
+    const checkHubUpdates = async (force = false) => {
+      try {
+        const status = await fetchBackendSyncStatus(activeCompanyId);
+        if (!isMounted || !status?.ok) return;
+        const serverTs = Number(status.updatedAt || 0);
+        if (force || (serverTs > 0 && serverTs > lastHubUpdatedAtRef.current)) {
+          const isInitial = lastHubUpdatedAtRef.current === 0;
+          lastHubUpdatedAtRef.current = serverTs;
+          if (!isInitial || force) {
+            const [invRes, freshWarehouses, freshPurchases, freshSuppliers] = await Promise.all([
+              fetchInventorySmart(false, activeCompanyId),
+              fetchStoreWarehousesOnce(activeCompanyId),
+              fetchPurchasesOnce(false, activeCompanyId),
+              fetchSuppliersOnce(false, activeCompanyId),
+            ]);
+            if (!isMounted) return;
+            setInventory(invRes.items);
+            setWarehousesData(freshWarehouses);
+            setPurchases(freshPurchases);
+            setSuppliers(freshSuppliers);
+            setLastSyncTime(new Date());
+          }
+        }
+      } catch {}
+    };
+
+    checkHubUpdates(false);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        checkHubUpdates(false);
+      }
+    }, 6000);
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        const elapsed = Date.now() - lastVisibilityCheckRef.current;
-        if (elapsed > 5 * 60 * 1000) {
-          lastVisibilityCheckRef.current = Date.now();
-          fetchInventorySmart(false, activeCompanyId)
-            .then((res) => {
-              if (!res.fromCache) {
-                setInventory(res.items);
-                setLastSyncTime(new Date());
-              }
-            })
-            .catch(() => {});
-        }
+        lastVisibilityCheckRef.current = Date.now();
+        checkHubUpdates(true);
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [activeCompanyId]);
 
   // Manual Cloud Sync Button Handler
@@ -1655,11 +1688,14 @@ export const App: React.FC = () => {
             saleData.warehouseId,
             warehousesData.warehouses
           );
-          return {
+          const updatedProd: Product = {
             ...prod,
             stock: newStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           };
+          recordLocalProductSave(updatedProd, prod.code, activeCompanyId);
+          pushProductSaveToBackendHub(updatedProd, prod.code, activeCompanyId).catch(() => {});
+          return updatedProd;
         });
         setCachedInventory(nextInv, Date.now(), activeCompanyId);
         return nextInv;
@@ -1934,6 +1970,7 @@ export const App: React.FC = () => {
               supplier: existing.supplier || purchaseData.supplierName,
             };
             recordLocalProductSave(updatedProd, existing.code, activeCompanyId);
+            pushProductSaveToBackendHub(updatedProd, existing.code, activeCompanyId).catch(() => {});
             map.set(key, updatedProd);
           } else {
             const initialWhStocks: Record<string, number> = {};
@@ -1958,6 +1995,7 @@ export const App: React.FC = () => {
               img: '',
             };
             recordLocalProductSave(newProd, undefined, activeCompanyId);
+            pushProductSaveToBackendHub(newProd, undefined, activeCompanyId).catch(() => {});
             map.set(key, newProd);
           }
         });
