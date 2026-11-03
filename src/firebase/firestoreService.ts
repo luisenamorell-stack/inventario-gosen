@@ -358,6 +358,7 @@ const BASE_CACHE_KEYS = {
   INVENTORY: 'stockmaster_cached_inventory_v1',
   INVENTORY_TS: 'stockmaster_inventory_sync_ts_v1',
   INVENTORY_MUTATIONS: 'stockmaster_inventory_mutations_v1',
+  INVENTORY_TOMBSTONES: 'stockmaster_inventory_tombstones_v1',
   SUPPLIERS: 'stockmaster_cached_suppliers_v1',
   SALES: 'stockmaster_cached_sales_v1',
   PURCHASES: 'stockmaster_cached_purchases_v1',
@@ -443,6 +444,26 @@ export async function saveInventoryToIndexedDB(
   });
 }
 
+async function saveMutationsToIndexedDB(
+  mutations: PendingInventoryMutations,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const idb = await openInventoryIdb();
+  if (!idb) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = idb.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      store.put(mutations, `mut_${slug}`);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
 export async function loadInventoryFromIndexedDB(
   companyId = getActiveCompanyId()
 ): Promise<Product[] | null> {
@@ -453,9 +474,60 @@ export async function loadInventoryFromIndexedDB(
     try {
       const tx = idb.transaction(IDB_STORE, 'readonly');
       const store = tx.objectStore(IDB_STORE);
-      const req = store.get(`inv_${slug}`);
-      req.onsuccess = () => {
-        const result = Array.isArray(req.result) ? (req.result as Product[]) : null;
+      const reqInv = store.get(`inv_${slug}`);
+      const reqMut = store.get(`mut_${slug}`);
+
+      tx.oncomplete = () => {
+        const idbMut = reqMut.result as PendingInventoryMutations | undefined;
+        if (idbMut && typeof idbMut === 'object') {
+          const currentMut = getPendingMutations(slug);
+          const mergedDeletedCodes = Array.from(
+            new Set([
+              ...(currentMut.deletedCodes || []),
+              ...(idbMut.deletedCodes || []),
+            ].map((c) => String(c || '').trim().toLowerCase()).filter(Boolean))
+          );
+          const mergedDeletedIds = Array.from(
+            new Set([
+              ...(currentMut.deletedIds || []),
+              ...(idbMut.deletedIds || []),
+            ].map((id) => String(id || '').trim()).filter(Boolean))
+          );
+          const deletedSet = new Set(mergedDeletedCodes);
+          const mergedUpserts: Record<string, Product> = {};
+
+          for (const [k, v] of Object.entries(idbMut.upserts || {})) {
+            const cleanK = k.trim().toLowerCase();
+            if (deletedSet.has(cleanK)) continue;
+            if (v?.img) {
+              memoryImageMap.set(`${slug}__${cleanK}`, v.img);
+            }
+            mergedUpserts[cleanK] = v;
+          }
+          for (const [k, v] of Object.entries(currentMut.upserts || {})) {
+            const cleanK = k.trim().toLowerCase();
+            if (deletedSet.has(cleanK)) continue;
+            const existingUpsert = mergedUpserts[cleanK];
+            const bestImg = v?.img || existingUpsert?.img || memoryImageMap.get(`${slug}__${cleanK}`) || '';
+            if (bestImg) {
+              memoryImageMap.set(`${slug}__${cleanK}`, bestImg);
+            }
+            mergedUpserts[cleanK] = {
+              ...(existingUpsert || {}),
+              ...v,
+              img: bestImg,
+            };
+          }
+
+          memoryPendingMutations.set(slug, {
+            upserts: mergedUpserts,
+            deletedCodes: mergedDeletedCodes,
+            deletedIds: mergedDeletedIds,
+            updatedAt: Math.max(currentMut.updatedAt || 0, idbMut.updatedAt || 0),
+          });
+        }
+
+        const result = Array.isArray(reqInv.result) ? (reqInv.result as Product[]) : null;
         if (result && result.length > 0) {
           result.forEach((p) => {
             if (p.img) {
@@ -466,10 +538,16 @@ export async function loadInventoryFromIndexedDB(
           memoryInventoryCache.set(slug, merged);
           resolve(merged);
         } else {
-          resolve(null);
+          const fromMutOnly = applyPendingMutationsToInventory([], slug);
+          if (fromMutOnly.length > 0) {
+            memoryInventoryCache.set(slug, fromMutOnly);
+            resolve(fromMutOnly);
+          } else {
+            resolve(null);
+          }
         }
       };
-      req.onerror = () => resolve(null);
+      tx.onerror = () => resolve(null);
     } catch {
       resolve(null);
     }
@@ -483,20 +561,93 @@ interface PendingInventoryMutations {
   updatedAt: number;
 }
 
+interface InventoryTombstones {
+  deletedCodes: string[];
+  deletedIds: string[];
+  updatedAt: number;
+}
+
 const memoryPendingMutations = new Map<string, PendingInventoryMutations>();
+
+// Matches auto-generated SKUs from BulkStockImportModal / InventoryView (e.g., SIL-71-735, MES-12-409)
+const AUTO_GENERATED_SKU_REGEX = /^[A-ZÑÁÉÍÓÚ0-9\s]{1,4}-\d{1,4}-\d{3}$/i;
+
+function normalizeProductNameForDedup(name: string): string {
+  return (name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
 
 function getPendingMutations(companyId = getActiveCompanyId()): PendingInventoryMutations {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const mem = memoryPendingMutations.get(slug);
   if (mem) return mem;
+
   const stored = safeReadCache<PendingInventoryMutations>(
     getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_MUTATIONS, slug)
   );
-  const initial: PendingInventoryMutations = stored || {
-    upserts: {},
-    deletedCodes: [],
-    deletedIds: [],
-    updatedAt: 0,
+  const tombstones = safeReadCache<InventoryTombstones>(
+    getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TOMBSTONES, slug)
+  );
+
+  const deletedCodesSet = new Set<string>();
+  const deletedIdsSet = new Set<string>();
+
+  const addCodes = (arr?: string[]) => {
+    if (!Array.isArray(arr)) return;
+    arr.forEach((c) => {
+      const clean = String(c || '').trim().toLowerCase();
+      if (clean) deletedCodesSet.add(clean);
+    });
+  };
+  const addIds = (arr?: string[]) => {
+    if (!Array.isArray(arr)) return;
+    arr.forEach((id) => {
+      const clean = String(id || '').trim();
+      if (clean) deletedIdsSet.add(clean);
+    });
+  };
+
+  addCodes(stored?.deletedCodes);
+  addCodes(tombstones?.deletedCodes);
+  addIds(stored?.deletedIds);
+  addIds(tombstones?.deletedIds);
+
+  // Also merge any legacy GYG alias tombstones/mutations so deletions across alias switches are preserved
+  if (isGyGAlias(slug)) {
+    for (const alias of ['comercial-gyg', 'comercialgyg', 'gyg']) {
+      const aliasMut = safeReadCache<PendingInventoryMutations>(
+        `${BASE_CACHE_KEYS.INVENTORY_MUTATIONS}__${alias}`
+      );
+      const aliasTomb = safeReadCache<InventoryTombstones>(
+        `${BASE_CACHE_KEYS.INVENTORY_TOMBSTONES}__${alias}`
+      );
+      addCodes(aliasMut?.deletedCodes);
+      addCodes(aliasTomb?.deletedCodes);
+      addIds(aliasMut?.deletedIds);
+      addIds(aliasTomb?.deletedIds);
+    }
+  }
+
+  const cleanUpserts: Record<string, Product> = {};
+  if (stored?.upserts && typeof stored.upserts === 'object') {
+    for (const [k, v] of Object.entries(stored.upserts)) {
+      const cleanK = k.trim().toLowerCase();
+      if (!deletedCodesSet.has(cleanK) && v) {
+        cleanUpserts[cleanK] = v;
+      }
+    }
+  }
+
+  const initial: PendingInventoryMutations = {
+    upserts: cleanUpserts,
+    deletedCodes: Array.from(deletedCodesSet),
+    deletedIds: Array.from(deletedIdsSet),
+    updatedAt: Math.max(stored?.updatedAt || 0, tombstones?.updatedAt || 0),
   };
   memoryPendingMutations.set(slug, initial);
   return initial;
@@ -505,6 +656,26 @@ function getPendingMutations(companyId = getActiveCompanyId()): PendingInventory
 function savePendingMutations(mutations: PendingInventoryMutations, companyId = getActiveCompanyId()): void {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   memoryPendingMutations.set(slug, mutations);
+
+  // 1. Always persist lightweight tombstones FIRST so deleted SKUs/IDs never fail on 5MB localStorage quota
+  const tombstoneKey = getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_TOMBSTONES, slug);
+  const tombstonePayload: InventoryTombstones = {
+    deletedCodes: mutations.deletedCodes,
+    deletedIds: mutations.deletedIds,
+    updatedAt: mutations.updatedAt,
+  };
+  if (!safeWriteCache(tombstoneKey, tombstonePayload)) {
+    try {
+      localStorage.removeItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, slug));
+      localStorage.removeItem(getScopedCacheKey(BASE_CACHE_KEYS.SALES, slug));
+      safeWriteCache(tombstoneKey, tombstonePayload);
+    } catch {}
+  }
+
+  // 2. Persist full mutations (including full images and tombstones) to IndexedDB asynchronously
+  saveMutationsToIndexedDB(mutations, slug).catch(() => {});
+
+  // 3. Persist lightweight mutations to localStorage
   const lightUpserts: Record<string, Product> = {};
   for (const [k, v] of Object.entries(mutations.upserts)) {
     if (v.img) {
@@ -541,14 +712,48 @@ export function recordLocalProductSave(
     }
   }
 
+  // If product.id had an embedded old code (e.g. tiendagyg__SIL-71-735), also tombstone that old code
+  if (product.id && product.id.includes('__')) {
+    const idEmbeddedCode = product.id.split('__').slice(1).join('__').trim().toLowerCase();
+    if (idEmbeddedCode && idEmbeddedCode !== cleanNew) {
+      delete mut.upserts[idEmbeddedCode];
+      if (!mut.deletedCodes.includes(idEmbeddedCode)) {
+        mut.deletedCodes.push(idEmbeddedCode);
+      }
+      if (!mut.deletedIds.includes(product.id)) {
+        mut.deletedIds.push(product.id);
+      }
+    }
+  }
+
+  // In Comercial GYG, if an older auto-generated SKU exists for this exact product name, tombstone it
+  if (isGyGAlias(slug) && product.name) {
+    const targetNormName = normalizeProductNameForDedup(product.name);
+    if (targetNormName) {
+      for (const [upCode, upProd] of Object.entries(mut.upserts)) {
+        if (
+          upCode !== cleanNew &&
+          normalizeProductNameForDedup(upProd.name) === targetNormName &&
+          AUTO_GENERATED_SKU_REGEX.test(upProd.code || upCode)
+        ) {
+          delete mut.upserts[upCode];
+          if (!mut.deletedCodes.includes(upCode)) {
+            mut.deletedCodes.push(upCode);
+          }
+        }
+      }
+    }
+  }
+
   mut.deletedCodes = mut.deletedCodes.filter((c) => c !== cleanNew);
-  mut.deletedIds = mut.deletedIds.filter((id) => id !== product.id);
+  const newScopedId = getScopedDocId(product.code, slug);
+  mut.deletedIds = mut.deletedIds.filter((id) => id !== newScopedId);
   if (product.img) {
     memoryImageMap.set(`${slug}__${cleanNew}`, product.img);
   }
   mut.upserts[cleanNew] = {
     ...product,
-    id: getScopedDocId(product.code, slug),
+    id: newScopedId,
     companyId: slug,
     code: product.code.trim(),
     name: product.name.trim(),
@@ -566,11 +771,11 @@ export function recordLocalProductDelete(
 ): void {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const mut = getPendingMutations(slug);
-  const cleanCode = (
-    code || (id.includes('__') ? id.split('__').slice(1).join('__') : id)
-  )
-    .trim()
-    .toLowerCase();
+  const trimmedId = (id || '').trim();
+  const extractedFromId = trimmedId.includes('__')
+    ? trimmedId.split('__').slice(1).join('__').trim()
+    : trimmedId;
+  const cleanCode = (code || extractedFromId).trim().toLowerCase();
 
   if (cleanCode) {
     delete mut.upserts[cleanCode];
@@ -578,11 +783,102 @@ export function recordLocalProductDelete(
       mut.deletedCodes.push(cleanCode);
     }
   }
-  if (id && !mut.deletedIds.includes(id.trim())) {
-    mut.deletedIds.push(id.trim());
+  if (extractedFromId && extractedFromId.toLowerCase() !== cleanCode) {
+    const lowerExtracted = extractedFromId.toLowerCase();
+    delete mut.upserts[lowerExtracted];
+    if (!mut.deletedCodes.includes(lowerExtracted)) {
+      mut.deletedCodes.push(lowerExtracted);
+    }
   }
+
+  const rawCodeForIds = (code || extractedFromId).trim();
+  const candidateIds = new Set<string>();
+  if (trimmedId) candidateIds.add(trimmedId);
+  if (rawCodeForIds) {
+    candidateIds.add(getScopedDocId(rawCodeForIds, slug));
+    candidateIds.add(`${slug}__${rawCodeForIds}`);
+    candidateIds.add(rawCodeForIds);
+    if (isGyGAlias(slug)) {
+      candidateIds.add(`tiendagyg__${rawCodeForIds}`);
+      candidateIds.add(`comercial-gyg__${rawCodeForIds}`);
+      candidateIds.add(`comercialgyg__${rawCodeForIds}`);
+      candidateIds.add(`comercial_gyg__${rawCodeForIds}`);
+      candidateIds.add(`gyg__${rawCodeForIds}`);
+    }
+  }
+  for (const cid of candidateIds) {
+    if (cid && !mut.deletedIds.includes(cid)) {
+      mut.deletedIds.push(cid);
+    }
+  }
+
   mut.updatedAt = Date.now();
   savePendingMutations(mut, slug);
+}
+
+function scoreCanonicalGyGProduct(item: Product, upserts: Record<string, Product>): number {
+  const codeKey = (item.code || '').trim().toLowerCase();
+  const rawCode = (item.code || '').trim();
+  let score = 0;
+  // 1. Explicitly saved/edited in local upserts
+  if (upserts[codeKey]) score += 1000;
+  // 2. Has product image (valid Comercial GYG articles have their custom SKU + image)
+  if (item.img && item.img.trim().length > 5) score += 500;
+  // 3. Not an auto-generated bulk SKU (e.g. not SIL-71-735)
+  if (!AUTO_GENERATED_SKU_REGEX.test(rawCode)) score += 300;
+  // 4. Short numeric or clean custom SKU (e.g. 001..999)
+  if (/^\d{1,5}$/.test(rawCode)) score += 150;
+  // 5. Has commercial data
+  if ((Number(item.price) || 0) > 0) score += 40;
+  if ((Number(item.cost) || 0) > 0) score += 20;
+  if ((Number(item.stock) || 0) > 0) score += 10;
+  return score;
+}
+
+const pendingOrphanCleanupInFlight = new Set<string>();
+
+function scheduleOrphanCleanupInFirestore(slug: string, orphanItems: Product[]): void {
+  if (orphanItems.length === 0) return;
+  const toClean = orphanItems.filter((item) => {
+    const key = `${slug}__${(item.code || '').trim().toLowerCase()}`;
+    if (pendingOrphanCleanupInFlight.has(key)) return false;
+    pendingOrphanCleanupInFlight.add(key);
+    return true;
+  });
+  if (toClean.length === 0) return;
+
+  Promise.resolve().then(async () => {
+    try {
+      const batch = writeBatch(db);
+      let count = 0;
+      for (const item of toClean) {
+        const cleanCode = (item.code || '').trim();
+        if (!cleanCode) continue;
+        const ids = new Set<string>([
+          item.id,
+          getScopedDocId(cleanCode, slug),
+          `${slug}__${cleanCode}`,
+          cleanCode,
+          `tiendagyg__${cleanCode}`,
+          `comercial-gyg__${cleanCode}`,
+          `comercialgyg__${cleanCode}`,
+          `comercial_gyg__${cleanCode}`,
+          `gyg__${cleanCode}`,
+        ]);
+        for (const docId of ids) {
+          if (docId && count < 450) {
+            batch.delete(doc(db, 'inventory', docId));
+            count++;
+          }
+        }
+      }
+      if (count > 0) {
+        await batch.commit();
+      }
+    } catch {
+      // Ignore if offline or quota temporarily exceeded; tombstones keep them suppressed locally
+    }
+  });
 }
 
 export function applyPendingMutationsToInventory(
@@ -599,16 +895,41 @@ export function applyPendingMutationsToInventory(
   for (const item of items) {
     const codeKey = (item.code || '').trim().toLowerCase();
     if (!codeKey) continue;
-    if (deletedCodeSet.has(codeKey) || (item.id && deletedIdSet.has(item.id))) {
+    const idEmbeddedCode =
+      item.id && item.id.includes('__')
+        ? item.id.split('__').slice(1).join('__').trim().toLowerCase()
+        : '';
+
+    if (
+      deletedCodeSet.has(codeKey) ||
+      (idEmbeddedCode && deletedCodeSet.has(idEmbeddedCode)) ||
+      (item.id && deletedIdSet.has(item.id))
+    ) {
       continue;
     }
     const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
-    byCode.set(codeKey, {
-      ...item,
-      category: (item.category || 'Otros').trim(),
-      supplier: (item.supplier || '').trim(),
-      img: item.img || memImg || '',
-    });
+    const existing = byCode.get(codeKey);
+    if (existing) {
+      // If duplicate codeKey exists from multiple companyId aliases, keep the richer record without summing stock
+      const pickNew =
+        scoreCanonicalGyGProduct(item, mut.upserts) >=
+        scoreCanonicalGyGProduct(existing, mut.upserts);
+      const chosen = pickNew ? item : existing;
+      const fallbackImg = item.img || existing.img || memImg || '';
+      byCode.set(codeKey, {
+        ...chosen,
+        category: (chosen.category || 'Otros').trim(),
+        supplier: (chosen.supplier || '').trim(),
+        img: chosen.img || fallbackImg,
+      });
+    } else {
+      byCode.set(codeKey, {
+        ...item,
+        category: (item.category || 'Otros').trim(),
+        supplier: (item.supplier || '').trim(),
+        img: item.img || memImg || '',
+      });
+    }
   }
 
   for (const [codeKey, upserted] of Object.entries(mut.upserts)) {
@@ -622,6 +943,78 @@ export function applyPendingMutationsToInventory(
       supplier: (upserted.supplier ?? existing?.supplier ?? '').trim(),
       img: upserted.img || memImg || existing?.img || '',
     });
+  }
+
+  // Smart Deduplication for Comercial GYG:
+  // Suppress orphaned auto-generated SKUs (e.g. SIL-71-735 for "SILLA SIN BRAZO PRIMA")
+  // when the product already exists under its new SKU / with its image.
+  if (isGyGAlias(slug)) {
+    const byNormName = new Map<string, Product[]>();
+    for (const item of byCode.values()) {
+      const normName = normalizeProductNameForDedup(item.name);
+      if (!normName) continue;
+      const list = byNormName.get(normName) || [];
+      list.push(item);
+      byNormName.set(normName, list);
+    }
+
+    let mutationsUpdated = false;
+    const newlyDetectedOrphans: Product[] = [];
+
+    for (const [, group] of byNormName.entries()) {
+      if (group.length <= 1) continue;
+
+      // Sort highest-scoring canonical item first
+      group.sort(
+        (a, b) =>
+          scoreCanonicalGyGProduct(b, mut.upserts) -
+          scoreCanonicalGyGProduct(a, mut.upserts)
+      );
+
+      const winner = group[0];
+      const winnerCodeKey = (winner.code || '').trim().toLowerCase();
+      const winnerSize = (winner.size || '').trim().toLowerCase();
+
+      for (let i = 1; i < group.length; i++) {
+        const candidate = group[i];
+        const candCode = (candidate.code || '').trim();
+        const candCodeKey = candCode.toLowerCase();
+        const candSize = (candidate.size || '').trim().toLowerCase();
+        const isAutoGeneratedSku = AUTO_GENERATED_SKU_REGEX.test(candCode);
+        const isSameOrEmptySize =
+          !candSize || !winnerSize || candSize === winnerSize;
+
+        // If the duplicate has an auto-generated bulk SKU (like SIL-71-735) or shares the same size
+        // while the winner has a better SKU/image, suppress and tombstone the duplicate without doubling stock
+        if (isAutoGeneratedSku || isSameOrEmptySize) {
+          if (!winner.img && candidate.img) {
+            winner.img = candidate.img;
+            byCode.set(winnerCodeKey, winner);
+          }
+          byCode.delete(candCodeKey);
+          delete mut.upserts[candCodeKey];
+          if (!deletedCodeSet.has(candCodeKey)) {
+            deletedCodeSet.add(candCodeKey);
+            mut.deletedCodes.push(candCodeKey);
+            mutationsUpdated = true;
+          }
+          if (candidate.id && !deletedIdSet.has(candidate.id)) {
+            deletedIdSet.add(candidate.id);
+            mut.deletedIds.push(candidate.id);
+            mutationsUpdated = true;
+          }
+          newlyDetectedOrphans.push(candidate);
+        }
+      }
+    }
+
+    if (mutationsUpdated) {
+      mut.updatedAt = Date.now();
+      savePendingMutations(mut, slug);
+    }
+    if (newlyDetectedOrphans.length > 0) {
+      scheduleOrphanCleanupInFirestore(slug, newlyDetectedOrphans);
+    }
   }
 
   const merged = Array.from(byCode.values());
@@ -883,6 +1276,13 @@ export async function fetchInventorySmart(
 
     return { items, fromCache: false, readsUsed: items.length + 1 };
   } catch (error) {
+    // Prefer our clean IndexedDB / localStorage inventory (which already has local deletions and SKU changes applied)
+    if (cached && cached.length > 0) {
+      const cleanedCached = applyPendingMutationsToInventory(cached, slug);
+      setCachedInventory(cleanedCached, undefined, slug);
+      return { items: cleanedCached, fromCache: true, readsUsed: 0 };
+    }
+
     try {
       const cacheSnap = await getDocsFromCache(scopedQuery);
       if (!cacheSnap.empty) {
@@ -893,11 +1293,6 @@ export async function fetchInventorySmart(
         }
       }
     } catch {}
-
-    if (cached && cached.length > 0) {
-      console.warn('Using cached inventory due to connection/quota issue:', error);
-      return { items: applyPendingMutationsToInventory(cached, slug), fromCache: true, readsUsed: 0 };
-    }
 
     const pendingOnly = applyPendingMutationsToInventory([], slug);
     if (pendingOnly.length > 0) {
@@ -928,24 +1323,24 @@ export function subscribeToInventory(
     async (error) => {
       if (onError) onError(error);
       console.warn('Inventory realtime listener fallback to cache:', error);
+      const idbItems = await loadInventoryFromIndexedDB(slug);
+      if (idbItems && idbItems.length > 0) {
+        onData(idbItems);
+        return;
+      }
+      const lsItems = getCachedInventory(slug);
+      if (lsItems && lsItems.length > 0) {
+        onData(lsItems);
+        return;
+      }
       try {
         const cacheSnap = await getDocsFromCache(scopedQuery);
         if (!cacheSnap.empty) {
           const items = parseInventorySnapshotDocs(cacheSnap, slug);
           setCachedInventory(items, undefined, slug);
           onData(items);
-          return;
         }
       } catch {}
-      const idbItems = await loadInventoryFromIndexedDB(slug);
-      if (idbItems && idbItems.length > 0) {
-        onData(idbItems);
-      } else {
-        const lsItems = getCachedInventory(slug);
-        if (lsItems && lsItems.length > 0) {
-          onData(lsItems);
-        }
-      }
     }
   );
 }

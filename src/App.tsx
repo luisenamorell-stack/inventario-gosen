@@ -83,6 +83,8 @@ import {
   saveStoreSettingsToFirestore,
   DEFAULT_STORE_SETTINGS,
   saveProductToFirestore,
+  recordLocalProductSave,
+  recordLocalProductDelete,
   bulkSaveProductsToFirestore,
   deleteProductFromFirestore,
   saveSupplierToFirestore,
@@ -753,11 +755,11 @@ export const App: React.FC = () => {
     const initCoreData = async () => {
       setIsSyncing(true);
       try {
-        // Hydrate full inventory (including large base64 images) from IndexedDB immediately
+        // Hydrate full inventory (including large base64 images and tombstones) from IndexedDB immediately
         loadInventoryFromIndexedDB(activeCompanyId)
           .then((idbItems) => {
             if (isMounted && idbItems && idbItems.length > 0) {
-              setInventory((prev) => (prev.length === 0 ? idbItems : prev));
+              setInventory(idbItems);
             }
           })
           .catch(() => {});
@@ -1301,6 +1303,11 @@ export const App: React.FC = () => {
 
     setIsSyncing(true);
     try {
+      const existingById = product.id
+        ? inventory.find((p) => p.id === product.id)
+        : undefined;
+      const effectiveOldCode = (oldCode || existingById?.code || '').trim();
+
       const normalizedProduct: Product = {
         ...product,
         id: getScopedDocId(product.code, activeCompanyId),
@@ -1311,16 +1318,21 @@ export const App: React.FC = () => {
         supplier: (product.supplier || '').trim(),
       };
 
+      // Record local upsert and tombstone old SKU BEFORE updating cache so old SKU is never re-merged
+      recordLocalProductSave(normalizedProduct, effectiveOldCode || undefined, activeCompanyId);
+
       setInventory((prev) => {
         let replaced = false;
         const next: Product[] = [];
         const seenCodes = new Set<string>();
+        const cleanEffectiveOld = effectiveOldCode.toLowerCase();
 
         for (const p of prev) {
           const pCode = (p.code || '').trim().toLowerCase();
           const isTarget =
             (product.id && p.id && p.id === product.id) ||
             (cleanOld && pCode === cleanOld) ||
+            (cleanEffectiveOld && pCode === cleanEffectiveOld) ||
             pCode === cleanNew;
 
           if (isTarget) {
@@ -1343,7 +1355,7 @@ export const App: React.FC = () => {
         return next;
       });
 
-      await saveProductToFirestore(normalizedProduct, oldCode, activeCompanyId);
+      await saveProductToFirestore(normalizedProduct, effectiveOldCode || undefined, activeCompanyId);
       setLastSyncTime(new Date());
 
       logActivityInFirestore(
@@ -1460,6 +1472,9 @@ export const App: React.FC = () => {
         (p) => p.id === cleanTargetId || p.code.toLowerCase() === cleanTargetId.toLowerCase()
       );
       const code = itemToDelete?.code || (id.includes('__') ? id.split('__').slice(1).join('__') : id);
+
+      // Record tombstone BEFORE updating cache so setCachedInventory does not resurrect deleted item from upserts
+      recordLocalProductDelete(cleanTargetId, code, activeCompanyId);
 
       setInventory((prev) => {
         const next = prev.filter(
