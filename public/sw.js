@@ -1,5 +1,5 @@
 // Service Worker for Multi-Tenant SaaS PWA (Network-First with Dynamic Tenant Manifest support)
-const CACHE_NAME = 'tienda-gosen-v8';
+const CACHE_NAME = 'tienda-gosen-v10';
 const STATIC_ASSETS = [
   '/manifest.json',
   '/favicon.png',

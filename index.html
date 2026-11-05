@@ -122,7 +122,7 @@
     if ('caches' in window) {
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
-          if (key !== 'tienda-gosen-v8') {
+          if (key !== 'tienda-gosen-v10') {
             caches.delete(key);
           }
         });

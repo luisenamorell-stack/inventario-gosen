@@ -79,6 +79,7 @@ import { WhatsAppIcon } from './SalesView';
 import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
 import { SecurityAuditPanel } from './SecurityAuditPanel';
 import { SaaSContractModal } from './SaaSContractModal';
+import { ClientAppKeysDossierModal } from './ClientAppKeysDossierModal';
 import { MiAppHNBannerLogo, MiAppHNCashRegisterIcon } from './MiAppHNLogo';
 
 export const SAAS_MODULE_OPTIONS: {
@@ -358,6 +359,10 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   // SaaS Legal Usage Contract Modal State
   const [showContractModal, setShowContractModal] = useState<boolean>(false);
   const [contractModalCompany, setContractModalCompany] = useState<CompanyTenant | null>(null);
+
+  // Client App Keys, Credentials & Full Dossier Handover Modal State
+  const [showKeysDossierModal, setShowKeysDossierModal] = useState<boolean>(false);
+  const [keysDossierCompany, setKeysDossierCompany] = useState<CompanyTenant | null>(null);
 
   // SaaS Demo Requests & Prospects Modal State (from https://miapphn.online)
   const [demoRequests, setDemoRequests] = useState<SaaSDemoRequest[]>(() =>
@@ -1652,6 +1657,19 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             <button
               type="button"
               onClick={() => {
+                setKeysDossierCompany(companies[0] || null);
+                setShowKeysDossierModal(true);
+              }}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-xs transition-all cursor-pointer"
+              title="Entregar al cliente las llaves de su App: enlaces, código, contraseñas, usuarios, bodegas, contrato y expediente en PDF o WhatsApp"
+            >
+              <Key className="w-4 h-4 text-slate-950" />
+              <span>Entregar Llaves App</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
                 setContractModalCompany(companies[0] || null);
                 setShowContractModal(true);
               }}
@@ -2449,6 +2467,19 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                           ? 'Contrato ✓'
                           : 'Contrato'}
                       </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setKeysDossierCompany(comp);
+                        setShowKeysDossierModal(true);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] transition-colors cursor-pointer shadow-2xs"
+                      title="Abrir Kit de Entrega de Llaves, Credenciales, Usuarios, Bodegas y Documentos del Cliente (PDF / Imprimir / WhatsApp)"
+                    >
+                      <Key className="w-3 h-3 text-slate-950" />
+                      <span>Llaves / Accesos</span>
                     </button>
 
                     <button
@@ -4380,6 +4411,32 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         onClose={() => setShowContractModal(false)}
         onSaveCompany={onSaveCompany}
         onSaveSaaSGlobalConfig={onSaveSaaSGlobalConfig}
+        showToast={showToast}
+      />
+
+      {/* Client App Keys, Credentials, Users & Official Dossier Handover Modal */}
+      <ClientAppKeysDossierModal
+        isOpen={showKeysDossierModal}
+        initialCompany={keysDossierCompany}
+        companies={companies}
+        saasGlobalConfig={saasGlobalConfig}
+        onClose={() => setShowKeysDossierModal(false)}
+        onSaveCompany={onSaveCompany}
+        onOpenContractModal={(comp) => {
+          setShowKeysDossierModal(false);
+          setContractModalCompany(comp);
+          setShowContractModal(true);
+        }}
+        onOpenPaymentModal={(comp) => {
+          setShowKeysDossierModal(false);
+          openPaymentModal(comp);
+        }}
+        onOpenPermissionsModal={(comp) => {
+          setShowKeysDossierModal(false);
+          openPermissionsModal(comp);
+        }}
+        onDownloadBackupCSV={(comp) => handleDownloadClientBackupCSV(comp)}
+        onDownloadBackupJSON={(comp) => handleDownloadClientBackupJSON(comp)}
         showToast={showToast}
       />
 

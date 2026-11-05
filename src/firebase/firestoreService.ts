@@ -548,6 +548,7 @@ export async function loadInventoryFromIndexedDB(
                 .filter(Boolean)
             )
           );
+          const unsyncedLookup = new Set(mergedUnsynced);
           const deletedSet = new Set(mergedDeletedCodes);
           const mergedUpserts: Record<string, Product> = {};
 
@@ -557,7 +558,10 @@ export async function loadInventoryFromIndexedDB(
             if (v?.img) {
               memoryImageMap.set(`${slug}__${cleanK}`, v.img);
             }
-            mergedUpserts[cleanK] = v;
+            // Only keep in pending upserts if it is genuinely unsynced
+            if (unsyncedLookup.has(cleanK)) {
+              mergedUpserts[cleanK] = v;
+            }
           }
           for (const [k, v] of Object.entries(currentMut.upserts || {})) {
             const cleanK = k.trim().toLowerCase();
@@ -571,11 +575,13 @@ export async function loadInventoryFromIndexedDB(
             if (bestImg) {
               memoryImageMap.set(`${slug}__${cleanK}`, bestImg);
             }
-            mergedUpserts[cleanK] = {
-              ...(existingUpsert || {}),
-              ...v,
-              img: bestImg,
-            };
+            if (unsyncedLookup.has(cleanK)) {
+              mergedUpserts[cleanK] = {
+                ...(existingUpsert || {}),
+                ...v,
+                img: bestImg,
+              };
+            }
           }
 
           memoryPendingMutations.set(slug, {
@@ -739,9 +745,38 @@ function getPendingMutations(companyId = getActiveCompanyId()): PendingInventory
         if (v.img) {
           memoryImageMap.set(`${slug}__${cleanK}`, v.img);
         }
-        cleanUpserts[cleanK] = v;
+        // Only retain in pending upserts if it is still unsynced
+        if (unsyncedSet.has(cleanK)) {
+          cleanUpserts[cleanK] = v;
+        }
       }
     }
+  }
+
+  // One-time cleanup for Comercial GYG items that had stale doubled stock in local pending cache / IndexedDB
+  if (isGyGAlias(slug)) {
+    const fixFlagKey = 'gosen_gyg_bocinas_dedup_fix_v4';
+    try {
+      if (typeof localStorage !== 'undefined' && !localStorage.getItem(fixFlagKey)) {
+        const affectedCodes = ['243', '244', '245', '246', '247', '081'];
+        for (const c of affectedCodes) {
+          delete cleanUpserts[c];
+          unsyncedSet.delete(c);
+        }
+        localStorage.setItem(fixFlagKey, '1');
+        const cleanedMut: PendingInventoryMutations = {
+          upserts: cleanUpserts,
+          unsyncedCodes: Array.from(unsyncedSet),
+          explicitDeletedCodes: Array.from(explicitDeletedSet),
+          deletedCodes: Array.from(deletedCodesSet),
+          deletedIds: Array.from(deletedIdsSet),
+          updatedAt: Date.now(),
+        };
+        const mutKey = getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_MUTATIONS, slug);
+        safeWriteCache(mutKey, cleanedMut);
+        saveMutationsToIndexedDB(cleanedMut, slug).catch(() => {});
+      }
+    } catch {}
   }
 
   const initial: PendingInventoryMutations = {
@@ -808,14 +843,15 @@ export function markProductsSyncedToCloud(
   const syncedSet = new Set(codes.map((c) => (c || '').trim().toLowerCase()).filter(Boolean));
   if (syncedSet.size === 0) return;
 
-  // Keep mut.upserts intact (with updatedAt) so local edits/creations are never lost if Firestore read quota is exhausted;
-  // only clear from unsyncedCodes queue.
+  // Once synced to Firestore, remove from unsyncedCodes AND remove from mut.upserts
+  // (while preserving images in memoryImageMap) so old upserts never overwrite future stock edits.
   mut.unsyncedCodes = (mut.unsyncedCodes || []).filter((c) => !syncedSet.has(c));
   for (const codeKey of syncedSet) {
     const existingUp = mut.upserts[codeKey];
     if (existingUp?.img) {
       memoryImageMap.set(`${slug}__${codeKey}`, existingUp.img);
     }
+    delete mut.upserts[codeKey];
   }
   mut.updatedAt = Date.now();
   savePendingMutations(mut, slug);
@@ -1109,26 +1145,35 @@ export function applyPendingMutationsToInventory(
     }
   }
 
+  let serverRefreshedUpserts = false;
   for (const [codeKey, upserted] of Object.entries(mut.upserts)) {
     if (deletedCodeSet.has(codeKey) || explicitDeletedSet.has(codeKey)) continue;
     const existing = byCode.get(codeKey);
     const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
-    const upsertedTs = Number((upserted as any)?.updatedAt || 0);
-    const existingTs = Number((existing as any)?.updatedAt || 0);
 
-    // When merging local cache (fromServer === false), mut.upserts ALWAYS wins over stale cache.
-    // When merging fresh server items (fromServer === true), mut.upserts wins if it is unsynced or has a newer updatedAt.
-    const preferUpsert =
-      !fromServer ||
-      !existing ||
-      unsyncedSet.has(codeKey) ||
-      (upsertedTs > 0 && upsertedTs >= existingTs);
+    // When merging local cache (fromServer === false), mut.upserts wins over stale cache.
+    // When merging fresh server items (fromServer === true), mut.upserts ONLY wins if the item
+    // does not exist on the server yet or has pending unsynced local changes (unsyncedSet.has(codeKey)).
+    // Otherwise, the fresh Firestore server document is authoritative and refreshes mut.upserts!
+    const preferUpsert = !fromServer || !existing || unsyncedSet.has(codeKey);
 
     if (!preferUpsert && existing) {
-      byCode.set(codeKey, {
+      const mergedServerItem: Product = {
         ...existing,
         img: existing.img || upserted.img || memImg || '',
-      });
+      };
+      byCode.set(codeKey, mergedServerItem);
+      if (
+        upserted.stock !== mergedServerItem.stock ||
+        upserted.price !== mergedServerItem.price ||
+        upserted.cost !== mergedServerItem.cost
+      ) {
+        mut.upserts[codeKey] = {
+          ...mergedServerItem,
+          updatedAt: Date.now(),
+        } as Product;
+        serverRefreshedUpserts = true;
+      }
     } else {
       byCode.set(codeKey, {
         ...(existing || {}),
@@ -1138,6 +1183,9 @@ export function applyPendingMutationsToInventory(
         img: upserted.img || memImg || existing?.img || '',
       });
     }
+  }
+  if (serverRefreshedUpserts) {
+    savePendingMutations(mut, slug);
   }
 
   // Smart Deduplication for Comercial GYG:
@@ -1552,10 +1600,19 @@ export async function syncInventoryWithBackendHub(
     return memImg && !p.img ? { ...p, img: memImg } : p;
   });
 
+  const unsyncedLookup = new Set(
+    (mut.unsyncedCodes || []).map((c) => String(c || '').trim().toLowerCase()).filter(Boolean)
+  );
   const enrichedUpserts: Record<string, Product> = {};
   for (const [k, v] of Object.entries(mut.upserts || {})) {
-    const memImg = memoryImageMap.get(`${slug}__${k}`);
-    enrichedUpserts[k] = memImg && !v.img ? { ...v, img: memImg } : v;
+    const cleanK = k.trim().toLowerCase();
+    const memImg = memoryImageMap.get(`${slug}__${cleanK}`);
+    if (v?.img) {
+      memoryImageMap.set(`${slug}__${cleanK}`, v.img);
+    }
+    if (unsyncedLookup.has(cleanK)) {
+      enrichedUpserts[cleanK] = memImg && !v.img ? { ...v, img: memImg } : v;
+    }
   }
 
   try {
@@ -1586,19 +1643,15 @@ export async function syncInventoryWithBackendHub(
     if (Array.isArray(data.deletedIds)) {
       mut.deletedIds = data.deletedIds;
     }
-    // Also update local upserts with latest server values so stale local upserts never revert newer edits from other devices
-    const serverByCode = new Map<string, Product>();
+    // Preserve product images in memoryImageMap and clear already-synced upserts so they never overwrite future stock edits
     for (const srvItem of data.items as Product[]) {
       const ck = (srvItem.code || '').trim().toLowerCase();
       if (!ck) continue;
-      serverByCode.set(ck, srvItem);
       if (srvItem.img) {
         memoryImageMap.set(`${slug}__${ck}`, srvItem.img);
       }
-      if (mut.upserts[ck]) {
-        mut.upserts[ck] = { ...mut.upserts[ck], ...srvItem };
-      }
     }
+    mut.upserts = {};
     mut.unsyncedCodes = [];
     savePendingMutations(mut, slug);
 
@@ -1728,13 +1781,14 @@ export async function fetchInventorySmart(
     false
   );
 
-  // 1. Always synchronize bidirectionally with our Express Multi-Device Sync Hub (/api/cloud-sync/inventory)
-  // This works 100% of the time across PC, Tablet, and Mobile even when Firestore's 50k daily read quota is exhausted!
-  const hubItems = await syncInventoryWithBackendHub(combinedLocal, slug);
-  const baseItems = hubItems && hubItems.length > 0 ? hubItems : combinedLocal;
+  if (forceRefresh) {
+    firestoreReadQuotaExhaustedUntil = 0;
+  }
 
-  // If Firestore read quota is currently known to be exhausted, skip doomed Firestore reads and return the live Hub-synced inventory immediately!
+  // If Firestore read quota is currently known to be exhausted, synchronize directly with our Express Multi-Device Sync Hub
   if (isFirestoreQuotaExhausted()) {
+    const hubItems = await syncInventoryWithBackendHub(combinedLocal, slug);
+    const baseItems = hubItems && hubItems.length > 0 ? hubItems : combinedLocal;
     const mergedHub = applyPendingMutationsToInventory(baseItems, slug, true);
     setCachedInventory(mergedHub, Date.now(), slug);
     return {
@@ -1761,6 +1815,8 @@ export async function fetchInventorySmart(
         remoteTs = syncSnap.exists() ? Number(syncSnap.data()?.updatedAt || 0) : 0;
       } catch (err) {
         if (isQuotaOrNetworkError(err)) {
+          const hubItems = await syncInventoryWithBackendHub(combinedLocal, slug);
+          const baseItems = hubItems && hubItems.length > 0 ? hubItems : combinedLocal;
           const mergedHub = applyPendingMutationsToInventory(baseItems, slug, true);
           setCachedInventory(mergedHub, Date.now(), slug);
           return { items: mergedHub, fromCache: false, readsUsed: 0, quotaExceeded: false };
@@ -1769,8 +1825,9 @@ export async function fetchInventorySmart(
         remoteTs = cachedSync && cachedSync.exists() ? Number(cachedSync.data()?.updatedAt || 0) : 0;
       }
 
-      if (baseItems.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
-        const merged = applyPendingMutationsToInventory(baseItems, slug, true);
+      if (combinedLocal.length > 0 && remoteTs > 0 && localTs >= remoteTs) {
+        const syncedWithHub = (await syncInventoryWithBackendHub(combinedLocal, slug)) || combinedLocal;
+        const merged = applyPendingMutationsToInventory(syncedWithHub, slug, true);
         setCachedInventory(merged, undefined, slug);
         return { items: merged, fromCache: true, readsUsed: 1 };
       }
@@ -1840,7 +1897,8 @@ export async function fetchInventorySmart(
     return { items: finalItems, fromCache: false, readsUsed: finalItems.length + (forceRefresh ? 0 : 1) };
   } catch (error) {
     const quotaHit = isQuotaOrNetworkError(error);
-    // Even if Firestore threw resource-exhausted, hubItems already synchronized with our Backend Multi-Device Hub!
+    const hubItems = await syncInventoryWithBackendHub(combinedLocal, slug);
+    const baseItems = hubItems && hubItems.length > 0 ? hubItems : combinedLocal;
     if (baseItems && baseItems.length > 0) {
       const cleanedBase = applyPendingMutationsToInventory(baseItems, slug, Boolean(hubItems));
       setCachedInventory(cleanedBase, Date.now(), slug);
@@ -1949,6 +2007,7 @@ export async function saveProductToFirestore(
       discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
       discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
       stock: Math.max(0, Math.round(Number(product.stock) || 0)),
+      updatedAt: Date.now(),
     };
 
     if (product.size?.trim()) payload.size = product.size.trim();
@@ -1990,6 +2049,19 @@ export async function saveProductToFirestore(
 
       for (const idDel of idsToDelete) {
         batch.delete(doc(db, 'inventory', idDel));
+      }
+    } else if (isGyG) {
+      // Also delete any legacy alias doc IDs for the same SKU so only tiendagyg__{code} exists
+      const cleanSameCode = product.code.trim().replace(/\//g, '_');
+      for (const legacyId of [
+        `comercial-gyg__${cleanSameCode}`,
+        `comercialgyg__${cleanSameCode}`,
+        `comercial_gyg__${cleanSameCode}`,
+        `gyg__${cleanSameCode}`,
+      ]) {
+        if (legacyId !== docId) {
+          batch.delete(doc(db, 'inventory', legacyId));
+        }
       }
     }
 
@@ -3604,13 +3676,21 @@ export async function recordPurchaseInFirestore(
       'principal';
 
     const batch = writeBatch(db);
+    // Keep a working map by normalized code so multiple lines with the same SKU accumulate cleanly
+    const workingByCode = new Map<string, Product>();
+    for (const p of currentInventory) {
+      workingByCode.set((p.code || '').trim().toLowerCase(), p);
+    }
+
     for (const item of purchaseData.items || []) {
+      const codeKey = (item.code || '').trim().toLowerCase();
+      if (!codeKey) continue;
       const productDocId = getScopedDocId(item.code, slug);
       const productRef = doc(db, 'inventory', productDocId);
 
-      const existing = currentInventory.find(
-        (p) => p.code.trim().toLowerCase() === item.code.trim().toLowerCase() || p.id === item.productId
-      );
+      const existing =
+        workingByCode.get(codeKey) ||
+        currentInventory.find((p) => p.id && item.productId && p.id === item.productId);
 
       const addedQty = Math.max(0, Math.round(Number(item.quantity) || 0));
 
@@ -3622,6 +3702,14 @@ export async function recordPurchaseInFirestore(
           activeWhList
         );
 
+        const nextCost = Number(item.cost) || existing.cost || 0;
+        const nextPrice =
+          item.salePrice && item.salePrice > 0
+            ? Number(item.salePrice)
+            : Number(existing.price) || 0;
+        const nextSupplier =
+          existing.supplier || (purchaseData.supplierName ? purchaseData.supplierName.trim().slice(0, 200) : '');
+
         const updatePayload: Record<string, any> = {
           companyId: slug,
           code: existing.code.trim().slice(0, 100),
@@ -3629,11 +3717,8 @@ export async function recordPurchaseInFirestore(
           category: (existing.category || 'General').trim().slice(0, 100),
           stock: newStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
-          cost: Number(item.cost) || existing.cost || 0,
-          price:
-            item.salePrice && item.salePrice > 0
-              ? Number(item.salePrice)
-              : Number(existing.price) || 0,
+          cost: nextCost,
+          price: nextPrice,
         };
 
         if (purchaseData.supplierName && !existing.supplier) {
@@ -3641,11 +3726,23 @@ export async function recordPurchaseInFirestore(
         }
 
         batch.set(productRef, updatePayload, { merge: true });
+        workingByCode.set(codeKey, {
+          ...existing,
+          stock: newStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          cost: nextCost,
+          price: nextPrice,
+          supplier: nextSupplier,
+        });
       } else {
         const initialWhStocks: Record<string, number> = {};
         activeWhList.forEach((w) => {
           initialWhStocks[w.id] = w.id === targetWhId ? addedQty : 0;
         });
+
+        const nextCost = Number(item.cost) || 0;
+        const nextPrice =
+          item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : nextCost * 1.35;
 
         const newProductPayload: Record<string, any> = {
           companyId: slug,
@@ -3654,19 +3751,39 @@ export async function recordPurchaseInFirestore(
           category: (item.category?.trim() || 'General').slice(0, 100),
           size: (item.size?.trim() || '').slice(0, 50),
           supplier: purchaseData.supplierName.trim().slice(0, 200),
-          cost: Number(item.cost) || 0,
-          price: item.salePrice && item.salePrice > 0 ? Number(item.salePrice) : (Number(item.cost) || 0) * 1.35,
+          cost: nextCost,
+          price: nextPrice,
           stock: addedQty,
           warehouseStocks: initialWhStocks,
           img: '',
         };
 
         batch.set(productRef, newProductPayload, { merge: true });
+        workingByCode.set(codeKey, {
+          id: productDocId,
+          companyId: slug,
+          code: item.code.trim(),
+          name: item.name.trim(),
+          category: item.category?.trim() || 'General',
+          size: item.size?.trim() || '',
+          supplier: purchaseData.supplierName.trim(),
+          cost: nextCost,
+          price: nextPrice,
+          stock: addedQty,
+          warehouseStocks: initialWhStocks,
+          img: '',
+        });
       }
     }
 
     await touchInventorySyncStamp(batch, slug);
     await batch.commit();
+    const purchasedCodes = (purchaseData.items || [])
+      .map((it) => (it.code || '').trim())
+      .filter(Boolean);
+    if (purchasedCodes.length > 0) {
+      markProductsSyncedToCloud(purchasedCodes, slug);
+    }
   } catch (invError) {
     console.warn('Warning updating inventory stock after purchase:', invError);
   }
@@ -5168,7 +5285,28 @@ export function applyWarehouseStockDelta(
   }
 
   const currentInTarget = nextMap[targetWhId] ?? getProductStockInWarehouse(product, targetWhId, warehouses);
-  nextMap[targetWhId] = Math.max(0, Math.round(currentInTarget + delta));
+  if (delta >= 0) {
+    nextMap[targetWhId] = Math.max(0, Math.round(currentInTarget + delta));
+  } else {
+    let remainingToDeduct = Math.abs(Math.round(delta));
+    const deductFromTarget = Math.min(Math.max(0, currentInTarget), remainingToDeduct);
+    nextMap[targetWhId] = Math.max(0, currentInTarget - deductFromTarget);
+    remainingToDeduct -= deductFromTarget;
+
+    // If the target warehouse did not have enough units to cover the full deduction,
+    // deduct the remaining shortfall from other warehouses that have stock > 0
+    if (remainingToDeduct > 0) {
+      for (const k of Object.keys(nextMap)) {
+        if (k === targetWhId || remainingToDeduct <= 0) continue;
+        const avail = Math.max(0, Math.round(Number(nextMap[k]) || 0));
+        if (avail > 0) {
+          const deduct = Math.min(avail, remainingToDeduct);
+          nextMap[k] = avail - deduct;
+          remainingToDeduct -= deduct;
+        }
+      }
+    }
+  }
 
   // Recompute total stock as sum of all warehouses so they always match
   const sumAll = Object.values(nextMap).reduce(
@@ -5238,6 +5376,10 @@ function sanitizeWarehousesDoc(slug: string, raw: Record<string, any>): StoreWar
         id: String(t.id || `tr_${Date.now()}`),
         transferNumber: String(t.transferNumber || 'TRAS-001'),
         companyId: slug,
+        movementType:
+          t.movementType === 'entry' || t.movementType === 'adjustment'
+            ? t.movementType
+            : 'transfer',
         fromWarehouseId: String(t.fromWarehouseId || 'bodega_central'),
         fromWarehouseName: String(t.fromWarehouseName || 'Bodega Origen'),
         toWarehouseId: String(t.toWarehouseId || 'principal'),
@@ -5249,7 +5391,9 @@ function sanitizeWarehousesDoc(slug: string, raw: Record<string, any>): StoreWar
               name: String(it.name || ''),
               category: it.category ? String(it.category) : '',
               size: it.size ? String(it.size) : '',
-              quantity: Math.max(1, Number(it.quantity) || 1),
+              quantity: Math.max(0, Number(it.quantity) || 0),
+              previousStock: it.previousStock !== undefined ? Number(it.previousStock) : undefined,
+              newStock: it.newStock !== undefined ? Number(it.newStock) : undefined,
               cost: Number(it.cost) || 0,
               price: Number(it.price) || 0,
             }))

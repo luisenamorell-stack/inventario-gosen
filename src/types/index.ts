@@ -324,6 +324,8 @@ export interface WarehouseTransferItem {
   category?: string;
   size?: string;
   quantity: number;
+  previousStock?: number;
+  newStock?: number;
   cost?: number;
   price?: number;
 }
@@ -332,6 +334,7 @@ export interface WarehouseTransferRecord {
   id: string;
   transferNumber: string;
   companyId?: string;
+  movementType?: 'transfer' | 'entry' | 'adjustment';
   fromWarehouseId: string;
   fromWarehouseName: string;
   toWarehouseId: string;

@@ -12,7 +12,12 @@ import {
   SubscriptionPaymentRecord,
   CompanyTenant,
   ActivityLogRecord,
+  WarehouseLocation,
+  WarehouseTransferRecord,
+  UserAccount,
+  SaaSGlobalConfig,
 } from '../types';
+import { getProductStockInWarehouse } from '../firebase/firestoreService';
 import {
   getConnectedPrinter,
   sendEscPosToConnectedPrinter,
@@ -3587,6 +3592,8 @@ function getActivityModuleLabelEs(moduleKey: string): string {
       return 'Configuración';
     case 'catalog':
       return 'Catálogo';
+    case 'warehouses':
+      return 'Bodegas y Traslados';
     default:
       return moduleKey || 'General';
   }
@@ -3798,5 +3805,1123 @@ export async function downloadActivityLogReportPdf(
   drawPdfPageFooters(doc, storeSettings, 'Registro de Movimientos del Personal');
   doc.save(`Bitacora_Movimientos_Personal_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
+
+// ============================================================================
+// 13. BODEGAS, TRASLADOS Y MOVIMIENTOS DE BODEGA (COMPROBANTE + HISTORIAL + STOCK PDF/HTML)
+// ============================================================================
+function getMovementTypeLabel(movementType?: string): string {
+  if (movementType === 'entry') return 'INGRESO A BODEGA';
+  if (movementType === 'adjustment') return 'ASIGNACIÓN DE STOCK';
+  return 'TRASLADO ENTRE BODEGAS';
+}
+
+export function buildWarehouseTransferReceiptHtml(
+  tr: WarehouseTransferRecord,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat = 'letter'
+): string {
+  const isThermal = format === '80mm' || format === '58mm';
+  const storeName = storeSettings.storeName || 'MI TIENDA';
+  const movTypeLabel = getMovementTypeLabel(tr.movementType);
+  const isEntryOrAdj = tr.movementType === 'entry' || tr.movementType === 'adjustment';
+
+  const rowsHtml = (tr.items || [])
+    .map((it) => {
+      const stockDetail =
+        it.previousStock !== undefined && it.newStock !== undefined
+          ? `<div style="font-size:10px;color:#475569;">Stock en bodega: ${it.previousStock} → <strong>${it.newStock} uds</strong></div>`
+          : '';
+      return `
+        <tr>
+          <td style="padding: 6px 6px; border-bottom: 1px dashed #cbd5e1; font-family: monospace; font-weight: 700;">${it.code}</td>
+          <td style="padding: 6px 6px; border-bottom: 1px dashed #cbd5e1;">
+            <div style="font-weight:700;color:#0f172a;">${it.name}${it.size ? ` (${it.size})` : ''}</div>
+            ${it.category ? `<div style="font-size:10px;color:#64748b;">${it.category}</div>` : ''}
+            ${stockDetail}
+          </td>
+          <td style="padding: 6px 6px; border-bottom: 1px dashed #cbd5e1; text-align: right; font-weight: 900; font-size: 13px;">
+            ${tr.movementType === 'adjustment' && it.newStock !== undefined ? `${it.newStock} uds` : `${it.quantity} uds`}
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  return `
+    <div style="max-width: ${isThermal ? '100%' : '680px'}; margin: 0 auto; border: 2px solid #0f172a; border-radius: 12px; padding: ${isThermal ? '10px' : '22px'}; background: #ffffff;">
+      <div style="text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 10px;">
+        <h1 style="font-size: ${isThermal ? '15px' : '19px'}; font-weight: 900; margin: 0; text-transform: uppercase; color: #0f172a;">${storeName}</h1>
+        ${storeSettings.address || storeSettings.phone ? `<div style="font-size: 10.5px; color: #475569; margin-top: 2px;">${[storeSettings.address, storeSettings.phone ? `Tel: ${storeSettings.phone}` : ''].filter(Boolean).join(' • ')}</div>` : ''}
+        <div style="font-size: ${isThermal ? '11px' : '13px'}; font-weight: 900; color: #047857; margin-top: 5px; text-transform: uppercase;">
+          COMPROBANTE DE ${movTypeLabel}
+        </div>
+        <div style="font-family: monospace; font-weight: 900; font-size: ${isThermal ? '13px' : '15px'}; margin-top: 4px; color: #0f172a;">
+          N° ${tr.transferNumber}
+        </div>
+      </div>
+
+      <div style="margin-top: 12px; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #cbd5e1; font-size: ${isThermal ? '10.5px' : '12px'}; line-height: 1.55;">
+        <div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Fecha y Hora:</strong></span><span>${tr.dateFormatted}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Tipo de Movimiento:</strong></span><strong>${movTypeLabel}</strong></div>
+        ${
+          isEntryOrAdj
+            ? `<div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Origen / Operación:</strong></span><span>${tr.fromWarehouseName}</span></div>
+               <div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Bodega Asignada (Destino):</strong></span><strong style="color:#047857;">${tr.toWarehouseName}</strong></div>`
+            : `<div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Bodega de Salida (Origen):</strong></span><span>${tr.fromWarehouseName}</span></div>
+               <div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Bodega de Entrada (Destino):</strong></span><strong style="color:#047857;">${tr.toWarehouseName}</strong></div>`
+        }
+        <div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Registrado / Autorizado por:</strong></span><span>${tr.createdBy}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Recibido / Responsable en Bodega:</strong></span><span>${tr.receivedBy || 'Encargado de Bodega'}</span></div>
+        ${tr.notes ? `<div style="display:flex;justify-content:space-between;gap:8px;"><span><strong>Motivo / Observaciones:</strong></span><span>${tr.notes}</span></div>` : ''}
+      </div>
+
+      <table style="width: 100%; border-collapse: collapse; margin-top: 12px; font-size: ${isThermal ? '10.5px' : '12px'};">
+        <thead>
+          <tr style="background: #0f172a; color: #ffffff;">
+            <th style="padding: 7px 6px; text-align: left; font-size: 10.5px; text-transform: uppercase;">Código SKU</th>
+            <th style="padding: 7px 6px; text-align: left; font-size: 10.5px; text-transform: uppercase;">Artículo / Descripción</th>
+            <th style="padding: 7px 6px; text-align: right; font-size: 10.5px; text-transform: uppercase;">${tr.movementType === 'adjustment' ? 'Stock Fijado' : 'Cantidad'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+
+      <div style="margin-top: 12px; padding: 10px 12px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 900; color: #064e3b;">
+        <span>REFERENCIAS: ${(tr.items || []).length} ARTÍCULOS</span>
+        <span>TOTAL UNIDADES: ${tr.totalUnits} UDS</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 38px; text-align: center;">
+        <div style="border-top: 1px solid #0f172a; padding-top: 6px; font-size: 11px; font-weight: 700;">
+          Autorizado / Entregado por (${tr.createdBy})
+        </div>
+        <div style="border-top: 1px solid #0f172a; padding-top: 6px; font-size: 11px; font-weight: 700;">
+          Recibido Conforme (${tr.receivedBy || 'Encargado Bodega'})
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+export async function downloadWarehouseTransferReceiptPdf(
+  tr: WarehouseTransferRecord,
+  storeSettings: StoreSettings
+): Promise<void> {
+  await preloadStoreLogoForPdf(storeSettings.logoUrl);
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+  const movTypeLabel = getMovementTypeLabel(tr.movementType);
+  const isEntryOrAdj = tr.movementType === 'entry' || tr.movementType === 'adjustment';
+
+  let y = drawExecutivePdfHeader(doc, {
+    storeSettings,
+    documentTitle: movTypeLabel,
+    documentNumber: tr.transferNumber,
+    dateLabel: `Fecha: ${tr.dateFormatted}`,
+    statusBadge: {
+      text: tr.movementType === 'entry' ? 'INGRESO' : tr.movementType === 'adjustment' ? 'AJUSTE STOCK' : 'TRASLADO',
+      bgRgb: isEntryOrAdj ? [224, 231, 255] : [209, 250, 229],
+      textRgb: isEntryOrAdj ? [55, 48, 163] : [4, 120, 87],
+    },
+    accentRgb: isEntryOrAdj ? [67, 56, 202] : [4, 120, 87],
+  });
+
+  const totalValueSale = (tr.items || []).reduce(
+    (sum, it) => sum + (Number(it.price) || 0) * (Number(it.quantity) || 0),
+    0
+  );
+
+  y = drawExecutiveKpiCards(doc, y, [
+    {
+      label: isEntryOrAdj ? 'Origen / Operación' : 'Bodega de Salida (Origen)',
+      value: (tr.fromWarehouseName || '-').slice(0, 24),
+      subtext: `Autorizado: ${tr.createdBy}`,
+      valueRgb: [51, 65, 85],
+    },
+    {
+      label: 'Bodega de Destino',
+      value: (tr.toWarehouseName || '-').slice(0, 24),
+      subtext: `Recibe: ${tr.receivedBy || 'Encargado'}`,
+      valueRgb: [4, 120, 87],
+    },
+    {
+      label: 'Artículos / Referencias',
+      value: `${(tr.items || []).length} SKUs`,
+      subtext: 'Referencias procesadas',
+      valueRgb: [15, 23, 42],
+    },
+    {
+      label: 'Total Unidades',
+      value: `${tr.totalUnits} uds`,
+      subtext: totalValueSale > 0 ? `Valor Comercial: ${formatCurrencyL(totalValueSale)}` : 'Unidades físicas',
+      valueRgb: [67, 56, 202],
+    },
+  ]);
+
+  if (tr.notes) {
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(14, y, doc.internal.pageSize.getWidth() - 28, 10, 2, 2, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(51, 65, 85);
+    doc.text(`MOTIVO / OBSERVACIONES: ${tr.notes}`, 18, y + 6.2);
+    y += 14;
+  }
+
+  autoTable(doc, {
+    startY: y,
+    head: [
+      [
+        'N°',
+        'Código SKU',
+        'Descripción del Artículo',
+        'Categoría / Talla',
+        isEntryOrAdj ? 'Detalle en Bodega' : 'Ruta Bodega',
+        tr.movementType === 'adjustment' ? 'Stock en Bodega' : 'Cantidad',
+        'Precio Unit.',
+      ],
+    ],
+    body: (tr.items || []).map((it, idx) => {
+      const detailCol =
+        it.previousStock !== undefined && it.newStock !== undefined
+          ? `Ant: ${it.previousStock} -> Nuevo: ${it.newStock} uds`
+          : `${tr.fromWarehouseName} -> ${tr.toWarehouseName}`;
+      return [
+        String(idx + 1),
+        it.code,
+        it.name,
+        [it.category || 'General', it.size ? `Talla ${it.size}` : ''].filter(Boolean).join(' • '),
+        detailCol,
+        `${tr.movementType === 'adjustment' && it.newStock !== undefined ? it.newStock : it.quantity} uds`,
+        it.price ? formatCurrencyL(it.price) : '-',
+      ];
+    }),
+    theme: 'grid',
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 8.2, cellPadding: 3 },
+    bodyStyles: { fontSize: 8, cellPadding: 2.8 },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      1: { fontStyle: 'bold', cellWidth: 26 },
+      2: { fontStyle: 'bold', cellWidth: 54 },
+      3: { cellWidth: 32 },
+      4: { cellWidth: 36 },
+      5: { halign: 'right', fontStyle: 'bold', cellWidth: 22 },
+      6: { halign: 'right', cellWidth: 24 },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  const finalY = (doc as any).lastAutoTable?.finalY || y + 40;
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const sigY = finalY + 28 < pageHeight - 22 ? finalY + 22 : pageHeight - 28;
+
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.4);
+  doc.line(28, sigY, 92, sigY);
+  doc.line(120, sigY, 184, sigY);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`Entregado / Autorizado por: ${tr.createdBy}`, 60, sigY + 5, { align: 'center' });
+  doc.text(`Recibido en Bodega (${tr.toWarehouseName}): ${tr.receivedBy || 'Firma'}`, 152, sigY + 5, {
+    align: 'center',
+  });
+
+  drawPdfPageFooters(doc, storeSettings, `Comprobante ${tr.transferNumber}`);
+  doc.save(`Comprobante_${tr.transferNumber}.pdf`);
+}
+
+export function buildWarehouseMovementsHistoryHtml(
+  transfers: WarehouseTransferRecord[],
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat = 'letter',
+  filterLabel = 'Todos los Movimientos y Traslados'
+): string {
+  const isThermal = format === '80mm' || format === '58mm';
+  const storeName = storeSettings.storeName || 'MI TIENDA';
+  const totalUnitsAll = transfers.reduce((s, t) => s + (Number(t.totalUnits) || 0), 0);
+  const transferCount = transfers.filter((t) => !t.movementType || t.movementType === 'transfer').length;
+  const entryCount = transfers.filter((t) => t.movementType === 'entry' || t.movementType === 'adjustment').length;
+
+  return `
+    <div style="font-variant-numeric:tabular-nums;">
+      <div class="text-center" style="border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:14px;">
+        <div style="font-size:${isThermal ? '15px' : '20px'};font-weight:900;text-transform:uppercase;color:#0f172a;">${storeName}</div>
+        <div style="font-size:${isThermal ? '11.5px' : '14px'};font-weight:900;color:#047857;margin-top:4px;">REPORTE DE MOVIMIENTOS Y TRASLADOS DE BODEGAS</div>
+        <div style="font-size:11px;color:#475569;margin-top:3px;">${filterLabel} • Emisión: ${new Date().toLocaleString('es-HN')}</div>
+      </div>
+
+      ${
+        !isThermal
+          ? `
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;background:#f8fafc;">
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#475569;">Total Movimientos</div>
+            <div style="font-size:16px;font-weight:900;color:#0f172a;margin-top:2px;">${transfers.length}</div>
+          </div>
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;background:#f8fafc;">
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#475569;">Traslados entre Bodegas</div>
+            <div style="font-size:16px;font-weight:900;color:#047857;margin-top:2px;">${transferCount}</div>
+          </div>
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;background:#f8fafc;">
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#475569;">Ingresos / Asignaciones</div>
+            <div style="font-size:16px;font-weight:900;color:#4338ca;margin-top:2px;">${entryCount}</div>
+          </div>
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;background:#f8fafc;">
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#475569;">Unidades Movidas</div>
+            <div style="font-size:16px;font-weight:900;color:#0f172a;margin-top:2px;">${totalUnitsAll.toLocaleString('es-HN')} uds</div>
+          </div>
+        </div>
+      `
+          : ''
+      }
+
+      <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:${isThermal ? '9.5px' : '11px'};">
+        <thead>
+          <tr style="background:#0f172a;color:#ffffff;">
+            <th style="padding:7px 8px;text-align:left;">N° DOC</th>
+            <th style="padding:7px 8px;text-align:left;">TIPO</th>
+            <th style="padding:7px 8px;text-align:left;">FECHA</th>
+            <th style="padding:7px 8px;text-align:left;">ORIGEN → BODEGA DESTINO</th>
+            <th style="padding:7px 8px;text-align:left;">ARTÍCULOS PROCESADOS</th>
+            <th style="padding:7px 8px;text-align:right;">UDS</th>
+            ${isThermal ? '' : `<th style="padding:7px 8px;text-align:left;">RESPONSABLE</th>`}
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            transfers.length === 0
+              ? `<tr><td colspan="${isThermal ? 6 : 7}" style="padding:16px;text-align:center;color:#64748b;">No hay movimientos registrados.</td></tr>`
+              : transfers
+                  .map((tr, idx) => {
+                    const typeBadge =
+                      tr.movementType === 'entry'
+                        ? 'INGRESO BODEGA'
+                        : tr.movementType === 'adjustment'
+                        ? 'ASIGNACIÓN STOCK'
+                        : 'TRASLADO';
+                    const itemsSummary = (tr.items || [])
+                      .map((it) => `${it.quantity}x ${it.name} (${it.code})`)
+                      .join(', ');
+                    return `
+                      <tr style="border-bottom:1px solid #e2e8f0;background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+                        <td style="padding:7px 8px;font-family:monospace;font-weight:800;color:#0f172a;">${tr.transferNumber}</td>
+                        <td style="padding:7px 8px;font-weight:800;font-size:10px;color:${tr.movementType === 'entry' || tr.movementType === 'adjustment' ? '#4338ca' : '#047857'};">${typeBadge}</td>
+                        <td style="padding:7px 8px;white-space:nowrap;">${tr.dateFormatted}</td>
+                        <td style="padding:7px 8px;font-weight:700;">${tr.fromWarehouseName} → <span style="color:#047857;">${tr.toWarehouseName}</span></td>
+                        <td style="padding:7px 8px;">${itemsSummary}${tr.notes ? `<div style="font-size:9.5px;color:#64748b;">Nota: ${tr.notes}</div>` : ''}</td>
+                        <td style="padding:7px 8px;text-align:right;font-weight:900;">${tr.totalUnits}</td>
+                        ${isThermal ? '' : `<td style="padding:7px 8px;font-size:10px;"><div>Aut: ${tr.createdBy}</div><div style="color:#64748b;">Rec: ${tr.receivedBy || 'Encargado'}</div></td>`}
+                      </tr>
+                    `;
+                  })
+                  .join('')
+          }
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+export async function downloadWarehouseMovementsHistoryPdf(
+  transfers: WarehouseTransferRecord[],
+  storeSettings: StoreSettings,
+  filterLabel = 'Todos los Movimientos y Traslados'
+): Promise<void> {
+  await preloadStoreLogoForPdf(storeSettings.logoUrl);
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
+  const totalUnitsAll = transfers.reduce((s, t) => s + (Number(t.totalUnits) || 0), 0);
+  const transferCount = transfers.filter((t) => !t.movementType || t.movementType === 'transfer').length;
+  const entryCount = transfers.filter((t) => t.movementType === 'entry' || t.movementType === 'adjustment').length;
+
+  let y = drawExecutivePdfHeader(doc, {
+    storeSettings,
+    documentTitle: 'HISTORIAL DE MOVIMIENTOS Y TRASLADOS DE BODEGA',
+    documentNumber: `${transfers.length} MOVIMIENTOS`,
+    dateLabel: `Emitido: ${new Date().toLocaleString('es-HN')}`,
+    accentRgb: [4, 120, 87],
+  });
+
+  y = drawExecutiveKpiCards(doc, y, [
+    {
+      label: 'Total Movimientos',
+      value: `${transfers.length}`,
+      subtext: filterLabel.slice(0, 32),
+      valueRgb: [15, 23, 42],
+    },
+    {
+      label: 'Traslados entre Bodegas',
+      value: `${transferCount}`,
+      subtext: 'Órdenes de traslado',
+      valueRgb: [4, 120, 87],
+    },
+    {
+      label: 'Ingresos / Asignaciones',
+      value: `${entryCount}`,
+      subtext: 'Carga de artículos a bodega',
+      valueRgb: [67, 56, 202],
+    },
+    {
+      label: 'Total Unidades Movidas',
+      value: `${totalUnitsAll.toLocaleString('es-HN')} uds`,
+      subtext: 'Volumen total de unidades',
+      valueRgb: [180, 83, 9],
+    },
+  ]);
+
+  autoTable(doc, {
+    startY: y,
+    head: [
+      [
+        'N° Doc',
+        'Tipo de Movimiento',
+        'Fecha y Hora',
+        'Origen / Operación',
+        'Bodega Destino',
+        'Detalle de Artículos (SKU y Cantidad)',
+        'Total Uds',
+        'Responsables',
+      ],
+    ],
+    body: transfers.map((tr) => {
+      const typeLabel =
+        tr.movementType === 'entry'
+          ? 'Ingreso a Bodega'
+          : tr.movementType === 'adjustment'
+          ? 'Asignación Stock'
+          : 'Traslado Bodega';
+      const itemsText = (tr.items || [])
+        .map((it) => `${it.quantity}x ${it.name} (${it.code})`)
+        .join(' | ');
+      const fullItems = tr.notes ? `${itemsText} [Nota: ${tr.notes}]` : itemsText;
+      return [
+        tr.transferNumber,
+        typeLabel,
+        tr.dateFormatted,
+        tr.fromWarehouseName,
+        tr.toWarehouseName,
+        fullItems,
+        `${tr.totalUnits} uds`,
+        `Aut: ${tr.createdBy} / Rec: ${tr.receivedBy || 'Encargado'}`,
+      ];
+    }),
+    theme: 'grid',
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 8.2, cellPadding: 3 },
+    bodyStyles: { fontSize: 7.8, cellPadding: 2.6 },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 24 },
+      1: { fontStyle: 'bold', cellWidth: 28 },
+      2: { cellWidth: 28 },
+      3: { cellWidth: 34 },
+      4: { fontStyle: 'bold', cellWidth: 34 },
+      5: { cellWidth: 'auto' },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 18 },
+      7: { cellWidth: 36 },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  drawPdfPageFooters(doc, storeSettings, 'Movimientos y Traslados de Bodega');
+  doc.save(`Movimientos_Y_Traslados_Bodega_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+export function buildWarehouseStockReportHtml(
+  products: Product[],
+  warehouses: WarehouseLocation[],
+  selectedWarehouseId: string,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat = 'letter',
+  canViewCosts = false
+): string {
+  const isThermal = format === '80mm' || format === '58mm';
+  const storeName = storeSettings.storeName || 'MI TIENDA';
+  const activeWhs = warehouses.filter((w) => w.isActive !== false);
+  const targetWh =
+    selectedWarehouseId !== 'all'
+      ? activeWhs.find((w) => w.id === selectedWarehouseId)
+      : undefined;
+  const scopeTitle = targetWh
+    ? `EXISTENCIAS EN BODEGA: ${targetWh.name.toUpperCase()} (${targetWh.code})`
+    : 'EXISTENCIAS CONSOLIDADAS POR BODEGA';
+
+  const totalUnits = products.reduce((sum, p) => {
+    const qty = targetWh
+      ? getProductStockInWarehouse(p, targetWh.id, warehouses)
+      : Number(p.stock) || 0;
+    return sum + Math.max(0, qty);
+  }, 0);
+
+  const totalSaleVal = products.reduce((sum, p) => {
+    const qty = targetWh
+      ? getProductStockInWarehouse(p, targetWh.id, warehouses)
+      : Number(p.stock) || 0;
+    return sum + Math.max(0, qty) * (Number(p.price) || 0);
+  }, 0);
+
+  return `
+    <div style="font-variant-numeric:tabular-nums;">
+      <div class="text-center" style="border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:14px;">
+        <div style="font-size:${isThermal ? '15px' : '20px'};font-weight:900;text-transform:uppercase;color:#0f172a;">${storeName}</div>
+        <div style="font-size:${isThermal ? '11.5px' : '14px'};font-weight:900;color:#1e1b4b;margin-top:4px;">${scopeTitle}</div>
+        <div style="font-size:11px;color:#475569;margin-top:3px;">Artículos listados: ${products.length} • Total Unidades: ${totalUnits.toLocaleString('es-HN')} uds • Valor Comercial: ${formatCurrencyL(totalSaleVal)}</div>
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:${isThermal ? '9.5px' : '11px'};">
+        <thead>
+          <tr style="background:#0f172a;color:#ffffff;">
+            <th style="padding:7px 8px;text-align:left;">CÓDIGO SKU</th>
+            <th style="padding:7px 8px;text-align:left;">ARTÍCULO</th>
+            ${isThermal ? '' : `<th style="padding:7px 8px;text-align:left;">CATEGORÍA</th>`}
+            <th style="padding:7px 8px;text-align:right;">PRECIO</th>
+            ${
+              targetWh
+                ? `<th style="padding:7px 8px;text-align:center;background:#1e1b4b;">${targetWh.name.toUpperCase()}</th>`
+                : activeWhs
+                    .map(
+                      (w) =>
+                        `<th style="padding:7px 8px;text-align:center;">${w.name} (${w.code})</th>`
+                    )
+                    .join('')
+            }
+            <th style="padding:7px 8px;text-align:center;">TOTAL GLOBAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${products
+            .map((p, idx) => {
+              return `
+                <tr style="border-bottom:1px solid #e2e8f0;background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+                  <td style="padding:6px 8px;font-family:monospace;font-weight:800;">${p.code}</td>
+                  <td style="padding:6px 8px;font-weight:700;">${p.name}${p.size ? ` (${p.size})` : ''}</td>
+                  ${isThermal ? '' : `<td style="padding:6px 8px;color:#475569;">${p.category || 'General'}</td>`}
+                  <td style="padding:6px 8px;text-align:right;font-weight:700;">${formatCurrencyL(p.price)}</td>
+                  ${
+                    targetWh
+                      ? `<td style="padding:6px 8px;text-align:center;font-weight:900;color:#047857;">${getProductStockInWarehouse(p, targetWh.id, warehouses)}</td>`
+                      : activeWhs
+                          .map(
+                            (w) =>
+                              `<td style="padding:6px 8px;text-align:center;font-weight:800;">${getProductStockInWarehouse(p, w.id, warehouses)}</td>`
+                          )
+                          .join('')
+                  }
+                  <td style="padding:6px 8px;text-align:center;font-weight:900;">${p.stock}</td>
+                </tr>
+              `;
+            })
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+export async function downloadWarehouseStockReportPdf(
+  products: Product[],
+  warehouses: WarehouseLocation[],
+  selectedWarehouseId: string,
+  storeSettings: StoreSettings,
+  canViewCosts = false
+): Promise<void> {
+  await preloadStoreLogoForPdf(storeSettings.logoUrl);
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
+  const activeWhs = warehouses.filter((w) => w.isActive !== false);
+  const targetWh =
+    selectedWarehouseId !== 'all'
+      ? activeWhs.find((w) => w.id === selectedWarehouseId)
+      : undefined;
+
+  const totalUnits = products.reduce((sum, p) => {
+    const qty = targetWh
+      ? getProductStockInWarehouse(p, targetWh.id, warehouses)
+      : Number(p.stock) || 0;
+    return sum + Math.max(0, qty);
+  }, 0);
+
+  const totalSaleVal = products.reduce((sum, p) => {
+    const qty = targetWh
+      ? getProductStockInWarehouse(p, targetWh.id, warehouses)
+      : Number(p.stock) || 0;
+    return sum + Math.max(0, qty) * (Number(p.price) || 0);
+  }, 0);
+
+  const totalCostVal = products.reduce((sum, p) => {
+    const qty = targetWh
+      ? getProductStockInWarehouse(p, targetWh.id, warehouses)
+      : Number(p.stock) || 0;
+    return sum + Math.max(0, qty) * (Number(p.cost) || 0);
+  }, 0);
+
+  let y = drawExecutivePdfHeader(doc, {
+    storeSettings,
+    documentTitle: targetWh
+      ? `INVENTARIO DE BODEGA: ${targetWh.name.toUpperCase()}`
+      : 'REPORTE CONSOLIDADO DE EXISTENCIAS POR BODEGA',
+    documentNumber: `${products.length} ARTÍCULOS`,
+    dateLabel: `Emitido: ${new Date().toLocaleString('es-HN')}`,
+    accentRgb: [49, 46, 129],
+  });
+
+  y = drawExecutiveKpiCards(doc, y, [
+    {
+      label: 'Alcance del Reporte',
+      value: targetWh ? targetWh.name.slice(0, 22) : 'Todas las Bodegas',
+      subtext: targetWh ? `Código: ${targetWh.code}` : `${activeWhs.length} bodegas activas`,
+      valueRgb: [15, 23, 42],
+    },
+    {
+      label: 'Referencias (SKUs)',
+      value: `${products.length} artículos`,
+      subtext: 'Con filtro actual',
+      valueRgb: [67, 56, 202],
+    },
+    {
+      label: 'Unidades Físicas',
+      value: `${totalUnits.toLocaleString('es-HN')} uds`,
+      subtext: targetWh ? 'En esta bodega' : 'Suma global de bodegas',
+      valueRgb: [4, 120, 87],
+    },
+    {
+      label: 'Valor Comercial',
+      value: formatCurrencyL(totalSaleVal),
+      subtext: canViewCosts ? `Costo: ${formatCurrencyL(totalCostVal)}` : 'Precio de venta',
+      valueRgb: [180, 83, 9],
+    },
+  ]);
+
+  const headRow = [
+    'Código SKU',
+    'Artículo / Descripción',
+    'Categoría',
+    'Precio Venta',
+    ...(targetWh
+      ? [`Stock en ${targetWh.name}`]
+      : activeWhs.map((w) => `${w.name} (${w.code})`)),
+    'Total Global',
+  ];
+
+  const bodyRows = products.map((p) => [
+    p.code,
+    `${p.name}${p.size ? ` (${p.size})` : ''}`,
+    p.category || 'General',
+    formatCurrencyL(p.price),
+    ...(targetWh
+      ? [`${getProductStockInWarehouse(p, targetWh.id, warehouses)} uds`]
+      : activeWhs.map((w) => `${getProductStockInWarehouse(p, w.id, warehouses)}`)),
+    `${p.stock} uds`,
+  ]);
+
+  autoTable(doc, {
+    startY: y,
+    head: [headRow],
+    body: bodyRows,
+    theme: 'grid',
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 8, cellPadding: 2.8 },
+    bodyStyles: { fontSize: 7.8, cellPadding: 2.5 },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 26 },
+      1: { fontStyle: 'bold' },
+      3: { halign: 'right' },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  drawPdfPageFooters(doc, storeSettings, 'Existencias por Bodega');
+  const safeSuffix = targetWh ? targetWh.code : 'Consolidado';
+  doc.save(`Inventario_Bodega_${safeSuffix}_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+// ============================================================================
+// 11. ACTA DE ENTREGA DE LLAVES, CREDENCIALES Y EXPEDIENTE OFICIAL DEL CLIENTE SAAS
+// ============================================================================
+export interface ClientAppKeysDossierPayload {
+  company: CompanyTenant;
+  saasGlobalConfig?: SaaSGlobalConfig;
+  loginUrl: string;
+  catalogUrl: string;
+  storeSettings?: StoreSettings;
+  users: UserAccount[];
+  warehouses: WarehouseLocation[];
+  stats: {
+    productsCount: number;
+    suppliersCount: number;
+    salesCount: number;
+    purchasesCount: number;
+  };
+}
+
+const MODULE_LABELS_ES: Record<string, string> = {
+  dashboard: 'Dashboard y Ganancias',
+  sales: 'Ventas y Facturación (POS)',
+  inventory: 'Control de Inventario',
+  warehouses: 'Bodegas y Traslados',
+  'price-checker': 'Consultor de Precios',
+  catalog: 'Catálogo Digital y QR',
+  purchases: 'Compras / Facturas Proveedor',
+  audit: 'Conteo / Auditoría Física',
+  suppliers: 'Directorio de Proveedores',
+  users: 'Gestión de Colaboradores',
+  activity: 'Bitácora de Movimientos',
+  settings: 'Ajustes de Tienda',
+};
+
+export function buildClientAppKeysDossierHtml(
+  payload: ClientAppKeysDossierPayload,
+  format: PrinterPaperFormat = 'letter'
+): string {
+  const { company, saasGlobalConfig, loginUrl, catalogUrl, storeSettings, users, warehouses, stats } = payload;
+  const isThermal = format === '80mm' || format === '58mm';
+  const providerName = saasGlobalConfig?.saasBrandName || 'MIAPPHN.ONLINE — Plataforma Empresarial SaaS';
+  const providerPhone =
+    saasGlobalConfig?.saasAdminPhone || saasGlobalConfig?.contractDefaults?.providerPhone || '+504';
+  const docNumber = `LLAVES-${company.slug.toUpperCase()}-${new Date().getFullYear()}`;
+  const issuedDate = new Date().toLocaleString('es-HN');
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(loginUrl)}`;
+  const catalogQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(catalogUrl)}`;
+
+  const enabledMods =
+    Array.isArray(company.allowedModules) && company.allowedModules.length > 0
+      ? company.allowedModules
+      : Object.keys(MODULE_LABELS_ES);
+
+  const bankAccounts = saasGlobalConfig?.bankAccounts || [];
+  const lastPayment = company.paymentHistory && company.paymentHistory.length > 0 ? company.paymentHistory[0] : null;
+  const contractNumber = company.contractData?.contractNumber || `CTR-${company.slug.toUpperCase()}-${new Date().getFullYear()}`;
+  const contractStatusLabel =
+    company.contractData?.status === 'signed'
+      ? 'FIRMADO Y ACTIVO'
+      : company.contractData?.status === 'sent'
+      ? 'ENVIADO AL CLIENTE'
+      : 'EMITIDO / VIGENTE';
+
+  return `
+    <div style="${isThermal ? '' : 'border:2px solid #0f172a;border-radius:14px;padding:24px;max-width:820px;margin:0 auto;font-variant-numeric:tabular-nums;background:#ffffff;color:#0f172a;'}">
+      <!-- Encabezado Corporativo -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;border-bottom:3px solid #047857;padding-bottom:14px;margin-bottom:16px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:${isThermal ? '14px' : '20px'};font-weight:900;color:#0f172a;letter-spacing:-0.02em;text-transform:uppercase;">
+            ${providerName}
+          </div>
+          <div style="font-size:${isThermal ? '11px' : '13.5px'};font-weight:900;color:#047857;margin-top:3px;text-transform:uppercase;">
+            ACTA DE ENTREGA DE LLAVES, CREDENCIALES Y EXPEDIENTE OFICIAL DE LA APP
+          </div>
+          <div style="font-size:11px;color:#475569;margin-top:3px;">
+            Soporte y Administración Central: <strong>${providerPhone}</strong> • Fecha de Emisión: <strong>${issuedDate}</strong>
+          </div>
+        </div>
+        <div style="text-align:right;background:#0f172a;color:#ffffff;padding:8px 14px;border-radius:10px;">
+          <div style="font-size:9.5px;text-transform:uppercase;color:#34d399;font-weight:800;">Expediente Oficial</div>
+          <div style="font-size:14px;font-weight:900;font-family:monospace;">${docNumber}</div>
+          <div style="font-size:10px;color:#cbd5e1;">Estado: ${company.status === 'suspended' ? 'SUSPENDIDO' : 'ACTIVO (AL DÍA)'}</div>
+        </div>
+      </div>
+
+      <!-- Sección 1: Ficha Corporativa y Datos del Cliente -->
+      <div style="margin-bottom:14px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:12px 14px;">
+        <div style="font-size:11.5px;font-weight:900;text-transform:uppercase;color:#0f172a;border-bottom:1px solid #e2e8f0;padding-bottom:5px;margin-bottom:8px;">
+          1. Información Corporativa, Licencia y Documentos del Cliente
+        </div>
+        <div style="display:grid;grid-template-columns:${isThermal ? '1fr' : '1fr 1fr 1fr'};gap:8px;font-size:11.5px;">
+          <div><span style="color:#64748b;">Empresa / Comercio:</span><br/><strong style="font-size:12.5px;">${company.name}</strong></div>
+          <div><span style="color:#64748b;">Propietario / Titular:</span><br/><strong>${company.ownerName || company.contractData?.clientRepresentative || 'Titular Registrado'}</strong></div>
+          <div><span style="color:#64748b;">RTN / Identidad (DNI):</span><br/><strong>${company.clientRtnOrId || company.contractData?.clientIdentityOrRtn || 'Registrado en expediente'}</strong></div>
+          <div><span style="color:#64748b;">WhatsApp / Teléfono:</span><br/><strong>${company.phone || storeSettings?.phone || 'N/A'}</strong></div>
+          <div><span style="color:#64748b;">Correo Electrónico:</span><br/><strong>${company.email || 'N/A'}</strong></div>
+          <div><span style="color:#64748b;">Dirección / Ciudad:</span><br/><strong>${company.address || storeSettings?.address || company.contractData?.cityAndCountry || 'Honduras'}</strong></div>
+          <div><span style="color:#64748b;">Plan Contratado:</span><br/><strong style="text-transform:uppercase;color:#047857;">PLAN ${company.plan} (${formatCurrencyL(company.price || 0)})</strong></div>
+          <div><span style="color:#64748b;">Próximo Corte / Renovación:</span><br/><strong>${company.nextBillingDate || (company.plan === 'vitalicio' ? 'Licencia Vitalicia' : 'Segun ciclo activo')}</strong></div>
+          <div><span style="color:#64748b;">Contrato Legal de Uso:</span><br/><strong>${contractNumber} (${contractStatusLabel})</strong></div>
+        </div>
+      </div>
+
+      <!-- Sección 2: Llaves Maestras y Enlaces de Acceso -->
+      <div style="margin-bottom:14px;background:#ecfdf5;border:2px solid #10b981;border-radius:12px;padding:14px;">
+        <div style="font-size:12px;font-weight:900;text-transform:uppercase;color:#065f46;border-bottom:1px solid #a7f3d0;padding-bottom:6px;margin-bottom:10px;">
+          2. Llaves Maestras de la Aplicación, Contraseñas y Enlaces Oficiales
+        </div>
+        <div style="display:grid;grid-template-columns:${isThermal ? '1fr' : '1.6fr 1fr'};gap:12px;align-items:center;">
+          <div style="font-size:11.5px;">
+            <div style="margin-bottom:7px;background:#ffffff;padding:8px 10px;border-radius:8px;border:1px solid #6ee7b7;">
+              <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:#047857;">Enlace Oficial del Sistema POS y Administración</div>
+              <div style="font-family:monospace;font-weight:900;font-size:12.5px;color:#0f172a;word-break:break-all;">${loginUrl}</div>
+            </div>
+            <div style="margin-bottom:7px;background:#ffffff;padding:8px 10px;border-radius:8px;border:1px solid #cbd5e1;">
+              <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:#4338ca;">Enlace Público del Catálogo Digital y Pedidos WhatsApp</div>
+              <div style="font-family:monospace;font-weight:800;font-size:11.5px;color:#1e1b4b;word-break:break-all;">${catalogUrl}</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <div style="background:#0f172a;color:#ffffff;padding:8px 10px;border-radius:8px;">
+                <div style="font-size:9.5px;color:#94a3b8;text-transform:uppercase;font-weight:800;">Código Único de Empresa (ID)</div>
+                <div style="font-family:monospace;font-size:14px;font-weight:900;color:#34d399;">${company.slug}</div>
+              </div>
+              <div style="background:#0f172a;color:#ffffff;padding:8px 10px;border-radius:8px;">
+                <div style="font-size:9.5px;color:#94a3b8;text-transform:uppercase;font-weight:800;">Contraseña Maestra Admin</div>
+                <div style="font-family:monospace;font-size:14px;font-weight:900;color:#fbbf24;">${company.adminPassword}</div>
+              </div>
+            </div>
+            <div style="margin-top:7px;font-size:11px;color:#065f46;">
+              • <strong>Clave en Ajustes Internos de Tienda:</strong> <code style="font-family:monospace;font-weight:900;background:#ffffff;padding:2px 6px;border-radius:4px;border:1px solid #a7f3d0;">${storeSettings?.accessPassword || company.adminPassword}</code>
+              &nbsp;|&nbsp;
+              <strong>Capacidad Contratada:</strong> ${company.maxProducts && company.maxProducts > 0 ? `${company.maxProducts} productos` : 'Productos Ilimitados'} / ${company.maxUsers && company.maxUsers > 0 ? `${company.maxUsers} usuarios` : 'Usuarios Ilimitados'}
+            </div>
+          </div>
+
+          ${
+            isThermal
+              ? ''
+              : `
+                <div style="display:flex;justify-content:space-around;gap:8px;text-align:center;background:#ffffff;padding:10px;border-radius:10px;border:1px solid #a7f3d0;">
+                  <div>
+                    <img src="${qrUrl}" alt="QR Sistema POS" style="width:92px;height:92px;object-fit:contain;border:1px solid #e2e8f0;border-radius:6px;padding:3px;" />
+                    <div style="font-size:9.5px;font-weight:800;color:#0f172a;margin-top:3px;">QR Acceso Sistema</div>
+                  </div>
+                  <div>
+                    <img src="${catalogQrUrl}" alt="QR Catálogo" style="width:92px;height:92px;object-fit:contain;border:1px solid #e2e8f0;border-radius:6px;padding:3px;" />
+                    <div style="font-size:9.5px;font-weight:800;color:#4338ca;margin-top:3px;">QR Catálogo Cliente</div>
+                  </div>
+                </div>
+              `
+          }
+        </div>
+      </div>
+
+      <!-- Sección 3: Usuarios y Colaboradores -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11.5px;font-weight:900;text-transform:uppercase;color:#0f172a;margin-bottom:6px;">
+          3. Credenciales de Usuarios, Administradores y Colaboradores Creados (${users.length + 1} Cuentas)
+        </div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:11px;">
+          <thead>
+            <tr style="background:#0f172a;color:#ffffff;">
+              <th style="padding:6px 8px;text-align:left;">NOMBRE COMPLETO / PERFIL</th>
+              <th style="padding:6px 8px;text-align:left;">USUARIO / ID</th>
+              <th style="padding:6px 8px;text-align:left;">CONTRASEÑA / PIN</th>
+              <th style="padding:6px 8px;text-align:left;">ROL</th>
+              <th style="padding:6px 8px;text-align:left;">PERMISOS Y MÓDULOS HABILITADOS</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #e2e8f0;background:#ecfdf5;">
+              <td style="padding:6px 8px;font-weight:900;">${company.ownerName || 'Administrador Principal'} (Llave Maestra)</td>
+              <td style="padding:6px 8px;font-family:monospace;font-weight:900;color:#047857;">Código: ${company.slug}</td>
+              <td style="padding:6px 8px;font-family:monospace;font-weight:900;color:#b45309;">${company.adminPassword}</td>
+              <td style="padding:6px 8px;font-weight:800;color:#047857;">ADMIN MAESTRO</td>
+              <td style="padding:6px 8px;">Control Total de la Tienda (${enabledMods.length} módulos)</td>
+            </tr>
+            ${users
+              .map(
+                (u, idx) => `
+                  <tr style="border-bottom:1px solid #e2e8f0;background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+                    <td style="padding:6px 8px;font-weight:800;">${u.name} ${u.isActive === false ? '(Inactivo)' : ''}</td>
+                    <td style="padding:6px 8px;font-family:monospace;font-weight:800;">@${u.username}</td>
+                    <td style="padding:6px 8px;font-family:monospace;font-weight:900;color:#0f172a;">${u.password}</td>
+                    <td style="padding:6px 8px;font-weight:800;color:${u.role === 'admin' ? '#047857' : '#4338ca'};">${u.role === 'admin' ? 'Administrador' : 'Colaborador'}</td>
+                    <td style="padding:6px 8px;font-size:10px;">${
+                      u.role === 'admin'
+                        ? 'Acceso Administrativo Completo'
+                        : (u.allowedTabs || []).map((t) => MODULE_LABELS_ES[t] || t).join(', ')
+                    }</td>
+                  </tr>
+                `
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Sección 4: Bodegas Configuradas y Resumen de Base de Datos -->
+      <div style="margin-bottom:14px;display:grid;grid-template-columns:${isThermal ? '1fr' : '1.3fr 1fr'};gap:12px;">
+        <div style="border:1px solid #cbd5e1;border-radius:10px;padding:10px 12px;">
+          <div style="font-size:11px;font-weight:900;text-transform:uppercase;color:#0f172a;margin-bottom:6px;">
+            4. Bodegas y Sucursales Configuradas (${warehouses.length})
+          </div>
+          ${
+            warehouses.length === 0
+              ? `<div style="font-size:11px;color:#64748b;">Bodega Principal / Piso de Venta (BOD-01)</div>`
+              : `<table style="width:100%;border-collapse:collapse;font-size:10.5px;">
+                  <thead>
+                    <tr style="background:#f1f5f9;color:#334155;">
+                      <th style="padding:4px 6px;text-align:left;">Código</th>
+                      <th style="padding:4px 6px;text-align:left;">Bodega / Sucursal</th>
+                      <th style="padding:4px 6px;text-align:left;">Encargado / Ubicación</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${warehouses
+                      .map(
+                        (w) => `
+                          <tr style="border-top:1px solid #e2e8f0;">
+                            <td style="padding:4px 6px;font-family:monospace;font-weight:800;">${w.code}</td>
+                            <td style="padding:4px 6px;font-weight:800;">${w.name} ${w.isMainSalesFloor ? '★ (Caja)' : ''}</td>
+                            <td style="padding:4px 6px;color:#475569;">${[w.manager, w.address].filter(Boolean).join(' • ') || 'Principal'}</td>
+                          </tr>
+                        `
+                      )
+                      .join('')}
+                  </tbody>
+                </table>`
+          }
+        </div>
+
+        <div style="border:1px solid #cbd5e1;border-radius:10px;padding:10px 12px;background:#f8fafc;">
+          <div style="font-size:11px;font-weight:900;text-transform:uppercase;color:#0f172a;margin-bottom:6px;">
+            5. Estado de Datos y Módulos Activos
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;margin-bottom:8px;">
+            <div style="background:#ffffff;padding:6px 8px;border-radius:6px;border:1px solid #e2e8f0;">
+              <span style="color:#64748b;font-size:10px;">Artículos en Catálogo:</span><br/>
+              <strong style="font-size:13px;color:#0f172a;">${stats.productsCount.toLocaleString('es-HN')} SKUs</strong>
+            </div>
+            <div style="background:#ffffff;padding:6px 8px;border-radius:6px;border:1px solid #e2e8f0;">
+              <span style="color:#64748b;font-size:10px;">Proveedores Activos:</span><br/>
+              <strong style="font-size:13px;color:#0f172a;">${stats.suppliersCount.toLocaleString('es-HN')}</strong>
+            </div>
+            <div style="background:#ffffff;padding:6px 8px;border-radius:6px;border:1px solid #e2e8f0;">
+              <span style="color:#64748b;font-size:10px;">Ventas Registradas:</span><br/>
+              <strong style="font-size:13px;color:#047857;">${stats.salesCount.toLocaleString('es-HN')}</strong>
+            </div>
+            <div style="background:#ffffff;padding:6px 8px;border-radius:6px;border:1px solid #e2e8f0;">
+              <span style="color:#64748b;font-size:10px;">Facturas de Compra:</span><br/>
+              <strong style="font-size:13px;color:#4338ca;">${stats.purchasesCount.toLocaleString('es-HN')}</strong>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#334155;">
+            <strong>Módulos Habilitados (${enabledMods.length}):</strong> ${enabledMods
+              .map((m) => MODULE_LABELS_ES[m] || m)
+              .join(' • ')}
+          </div>
+        </div>
+      </div>
+
+      ${
+        lastPayment || bankAccounts.length > 0
+          ? `
+            <div style="margin-bottom:14px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:10px 12px;font-size:10.5px;">
+              ${
+                lastPayment
+                  ? `<div style="margin-bottom:4px;"><strong>Último Comprobante de Pago SaaS:</strong> Recibo <code style="font-family:monospace;font-weight:900;">${lastPayment.receiptNumber}</code> por <strong>${formatCurrencyL(lastPayment.amount)}</strong> (${lastPayment.periodLabel} — ${lastPayment.dateFormatted})</div>`
+                  : ''
+              }
+              ${
+                bankAccounts.length > 0
+                  ? `<div><strong>Cuentas Oficiales para Renovación de Suscripción:</strong> ${bankAccounts
+                      .map((b) => `${b.bankName}: ${b.accountNumber} (${b.accountType} a nombre de ${b.holderName})`)
+                      .join(' | ')}</div>`
+                  : ''
+              }
+            </div>
+          `
+          : ''
+      }
+
+      <!-- Firmas de Entrega y Recepción de Conformidad -->
+      <div class="signatures" style="margin-top:26px;">
+        <div class="sig-block">
+          <div class="sig-line"></div>
+          <div style="font-size:10.5px;font-weight:800;">ENTREGA OFICIAL — PROVEEDOR SAAS</div>
+          <div style="font-size:9.5px;color:#64748b;">${saasGlobalConfig?.contractDefaults?.providerName || providerName}</div>
+        </div>
+        <div class="sig-block">
+          <div class="sig-line"></div>
+          <div style="font-size:10.5px;font-weight:800;">RECIBÍ LLAVES Y ACCESOS CONFORME — CLIENTE</div>
+          <div style="font-size:9.5px;color:#64748b;">${company.ownerName || company.name} (${company.slug})</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+export async function downloadClientAppKeysDossierPdf(
+  payload: ClientAppKeysDossierPayload
+): Promise<void> {
+  const { company, saasGlobalConfig, loginUrl, catalogUrl, storeSettings, users, warehouses, stats } = payload;
+  const effectiveLogo = company.logoUrl || storeSettings?.logoUrl;
+  await preloadStoreLogoForPdf(effectiveLogo);
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+  const providerName = saasGlobalConfig?.saasBrandName || 'MIAPPHN.ONLINE — Plataforma SaaS';
+  const docNumber = `LLAVES-${company.slug.toUpperCase()}`;
+
+  const headerSettings: StoreSettings = {
+    companyId: company.slug,
+    storeName: `${company.name} (${providerName})`,
+    tagline: 'Acta Oficial de Entrega de Llaves, Credenciales, Enlaces y Expediente de la App',
+    logoUrl: effectiveLogo || '',
+    phone: company.phone || saasGlobalConfig?.saasAdminPhone || '',
+    address: company.address || storeSettings?.address || 'Honduras',
+    accessPassword: company.adminPassword,
+  };
+
+  let y = drawExecutivePdfHeader(doc, {
+    storeSettings: headerSettings,
+    documentTitle: 'ENTREGA DE LLAVES Y CREDENCIALES DE APP',
+    documentNumber: docNumber,
+    dateLabel: `Emitido: ${new Date().toLocaleString('es-HN')}`,
+    accentRgb: [4, 120, 87],
+    statusBadge:
+      company.status === 'suspended'
+        ? { text: 'SERVICIO EN MORA', bgRgb: [254, 226, 226], textRgb: [185, 28, 28] }
+        : { text: 'LICENCIA ACTIVA', bgRgb: [209, 250, 229], textRgb: [4, 120, 87] },
+  });
+
+  y = drawExecutiveKpiCards(doc, y, [
+    {
+      label: 'Código de Empresa',
+      value: company.slug,
+      subtext: `Plan ${company.plan.toUpperCase()} (${formatCurrencyL(company.price || 0)})`,
+      valueRgb: [4, 120, 87],
+    },
+    {
+      label: 'Clave Maestra Admin',
+      value: company.adminPassword,
+      subtext: `Ajustes: ${storeSettings?.accessPassword || company.adminPassword}`,
+      valueRgb: [180, 83, 9],
+    },
+    {
+      label: 'Cuentas y Bodegas',
+      value: `${users.length + 1} Usuarios`,
+      subtext: `${warehouses.length || 1} bodegas configuradas`,
+      valueRgb: [67, 56, 202],
+    },
+    {
+      label: 'Base de Datos Entregada',
+      value: `${stats.productsCount} Artículos`,
+      subtext: `${stats.salesCount} ventas • ${stats.suppliersCount} prov.`,
+      valueRgb: [15, 23, 42],
+    },
+  ]);
+
+  // Tabla 1: Ficha Corporativa y Llaves Maestras
+  const contractNumber =
+    company.contractData?.contractNumber || `CTR-${company.slug.toUpperCase()}-${new Date().getFullYear()}`;
+  const enabledMods =
+    Array.isArray(company.allowedModules) && company.allowedModules.length > 0
+      ? company.allowedModules
+      : Object.keys(MODULE_LABELS_ES);
+
+  const clientRtn = company.clientRtnOrId || company.contractData?.clientIdentityOrRtn || '';
+
+  autoTable(doc, {
+    startY: y,
+    head: [['1. EXPEDIENTE CORPORATIVO, LLAVES DE ACCESO Y ENLACES OFICIALES', 'DETALLE OFICIAL ENTREGADO AL CLIENTE']],
+    body: [
+      ['Nombre Comercial del Negocio', `${company.name} (Código único de empresa: ${company.slug})`],
+      ['Propietario / Representante Legal', `${company.ownerName || company.contractData?.clientRepresentative || 'Titular Registrado'} ${clientRtn ? `• RTN/DNI: ${clientRtn}` : ''}`],
+      ['Contacto Registrado', `WhatsApp/Tel: ${company.phone || storeSettings?.phone || 'N/A'} • Email: ${company.email || 'N/A'}`],
+      ['Enlace Oficial Sistema POS y Administración', loginUrl],
+      ['Enlace Público Catálogo Digital y Pedidos QR', catalogUrl],
+      ['Código Único de Empresa (ID de Ingreso)', company.slug],
+      ['Contraseña Maestra de Administrador Principal', company.adminPassword],
+      ['Contraseña de Seguridad en Ajustes de Tienda', storeSettings?.accessPassword || company.adminPassword],
+      ['Plan, Cuota y Próxima Fecha de Corte', `Plan ${company.plan.toUpperCase()} • Cuota: ${formatCurrencyL(company.price || 0)} • Próximo Corte: ${company.nextBillingDate || 'Vitalicio / Sin vencimiento'}`],
+      ['Contrato Oficial de Licencia de Uso', `${contractNumber} (${company.contractData?.status === 'signed' ? 'Firmado Digitalmente' : 'Vigente'})`],
+      ['Módulos Habilitados en la Licencia', enabledMods.map((m) => MODULE_LABELS_ES[m] || m).join(', ')],
+    ],
+    theme: 'grid',
+    headStyles: { fillColor: [4, 120, 87], textColor: 255, fontSize: 8.5, cellPadding: 2.8 },
+    bodyStyles: { fontSize: 8.2, cellPadding: 2.4 },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 68, textColor: [15, 23, 42] },
+      1: { cellWidth: 'auto', fontStyle: 'bold' },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  let nextY = (doc as any).lastAutoTable.finalY + 5;
+
+  // Tabla 2: Directorio de Usuarios y Contraseñas
+  const userRows = [
+    [
+      `${company.ownerName || 'Administrador Principal'} (Maestro)`,
+      `Código: ${company.slug}`,
+      company.adminPassword,
+      'ADMIN MAESTRO',
+      'Control Total del Sistema y Ajustes',
+    ],
+    ...users.map((u) => [
+      `${u.name}${u.isActive === false ? ' (Inactivo)' : ''}`,
+      `@${u.username}`,
+      u.password,
+      u.role === 'admin' ? 'Administrador' : 'Colaborador / Cajero',
+      u.role === 'admin'
+        ? 'Acceso Administrativo Completo'
+        : (u.allowedTabs || []).map((t) => MODULE_LABELS_ES[t] || t).join(', '),
+    ]),
+  ];
+
+  autoTable(doc, {
+    startY: nextY,
+    head: [['2. NOMBRE DE USUARIO / PERSONAL', 'USUARIO / ID', 'CONTRASEÑA / PIN', 'ROL ASIGNADO', 'MÓDULOS Y PERMISOS']],
+    body: userRows,
+    theme: 'grid',
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 8.2, cellPadding: 2.6 },
+    bodyStyles: { fontSize: 8, cellPadding: 2.3 },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 44 },
+      1: { fontStyle: 'bold', cellWidth: 32 },
+      2: { fontStyle: 'bold', cellWidth: 30, textColor: [180, 83, 9] },
+      3: { fontStyle: 'bold', cellWidth: 30 },
+      4: { cellWidth: 'auto' },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  nextY = (doc as any).lastAutoTable.finalY + 5;
+
+  // Tabla 3: Bodegas y Resumen de Datos
+  const warehouseRows =
+    warehouses.length > 0
+      ? warehouses.map((w) => [
+          w.code,
+          `${w.name}${w.isMainSalesFloor ? ' (Caja / Piso Venta Principal)' : ''}`,
+          w.manager || 'Administración',
+          w.address || 'Principal',
+          w.isActive === false ? 'Inactiva' : 'Activa',
+        ])
+      : [['BOD-01', 'Tienda Principal / Piso de Venta', 'Administración', 'Principal', 'Activa']];
+
+  autoTable(doc, {
+    startY: nextY,
+    head: [['3. CÓDIGO BODEGA', 'NOMBRE DE BODEGA / SUCURSAL', 'ENCARGADO', 'UBICACIÓN / DIRECCIÓN', 'ESTADO']],
+    body: warehouseRows,
+    theme: 'grid',
+    headStyles: { fillColor: [49, 46, 129], textColor: 255, fontSize: 8, cellPadding: 2.5 },
+    bodyStyles: { fontSize: 7.8, cellPadding: 2.2 },
+    margin: { left: 14, right: 14 },
+  });
+
+  nextY = (doc as any).lastAutoTable.finalY + 14;
+  if (nextY < 248) {
+    doc.setDrawColor(100, 116, 139);
+    doc.setLineWidth(0.35);
+    doc.line(26, nextY, 96, nextY);
+    doc.line(120, nextY, 190, nextY);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('ENTREGA OFICIAL — PROVEEDOR SAAS', 61, nextY + 4.5, { align: 'center' });
+    doc.text('RECIBÍ LLAVES Y ACCESOS CONFORME — CLIENTE', 155, nextY + 4.5, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(saasGlobalConfig?.contractDefaults?.providerName || providerName, 61, nextY + 8.5, { align: 'center' });
+    doc.text(`${company.ownerName || company.name} (${company.slug})`, 155, nextY + 8.5, { align: 'center' });
+  }
+
+  drawPdfPageFooters(doc, headerSettings, `Expediente de Llaves ${company.slug.toUpperCase()}`);
+  doc.save(`Entrega_Llaves_Y_Accesos_${company.slug}_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+
 
 

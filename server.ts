@@ -699,7 +699,7 @@ app.post('/api/cloud-sync/inventory', (req, res) => {
       }
 
       const existing = tenant.inventory[codeKey];
-      const incomingTs = Number(rawItem.updatedAt) || (isUpsert ? Date.now() : 0);
+      const incomingTs = Number(rawItem.updatedAt) || 0;
       const existingTs = Number(existing?.updatedAt) || 0;
 
       if (!existing) {
@@ -721,10 +721,11 @@ app.post('/api/cloud-sync/inventory', (req, res) => {
         changed = true;
       } else {
         const shouldPreferIncoming =
-          isUpsert ||
           unsyncedSet.has(codeKey) ||
+          (isUpsert && incomingTs >= existingTs) ||
           incomingTs > existingTs ||
           (incomingTs === existingTs &&
+            existingTs === 0 &&
             (Number(rawItem.stock) !== Number(existing.stock) ||
               Number(rawItem.price) !== Number(existing.price) ||
               String(rawItem.name).trim() !== String(existing.name).trim() ||

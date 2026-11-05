@@ -136,6 +136,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [quickDiscountType, setQuickDiscountType] = useState<'fixed' | 'percent'>('fixed');
   const [quickDiscountValue, setQuickDiscountValue] = useState<string>('');
 
+  // Inline Quick Stock Edit State in Table / Cards
+  const [inlineStockItemCode, setInlineStockItemCode] = useState<string | null>(null);
+  const [inlineStockInputValue, setInlineStockInputValue] = useState<string>('');
+  const [modalStockInputText, setModalStockInputText] = useState<string>('0');
+
   const activeWarehouses = useMemo(() => {
     const raw =
       Array.isArray(warehousesData?.warehouses) && warehousesData!.warehouses.length > 0
@@ -248,8 +253,144 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       discountValue: 0,
       img: '',
     });
+    setModalStockInputText('0');
     setIsCustomCategoryMode(false);
     setIsModalOpen(true);
+  };
+
+  const getPreferredWarehouseForProduct = (product: Product): string => {
+    let bestWhId = mainWarehouse?.id || 'principal';
+    let bestWhStock = -1;
+
+    if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
+      for (const [whKey, rawQty] of Object.entries(product.warehouseStocks)) {
+        const qty = Math.max(0, Math.round(Number(rawQty) || 0));
+        if (qty > bestWhStock) {
+          bestWhStock = qty;
+          bestWhId = whKey;
+        }
+      }
+    }
+
+    if (activeWarehouses.length > 0) {
+      for (const wh of activeWarehouses) {
+        const whStock = getProductStockInWarehouse(product, wh.id, activeWarehouses);
+        if (whStock > bestWhStock) {
+          bestWhStock = whStock;
+          bestWhId = wh.id;
+        }
+      }
+    }
+
+    return bestWhId;
+  };
+
+  const computeNormalizedWarehouseStocks = (
+    product: Product | null,
+    enteredStock: number,
+    targetWarehouseId: string
+  ): Record<string, number> => {
+    const cleanStock = Math.max(0, Math.round(Number(enteredStock) || 0));
+    const targetWhId = targetWarehouseId || mainWarehouse?.id || 'principal';
+    const whMap: Record<string, number> = {};
+
+    if (!product) {
+      activeWarehouses.forEach((w) => {
+        whMap[w.id] = w.id === targetWhId ? cleanStock : 0;
+      });
+      if (whMap[targetWhId] === undefined) {
+        whMap[targetWhId] = cleanStock;
+      }
+      return whMap;
+    }
+
+    const hadExplicitMap =
+      Boolean(product.warehouseStocks) && Object.keys(product.warehouseStocks || {}).length > 0;
+
+    if (hadExplicitMap) {
+      for (const [k, v] of Object.entries(product.warehouseStocks || {})) {
+        whMap[k] = Math.max(0, Math.round(Number(v) || 0));
+      }
+      activeWarehouses.forEach((w) => {
+        if (whMap[w.id] === undefined) {
+          whMap[w.id] = 0;
+        }
+      });
+    } else {
+      activeWarehouses.forEach((w) => {
+        whMap[w.id] = getProductStockInWarehouse(product, w.id, activeWarehouses);
+      });
+    }
+
+    if (whMap[targetWhId] === undefined) {
+      whMap[targetWhId] = 0;
+    }
+
+    const currentMapSum = Object.values(whMap).reduce(
+      (acc, v) => acc + Math.max(0, Math.round(Number(v) || 0)),
+      0
+    );
+    const delta = cleanStock - currentMapSum;
+
+    if (delta > 0) {
+      whMap[targetWhId] = Math.max(0, Math.round(Number(whMap[targetWhId]) || 0) + delta);
+    } else if (delta < 0) {
+      let remainingToDeduct = Math.abs(delta);
+      const inTarget = Math.max(0, Math.round(Number(whMap[targetWhId]) || 0));
+      const deductFromTarget = Math.min(inTarget, remainingToDeduct);
+      whMap[targetWhId] = inTarget - deductFromTarget;
+      remainingToDeduct -= deductFromTarget;
+
+      if (remainingToDeduct > 0) {
+        const otherWhKeys = Object.keys(whMap).filter(
+          (k) => k !== targetWhId && (Number(whMap[k]) || 0) > 0
+        );
+        for (const k of otherWhKeys) {
+          if (remainingToDeduct <= 0) break;
+          const inOther = Math.max(0, Math.round(Number(whMap[k]) || 0));
+          const deductFromOther = Math.min(inOther, remainingToDeduct);
+          whMap[k] = inOther - deductFromOther;
+          remainingToDeduct -= deductFromOther;
+        }
+      }
+    }
+
+    // Final mathematical guarantee: sum of warehouseStocks MUST equal cleanStock
+    const checkSum = Object.values(whMap).reduce(
+      (acc, v) => acc + Math.max(0, Math.round(Number(v) || 0)),
+      0
+    );
+    if (checkSum !== cleanStock) {
+      for (const k of Object.keys(whMap)) {
+        whMap[k] = 0;
+      }
+      whMap[targetWhId] = cleanStock;
+    }
+
+    return whMap;
+  };
+
+  const handleQuickAdjustStock = (product: Product, newStockValue: number) => {
+    const cleanNewStock = Math.max(0, Math.round(Number(newStockValue) || 0));
+    const targetWhId = getPreferredWarehouseForProduct(product);
+    const nextWarehouseStocks = computeNormalizedWarehouseStocks(
+      product,
+      cleanNewStock,
+      targetWhId
+    );
+    const updatedProduct: Product = {
+      ...product,
+      stock: cleanNewStock,
+      warehouseStocks: nextWarehouseStocks,
+    };
+    onSaveProduct(updatedProduct, product.code);
+    setInlineStockItemCode(null);
+    if (showToast) {
+      showToast(
+        `Stock de "${product.name}" (${product.code}) actualizado a ${cleanNewStock} uds.`,
+        'success'
+      );
+    }
   };
 
   const handleOpenEdit = (product: Product) => {
@@ -259,13 +400,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       product.discountValue !== undefined
         ? Number(product.discountValue) || 0
         : Number(product.discount) || 0;
+
+    const preferredWhId = getPreferredWarehouseForProduct(product);
+    const currentStock = Math.max(0, Math.round(Number(product.stock) || 0));
+
     setFormData({
       code: product.code,
       name: product.name,
       category: cleanCategoryName(product.category || 'Otros') || 'Otros',
       size: product.size || '',
-      stock: product.stock,
-      targetWarehouseId: mainWarehouse?.id || 'principal',
+      stock: currentStock,
+      targetWarehouseId: preferredWhId,
       supplier: (product.supplier || '').trim(),
       cost: product.cost,
       price: product.price,
@@ -273,6 +418,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       discountValue: savedVal,
       img: product.img || '',
     });
+    setModalStockInputText(String(currentStock));
     setIsCustomCategoryMode(false);
     setIsModalOpen(true);
   };
@@ -354,38 +500,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const saveFormProduct = (keepOpenForNext: boolean) => {
     if (!formData.name.trim() || !formData.code.trim()) return;
 
-    const enteredStock = Math.max(0, Math.round(Number(formData.stock) || 0));
+    const parsedTextStock =
+      modalStockInputText.trim() !== '' ? Number(modalStockInputText) : Number(formData.stock);
+    const enteredStock = Math.max(0, Math.round(Number.isFinite(parsedTextStock) ? parsedTextStock : 0));
     const targetWhId = formData.targetWarehouseId || mainWarehouse?.id || 'principal';
 
-    let nextWarehouseStocks: Record<string, number> | undefined = editingProduct?.warehouseStocks;
-    let finalTotalStock = enteredStock;
-
-    if (!editingProduct) {
-      // Creating a brand-new product: assign initial stock to the selected target warehouse
-      const whMap: Record<string, number> = {};
-      activeWarehouses.forEach((w) => {
-        whMap[w.id] = w.id === targetWhId ? enteredStock : 0;
-      });
-      nextWarehouseStocks = whMap;
-      finalTotalStock = enteredStock;
-    } else if (editingProduct.warehouseStocks && Object.keys(editingProduct.warehouseStocks).length > 0) {
-      // If editing an existing product that has multi-warehouse stock and total stock was changed in the form,
-      // apply the difference to the selected warehouse so warehouseStocks stays synchronized
-      const oldTotal = Math.max(0, Math.round(Number(editingProduct.stock) || 0));
-      const delta = enteredStock - oldTotal;
-      if (delta !== 0) {
-        const whMap: Record<string, number> = { ...editingProduct.warehouseStocks };
-        activeWarehouses.forEach((w) => {
-          whMap[w.id] = getProductStockInWarehouse(editingProduct, w.id, activeWarehouses);
-        });
-        whMap[targetWhId] = Math.max(0, (whMap[targetWhId] || 0) + delta);
-        finalTotalStock = Object.values(whMap).reduce(
-          (acc, v) => acc + Math.max(0, Math.round(Number(v) || 0)),
-          0
-        );
-        nextWarehouseStocks = whMap;
-      }
-    }
+    const nextWarehouseStocks = computeNormalizedWarehouseStocks(
+      editingProduct,
+      enteredStock,
+      targetWhId
+    );
+    const finalTotalStock = enteredStock;
 
     const savedItem: Product = {
       id: editingProduct ? editingProduct.id : Date.now().toString(),
@@ -422,6 +547,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         discountValue: 0,
         img: '',
       }));
+      setModalStockInputText('0');
       if (showToast) {
         showToast(
           `Artículo "${savedItem.name}" (${savedItem.code}) guardado. Siguiente SKU: ${nextCodeAfterSave || 'listo'}`,
@@ -1076,12 +1202,77 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     </div>
 
                     <div className="text-center">
-                      <span className="text-[10px] text-slate-400 block -mb-0.5">Stock</span>
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-md font-bold text-xs ${stockColor}`}
-                      >
-                        {stockNumber} unids
-                      </span>
+                      <span className="text-[10px] text-slate-400 block mb-0.5">Stock</span>
+                      {inlineStockItemCode === item.code ? (
+                        <div className="inline-flex items-center gap-1 bg-white border-2 border-emerald-500 rounded-lg px-1.5 py-0.5 shadow-sm">
+                          <input
+                            type="number"
+                            min="0"
+                            autoFocus
+                            value={inlineStockInputValue}
+                            onChange={(e) => setInlineStockInputValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleQuickAdjustStock(item, parseInt(inlineStockInputValue, 10) || 0);
+                              } else if (e.key === 'Escape') {
+                                setInlineStockItemCode(null);
+                              }
+                            }}
+                            className="w-12 text-center font-bold text-xs text-slate-900 outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleQuickAdjustStock(item, parseInt(inlineStockInputValue, 10) || 0)
+                            }
+                            className="p-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
+                            title="Guardar nuevo stock"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setInlineStockItemCode(null)}
+                            className="p-1 rounded bg-slate-100 text-slate-500 hover:bg-slate-200 cursor-pointer"
+                            title="Cancelar"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleQuickAdjustStock(item, Math.max(0, stockNumber - 1))
+                            }
+                            className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center cursor-pointer active:scale-95"
+                            title="Restar 1 al stock"
+                          >
+                            -
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInlineStockItemCode(item.code);
+                              setInlineStockInputValue(String(stockNumber));
+                            }}
+                            className={`inline-flex items-center px-2 py-0.5 rounded-md font-bold text-xs cursor-pointer border border-transparent hover:border-emerald-400 ${stockColor}`}
+                            title="Toca para escribir nuevo stock exacto"
+                          >
+                            {stockNumber} uds
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleQuickAdjustStock(item, stockNumber + 1)}
+                            className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center cursor-pointer active:scale-95"
+                            title="Sumar 1 al stock"
+                          >
+                            +
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -1338,11 +1529,82 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         })()}
                       </td>
                       <td className="p-4 border-b border-slate-100 text-center">
-                        <span
-                          className={`inline-flex items-center justify-center min-w-[3rem] px-2.5 py-1 rounded-lg font-bold text-sm ${stockColor}`}
-                        >
-                          {stockNumber}
-                        </span>
+                        {inlineStockItemCode === item.code ? (
+                          <div className="inline-flex items-center justify-center gap-1 bg-white border-2 border-emerald-500 rounded-xl px-2 py-1 shadow-sm">
+                            <input
+                              type="number"
+                              min="0"
+                              autoFocus
+                              value={inlineStockInputValue}
+                              onChange={(e) => setInlineStockInputValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleQuickAdjustStock(
+                                    item,
+                                    parseInt(inlineStockInputValue, 10) || 0
+                                  );
+                                } else if (e.key === 'Escape') {
+                                  setInlineStockItemCode(null);
+                                }
+                              }}
+                              className="w-14 text-center font-extrabold text-sm text-slate-900 outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleQuickAdjustStock(
+                                  item,
+                                  parseInt(inlineStockInputValue, 10) || 0
+                                )
+                              }
+                              className="p-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
+                              title="Guardar nuevo stock"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setInlineStockItemCode(null)}
+                              className="p-1 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 cursor-pointer"
+                              title="Cancelar"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleQuickAdjustStock(item, Math.max(0, stockNumber - 1))
+                              }
+                              className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 font-bold text-sm flex items-center justify-center cursor-pointer transition-colors"
+                              title="Restar 1 unidad al stock"
+                            >
+                              -
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setInlineStockItemCode(item.code);
+                                setInlineStockInputValue(String(stockNumber));
+                              }}
+                              className={`inline-flex items-center justify-center min-w-[3rem] px-2.5 py-1 rounded-lg font-bold text-sm cursor-pointer border border-transparent hover:border-emerald-400 transition-all ${stockColor}`}
+                              title="Clic para escribir la cantidad exacta de stock"
+                            >
+                              {stockNumber}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleQuickAdjustStock(item, stockNumber + 1)}
+                              className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 font-bold text-sm flex items-center justify-center cursor-pointer transition-colors"
+                              title="Sumar 1 unidad al stock"
+                            >
+                              +
+                            </button>
+                          </div>
+                        )}
                       </td>
                       <td className="p-4 border-b border-slate-100 text-center">
                         <div className="flex items-center justify-center gap-1">
@@ -1581,25 +1843,68 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
                           Stock
                         </label>
-                        <input
-                          type="number"
-                          min="0"
-                          required
-                          value={formData.stock}
-                          onChange={(e) =>
-                            setFormData({ ...formData, stock: parseInt(e.target.value, 10) || 0 })
-                          }
-                          className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
-                        />
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextVal = Math.max(0, (Number(formData.stock) || 0) - 1);
+                              setFormData({ ...formData, stock: nextVal });
+                              setModalStockInputText(String(nextVal));
+                            }}
+                            className="px-2.5 py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg font-extrabold text-slate-700 text-sm cursor-pointer active:scale-95"
+                            title="Disminuir stock en 1"
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min="0"
+                            required
+                            value={modalStockInputText}
+                            onFocus={(e) => e.target.select()}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              setModalStockInputText(raw);
+                              const parsed = parseInt(raw, 10);
+                              setFormData({
+                                ...formData,
+                                stock: Number.isNaN(parsed) ? 0 : Math.max(0, parsed),
+                              });
+                            }}
+                            onBlur={() => {
+                              const parsed = parseInt(modalStockInputText, 10);
+                              const clean = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                              setModalStockInputText(String(clean));
+                              setFormData((prev) => ({ ...prev, stock: clean }));
+                            }}
+                            className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-center text-slate-900"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextVal = Math.max(0, (Number(formData.stock) || 0) + 1);
+                              setFormData({ ...formData, stock: nextVal });
+                              setModalStockInputText(String(nextVal));
+                            }}
+                            className="px-2.5 py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg font-extrabold text-slate-700 text-sm cursor-pointer active:scale-95"
+                            title="Aumentar stock en 1"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Bodega de Ingreso Selector for New/Edited Article */}
-                    {!editingProduct && activeWarehouses.length > 0 && (
+                    {/* Bodega de Ingreso / Ajuste Selector for New or Edited Article */}
+                    {activeWarehouses.length > 0 && (
                       <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200/80 space-y-1.5">
                         <label className="text-[11px] font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
                           <Boxes className="w-3.5 h-3.5 text-indigo-600" />
-                          <span>¿En qué Bodega ingresar este artículo nuevo?</span>
+                          <span>
+                            {editingProduct
+                              ? 'Bodega donde se aplica el ajuste de Stock'
+                              : '¿En qué Bodega ingresar este artículo nuevo?'}
+                          </span>
                         </label>
                         <select
                           value={formData.targetWarehouseId}
@@ -1608,12 +1913,39 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                           }
                           className="w-full p-2 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold bg-white text-slate-800"
                         >
-                          {activeWarehouses.map((wh) => (
-                            <option key={wh.id} value={wh.id}>
-                              {wh.name} ({wh.code}){wh.isMainSalesFloor ? ' — Sala de Ventas' : ' — Almacén'}
-                            </option>
-                          ))}
+                          {activeWarehouses.map((wh) => {
+                            const currentWhQty = editingProduct
+                              ? getProductStockInWarehouse(editingProduct, wh.id, activeWarehouses)
+                              : null;
+                            return (
+                              <option key={wh.id} value={wh.id}>
+                                {wh.name} ({wh.code})
+                                {wh.isMainSalesFloor ? ' — Sala de Ventas' : ' — Almacén'}
+                                {currentWhQty !== null ? ` [Actual: ${currentWhQty} uds]` : ''}
+                              </option>
+                            );
+                          })}
                         </select>
+                        {editingProduct && activeWarehouses.length > 1 && (
+                          <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[10px] text-indigo-900">
+                            <span className="font-semibold text-indigo-700">Distribución actual:</span>
+                            {activeWarehouses.map((wh) => {
+                              const q = getProductStockInWarehouse(editingProduct, wh.id, activeWarehouses);
+                              return (
+                                <span
+                                  key={wh.id}
+                                  className={`px-1.5 py-0.5 rounded border font-bold ${
+                                    q > 0
+                                      ? 'bg-indigo-100 border-indigo-300 text-indigo-950'
+                                      : 'bg-white/80 border-slate-200 text-slate-500'
+                                  }`}
+                                >
+                                  {wh.name}: {q}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
 
