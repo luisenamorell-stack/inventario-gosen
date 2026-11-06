@@ -104,7 +104,7 @@ export const AdaptiveImage: React.FC<AdaptiveImageProps> = ({
               }
             : undefined
         }
-        className={`relative w-full h-full flex items-center justify-center overflow-hidden select-none ${
+        className={`relative isolate z-0 w-full h-full flex items-center justify-center overflow-hidden select-none ${
           darkSurface ? 'bg-slate-900' : 'bg-slate-50/90'
         } ${enableZoom ? 'cursor-zoom-in group/zoom' : ''} ${containerClassName} ${className}`}
       >

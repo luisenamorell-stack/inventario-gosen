@@ -508,18 +508,18 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
 
                     {/* Stock badge */}
                     {stockNum > 0 ? (
-                      <span className="absolute top-2 left-2 text-[10px] font-extrabold bg-emerald-50/95 backdrop-blur-md text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200 shadow-2xs">
+                      <span className="absolute top-2 left-2 z-20 pointer-events-none text-[10px] font-extrabold bg-emerald-50/95 backdrop-blur-md text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200 shadow-xs">
                         ✓ Disponible ({stockNum})
                       </span>
                     ) : (
-                      <span className="absolute top-2 left-2 text-[10px] font-extrabold bg-rose-50/95 backdrop-blur-md text-rose-800 px-2 py-0.5 rounded-full border border-rose-200 shadow-2xs">
+                      <span className="absolute top-2 left-2 z-20 pointer-events-none text-[10px] font-extrabold bg-rose-50/95 backdrop-blur-md text-rose-800 px-2 py-0.5 rounded-full border border-rose-200 shadow-xs">
                         🔴 Agotado / Solicitar
                       </span>
                     )}
 
                     {/* Quantity in cart pill */}
                     {qtyInCart > 0 && (
-                      <span className="absolute top-2 right-2 text-[11px] font-black bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full shadow-xs">
+                      <span className="absolute top-2 right-2 z-20 pointer-events-none text-[11px] font-black bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full shadow-xs">
                         {qtyInCart} en pedido
                       </span>
                     )}
