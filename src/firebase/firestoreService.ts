@@ -5537,4 +5537,271 @@ export async function saveStoreWarehousesToFirestore(
   }
 }
 
+export interface UniversalLoginResolution {
+  matched: boolean;
+  type?: 'admin' | 'collaborator';
+  companySlug?: string;
+  companyName?: string;
+  logoUrl?: string;
+  companyObj?: CompanyTenant;
+  collaborator?: UserAccount;
+}
+
+/**
+ * Universal multi-tenant login resolver:
+ * Given a password (and optional collaborator username + optional URL company hint),
+ * identifies which client store or collaborator is logging in across all registered tenants
+ * in memory and Firestore, without exposing any store list on the login screen.
+ */
+export async function resolveClientLoginAcrossAllTenants(params: {
+  passwordInput: string;
+  usernameInput?: string;
+  mode: 'store_pass' | 'collaborator';
+  preferredSlug?: string;
+  companiesInMemory: CompanyTenant[];
+  usersInMemory: UserAccount[];
+  activeStoreSettings?: StoreSettings;
+}): Promise<UniversalLoginResolution> {
+  const cleanPass = params.passwordInput.trim();
+  const upperPass = cleanPass.toUpperCase();
+  const cleanUser = (params.usernameInput || '').trim().toLowerCase();
+  const preferred = params.preferredSlug ? normalizeCompanySlug(params.preferredSlug) : '';
+
+  const matchCompanyFromList = (list: CompanyTenant[]): CompanyTenant | undefined => {
+    // 1. If URL has an explicit company parameter (?empresa=...), check that company first
+    if (preferred) {
+      const prefComp = list.find((c) => normalizeCompanySlug(c.slug) === preferred);
+      if (prefComp) {
+        const expected = (prefComp.adminPassword || '').trim().toUpperCase();
+        if (
+          (expected && expected === upperPass) ||
+          (preferred === 'tiendagyg' && upperPass === 'GYG2026') ||
+          (preferred === 'gosen' && (upperPass === 'GOSEN2026' || upperPass === 'ADMIN2026'))
+        ) {
+          return prefComp;
+        }
+      }
+    }
+
+    // 2. Check all companies by their unique adminPassword
+    const exactOrUpper = list.find((comp) => {
+      const slug = normalizeCompanySlug(comp.slug);
+      const pass = (comp.adminPassword || '').trim().toUpperCase();
+      // Check cached store settings for this company too
+      const cachedSettings = getCachedStoreSettings(slug);
+      const settingsPass = (cachedSettings?.accessPassword || '').trim().toUpperCase();
+      return (
+        (pass.length > 0 && pass === upperPass) ||
+        (settingsPass.length > 0 && settingsPass === upperPass) ||
+        (slug === 'tiendagyg' && upperPass === 'GYG2026') ||
+        (slug === 'gosen' && (upperPass === 'GOSEN2026' || upperPass === 'ADMIN2026'))
+      );
+    });
+
+    return exactOrUpper;
+  };
+
+  // --- A. COLLABORATOR MODE ---
+  if (params.mode === 'collaborator') {
+    const findCollab = (userList: UserAccount[]): UserAccount | undefined => {
+      if (preferred) {
+        const inPreferred = userList.find(
+          (u) =>
+            u.isActive !== false &&
+            u.username.toLowerCase() === cleanUser &&
+            u.password === cleanPass &&
+            normalizeCompanySlug(u.companyId || 'gosen') === preferred
+        );
+        if (inPreferred) return inPreferred;
+      }
+      return userList.find(
+        (u) =>
+          u.isActive !== false &&
+          u.username.toLowerCase() === cleanUser &&
+          u.password === cleanPass
+      );
+    };
+
+    let foundUser = findCollab(params.usersInMemory);
+    let allCompanies = params.companiesInMemory;
+
+    if (!foundUser) {
+      try {
+        const snap = await getDocs(collection(db, 'users'));
+        const allCloudUsers: UserAccount[] = [];
+        snap.forEach((docSnap) => {
+          const d = docSnap.data();
+          const cSlug = normalizeCompanySlug(d.companyId || 'gosen');
+          allCloudUsers.push({
+            id: docSnap.id,
+            companyId: cSlug,
+            name: d.name || '',
+            username: d.username || '',
+            password: d.password || '',
+            role: d.role === 'admin' ? 'admin' : 'collaborator',
+            isActive: d.isActive !== false,
+            allowedTabs: Array.isArray(d.allowedTabs)
+              ? d.allowedTabs
+              : ['sales', 'inventory', 'price-checker', 'catalog'],
+            salesPermissions: d.salesPermissions || {
+              canEditSales: true,
+              canCancelSales: false,
+              canViewCostsAndProfits: false,
+            },
+            createdAt: Number(d.createdAt) || Date.now(),
+          });
+        });
+        foundUser = findCollab(allCloudUsers);
+        if (foundUser) {
+          allCompanies = await fetchCompaniesOnce(true);
+        }
+      } catch {
+        // Ignore offline error
+      }
+    }
+
+    if (foundUser) {
+      const targetSlug = normalizeCompanySlug(foundUser.companyId || 'gosen');
+      const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
+      const companyName =
+        compObj?.name ||
+        (targetSlug === 'gosen' ? 'Tienda Gosén' : targetSlug.toUpperCase());
+      return {
+        matched: true,
+        type: 'collaborator',
+        companySlug: targetSlug,
+        companyName,
+        logoUrl: compObj?.logoUrl,
+        companyObj: compObj,
+        collaborator: foundUser,
+      };
+    }
+
+    return { matched: false };
+  }
+
+  // --- B. DIRECT STORE PASSWORD MODE ---
+  let allCompanies = params.companiesInMemory;
+  let matchedComp = matchCompanyFromList(allCompanies);
+
+  // If not matched in memory, query fresh companies & store_profile settings from Firestore
+  if (!matchedComp) {
+    try {
+      allCompanies = await fetchCompaniesOnce(true);
+      matchedComp = matchCompanyFromList(allCompanies);
+    } catch {
+      // Ignore offline error
+    }
+  }
+
+  if (!matchedComp) {
+    try {
+      const settingsSnap = await getDocs(collection(db, 'settings'));
+      settingsSnap.forEach((docSnap) => {
+        if (matchedComp) return;
+        if (!docSnap.id.startsWith('store_profile')) return;
+        const d = docSnap.data();
+        const pass = (d.accessPassword || '').trim().toUpperCase();
+        if (pass && pass === upperPass) {
+          const slug = normalizeCompanySlug(
+            d.companyId || docSnap.id.replace(/^store_profile_?/, '') || 'gosen'
+          );
+          const existingComp = allCompanies.find((c) => normalizeCompanySlug(c.slug) === slug);
+          matchedComp = existingComp || {
+            id: slug,
+            name: d.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
+            slug,
+            ownerName: 'Administrador',
+            phone: d.phone || '',
+            plan: 'mensual',
+            price: 0,
+            nextBillingDate: '',
+            status: 'active',
+            adminPassword: d.accessPassword,
+            logoUrl: d.logoUrl || '',
+            tagline: d.tagline || '',
+            address: d.address || '',
+            allowedModules: d.allowedModules || [...ALL_COMPANY_MODULES],
+            createdAt: Date.now(),
+          };
+        }
+      });
+    } catch {
+      // Ignore offline error
+    }
+  }
+
+  if (matchedComp) {
+    const targetSlug = normalizeCompanySlug(matchedComp.slug);
+    const targetName =
+      matchedComp.name ||
+      (targetSlug === 'gosen'
+        ? params.activeStoreSettings?.storeName || 'Tienda Gosén'
+        : targetSlug.toUpperCase());
+    const targetLogo =
+      matchedComp.logoUrl ||
+      (targetSlug === 'gosen' ? params.activeStoreSettings?.logoUrl || '/store-logo.jpg' : '');
+    return {
+      matched: true,
+      type: 'admin',
+      companySlug: targetSlug,
+      companyName: targetName,
+      logoUrl: targetLogo,
+      companyObj: matchedComp,
+    };
+  }
+
+  // Fallback: check if the password directly matches an active collaborator across all stores
+  try {
+    const snap = await getDocs(collection(db, 'users'));
+    let matchedCollab: UserAccount | undefined;
+    snap.forEach((docSnap) => {
+      if (matchedCollab) return;
+      const d = docSnap.data();
+      if (d.isActive !== false && d.password === cleanPass) {
+        matchedCollab = {
+          id: docSnap.id,
+          companyId: normalizeCompanySlug(d.companyId || 'gosen'),
+          name: d.name || '',
+          username: d.username || '',
+          password: d.password || '',
+          role: d.role === 'admin' ? 'admin' : 'collaborator',
+          isActive: true,
+          allowedTabs: Array.isArray(d.allowedTabs)
+            ? d.allowedTabs
+            : ['sales', 'inventory', 'price-checker', 'catalog'],
+          salesPermissions: d.salesPermissions || {
+            canEditSales: true,
+            canCancelSales: false,
+            canViewCostsAndProfits: false,
+          },
+          createdAt: Number(d.createdAt) || Date.now(),
+        };
+      }
+    });
+
+    if (matchedCollab) {
+      const targetSlug = normalizeCompanySlug(matchedCollab.companyId || 'gosen');
+      const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
+      const companyName =
+        compObj?.name ||
+        (targetSlug === 'gosen' ? 'Tienda Gosén' : targetSlug.toUpperCase());
+      return {
+        matched: true,
+        type: 'collaborator',
+        companySlug: targetSlug,
+        companyName,
+        logoUrl: compObj?.logoUrl,
+        companyObj: compObj,
+        collaborator: matchedCollab,
+      };
+    }
+  } catch {
+    // Ignore offline error
+  }
+
+  return { matched: false };
+}
+
+
 

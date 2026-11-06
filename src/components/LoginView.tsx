@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { StoreSettings, UserAccount, UserSession, CompanyTenant } from '../types';
-import { normalizeCompanySlug } from '../firebase/firestoreService';
+import {
+  normalizeCompanySlug,
+  resolveClientLoginAcrossAllTenants,
+} from '../firebase/firestoreService';
 import {
   Lock,
   Eye,
@@ -11,7 +14,6 @@ import {
   ArrowLeft,
   User,
   Users,
-  AlertTriangle,
   CheckCircle2,
   Sparkles,
   Database,
@@ -52,7 +54,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
   companies = [],
   activeCompanyId = 'gosen',
   isSaaSPortalMode = false,
-  isDirectStoreUrl = false,
   onSelectCompany,
   onLoginSuccess,
   onBackToLanding,
@@ -68,6 +69,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rememberMe, setRememberMe] = useState(true);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Brute-force protection state
   const [failedAttempts, setFailedAttempts] = useState<number>(0);
@@ -121,49 +123,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     return () => clearInterval(interval);
   }, [lockoutUntil]);
 
-  // Detect if URL has an explicit store parameter (?empresa=...)
-  const hasExplicitStoreInUrl = (() => {
-    if (isDirectStoreUrl) return true;
-    if (typeof window === 'undefined') return false;
-    const params = new URLSearchParams(window.location.search);
-    return Boolean(params.get('empresa') || params.get('tienda') || params.get('cliente'));
-  })();
-
   const normalizedSlug = normalizeCompanySlug(selectedSlug || 'gosen');
-  const isGosenSelected = normalizedSlug === 'gosen';
-
-  const selectedCompany = companies.find(
-    (c) => normalizeCompanySlug(c.slug) === normalizedSlug
-  );
-
-  // Determine whether to show specific store branding (when accessed via store URL) or general App branding
-  const storeName =
-    loginMode === 'saas_owner'
-      ? 'Panel Central SaaS'
-      : hasExplicitStoreInUrl
-      ? selectedCompany?.name ||
-        (isGosenSelected
-          ? storeSettings?.storeName || 'Tienda Gosén'
-          : storeSettings?.companyId === normalizedSlug && storeSettings?.storeName
-          ? storeSettings.storeName
-          : 'Mi Negocio')
-      : 'Iniciar Sesión';
-
-  const logoUrl =
-    loginMode === 'saas_owner' || !hasExplicitStoreInUrl
-      ? ''
-      : selectedCompany?.logoUrl !== undefined && selectedCompany.logoUrl !== ''
-      ? selectedCompany.logoUrl
-      : isGosenSelected
-      ? storeSettings?.logoUrl || '/store-logo.jpg'
-      : storeSettings?.companyId === normalizedSlug && storeSettings?.logoUrl
-      ? storeSettings.logoUrl
-      : '';
-
-  const isCompanySuspended =
-    loginMode !== 'saas_owner' &&
-    hasExplicitStoreInUrl &&
-    selectedCompany?.status === 'suspended';
 
   const registerFailedAttempt = (customMessage?: string) => {
     const nextAttempts = failedAttempts + 1;
@@ -236,14 +196,16 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }, 1380);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (remainingLockSeconds > 0) {
-      setError(
-        `Acceso temporalmente bloqueado por seguridad. Espera ${remainingLockSeconds} segundos.`
-      );
+    if (remainingLockSeconds > 0 || isVerifying || loader.isActive) {
+      if (remainingLockSeconds > 0) {
+        setError(
+          `Acceso temporalmente bloqueado por seguridad. Espera ${remainingLockSeconds} segundos.`
+        );
+      }
       return;
     }
 
@@ -307,177 +269,83 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    // 2. COLLABORATOR MODE (Specific username + password, without exposing user list)
-    if (loginMode === 'collaborator') {
-      if (!usernameInput.trim()) {
-        setError('Ingresa tu nombre de usuario de colaborador.');
+    if (loginMode === 'collaborator' && !usernameInput.trim()) {
+      setError('Ingresa tu nombre de usuario de colaborador.');
+      return;
+    }
+
+    setIsVerifying(true);
+    try {
+      const resolution = await resolveClientLoginAcrossAllTenants({
+        passwordInput: cleanInput,
+        usernameInput: loginMode === 'collaborator' ? usernameInput.trim() : undefined,
+        mode: loginMode === 'collaborator' ? 'collaborator' : 'store_pass',
+        preferredSlug: normalizedSlug,
+        companiesInMemory: companies,
+        usersInMemory: users,
+        activeStoreSettings: storeSettings,
+      });
+
+      if (!resolution.matched || !resolution.companySlug) {
+        registerFailedAttempt(
+          loginMode === 'collaborator'
+            ? 'Usuario o contraseña incorrectos. Verifica tus datos e intenta nuevamente.'
+            : 'Contraseña de acceso incorrecta. Verifica tu clave e intenta nuevamente.'
+        );
         return;
       }
 
-      const cleanUser = usernameInput.trim().toLowerCase();
-      // Search in current store first, or across active stores if logging in from generic portal
-      const foundUser =
-        users.find(
-          (u) =>
-            u.username.toLowerCase() === cleanUser &&
-            u.isActive !== false &&
-            normalizeCompanySlug(u.companyId || 'gosen') === normalizedSlug
-        ) ||
-        users.find(
-          (u) => u.username.toLowerCase() === cleanUser && u.isActive !== false
-        );
+      const matchedSlug = normalizeCompanySlug(resolution.companySlug);
+      const matchedCompanyObj =
+        resolution.companyObj ||
+        companies.find((c) => normalizeCompanySlug(c.slug) === matchedSlug);
+      const resolvedStoreName =
+        resolution.companyName ||
+        matchedCompanyObj?.name ||
+        (matchedSlug === 'gosen' ? 'Tienda Gosén' : matchedSlug.toUpperCase());
 
-      if (!foundUser || foundUser.password !== cleanInput) {
-        registerFailedAttempt('Usuario o contraseña incorrectos.');
+      // Check if the matched company is suspended
+      if (matchedCompanyObj && matchedCompanyObj.status === 'suspended') {
+        const moraDetail = matchedCompanyObj.moraReason
+          ? ` Motivo: ${matchedCompanyObj.moraReason}.`
+          : '';
+        setError(
+          `El acceso para "${resolvedStoreName}" se encuentra suspendido por pago o renovación pendiente.${moraDetail} Comunícate con soporte.`
+        );
         return;
       }
 
       setFailedAttempts(0);
-      const targetCollabSlug = normalizeCompanySlug(foundUser.companyId || normalizedSlug);
-      const targetCollabComp = companies.find(
-        (c) => normalizeCompanySlug(c.slug) === targetCollabSlug
-      );
-      const targetCollabStoreName =
-        targetCollabComp?.name ||
-        (targetCollabSlug === 'gosen'
-          ? storeSettings?.storeName || 'Tienda Gosén'
-          : targetCollabSlug.toUpperCase());
-
-      if (targetCollabComp?.status === 'suspended') {
-        setError(
-          `El acceso para "${targetCollabStoreName}" se encuentra suspendido temporalmente. Comunícate con el administrador.`
-        );
-        return;
-      }
-
-      setSelectedSlug(targetCollabSlug);
-      onSelectCompany?.(targetCollabSlug);
+      setSelectedSlug(matchedSlug);
+      onSelectCompany?.(matchedSlug);
 
       try {
         localStorage.removeItem('stockmaster_saas_owner_unlocked');
+        const url = new URL(window.location.href);
+        url.searchParams.delete('ventas');
+        url.searchParams.delete('landing');
+        url.searchParams.delete('demo');
+        url.searchParams.delete('saas');
+        url.searchParams.set('empresa', matchedSlug);
+        window.history.replaceState({}, '', url.toString());
       } catch {}
 
-      const collabSession: UserSession = {
-        userId: foundUser.id,
-        companyId: targetCollabSlug,
-        companyName: targetCollabStoreName,
-        isSuperAdmin: false,
-        isStandaloneSaaS: false,
-        userName: foundUser.name,
-        username: foundUser.username,
-        role: 'collaborator',
-        allowedTabs:
-          foundUser.allowedTabs && foundUser.allowedTabs.length > 0
-            ? foundUser.allowedTabs
-            : ['sales', 'inventory', 'price-checker', 'catalog'],
-        salesPermissions: foundUser.salesPermissions || {
-          canEditSales: true,
-          canCancelSales: false,
-          canViewCostsAndProfits: false,
-        },
-      };
-
-      executeAnimatedLoaderAndEnter(
-        collabSession,
-        targetCollabStoreName,
-        targetCollabComp?.logoUrl
-      );
-      return;
-    }
-
-    // 3. CLIENT / STORE PASSWORD DIRECT ACCESS (Simple 1-step login with automatic company routing)
-    let matchedCompanyObj: CompanyTenant | undefined = selectedCompany;
-    let matchedSlug = normalizedSlug;
-    let isMatched = false;
-
-    const currentExpectedPass = (
-      selectedCompany?.adminPassword ||
-      (normalizedSlug === 'gosen'
-        ? storeSettings?.accessPassword || 'GOSEN2026'
-        : storeSettings?.companyId === normalizedSlug && storeSettings?.accessPassword
-        ? storeSettings.accessPassword
-        : 'ADMIN2026')
-    ).trim();
-
-    if (
-      cleanInput === currentExpectedPass ||
-      cleanInput.toUpperCase() === currentExpectedPass.toUpperCase() ||
-      (normalizedSlug === 'gosen' &&
-        (cleanInput.toUpperCase() === 'GOSEN2026' ||
-          cleanInput.toUpperCase() === 'ADMIN2026' ||
-          cleanInput.toUpperCase() ===
-            (storeSettings?.accessPassword || 'ADMIN2026').trim().toUpperCase()))
-    ) {
-      isMatched = true;
-    } else {
-      // Check across registered client companies in Firestore
-      const autoMatchedComp = companies.find((comp) => {
-        const pass = (comp.adminPassword || '').trim().toUpperCase();
-        return (
-          (pass.length > 0 && pass === cleanInput.toUpperCase()) ||
-          (comp.slug === 'tiendagyg' && cleanInput.toUpperCase() === 'GYG2026') ||
-          (comp.slug === 'gosen' &&
-            (cleanInput.toUpperCase() === 'GOSEN2026' ||
-              cleanInput.toUpperCase() === 'ADMIN2026'))
-        );
-      });
-
-      if (autoMatchedComp) {
-        matchedCompanyObj = autoMatchedComp;
-        matchedSlug = normalizeCompanySlug(autoMatchedComp.slug);
-        isMatched = true;
-        setSelectedSlug(matchedSlug);
-        onSelectCompany?.(matchedSlug);
-      }
-    }
-
-    if (!isMatched) {
-      // Also allow direct collaborator password if unique
-      const matchingCollab = users.find(
-        (u) =>
-          u.isActive !== false &&
-          u.password === cleanInput &&
-          (normalizeCompanySlug(u.companyId || 'gosen') === normalizedSlug ||
-            companies.some(
-              (c) =>
-                normalizeCompanySlug(c.slug) ===
-                normalizeCompanySlug(u.companyId || 'gosen')
-            ))
-      );
-
-      if (matchingCollab) {
-        setFailedAttempts(0);
-        const collabCompanySlug = normalizeCompanySlug(
-          matchingCollab.companyId || 'gosen'
-        );
-        const collabComp = companies.find(
-          (c) => normalizeCompanySlug(c.slug) === collabCompanySlug
-        );
-        const resolvedCollabStore =
-          collabComp?.name ||
-          (collabCompanySlug === 'gosen'
-            ? 'Tienda Gosén'
-            : collabCompanySlug.toUpperCase());
-
-        setSelectedSlug(collabCompanySlug);
-        onSelectCompany?.(collabCompanySlug);
-
+      if (resolution.type === 'collaborator' && resolution.collaborator) {
+        const collabUser = resolution.collaborator;
         const collabSession: UserSession = {
-          userId: matchingCollab.id,
-          companyId: collabCompanySlug,
-          companyName: resolvedCollabStore,
+          userId: collabUser.id,
+          companyId: matchedSlug,
+          companyName: resolvedStoreName,
           isSuperAdmin: false,
           isStandaloneSaaS: false,
-          userName: matchingCollab.name,
-          username: matchingCollab.username,
+          userName: collabUser.name,
+          username: collabUser.username,
           role: 'collaborator',
-          allowedTabs: matchingCollab.allowedTabs || [
-            'sales',
-            'inventory',
-            'price-checker',
-            'catalog',
-          ],
-          salesPermissions: matchingCollab.salesPermissions || {
+          allowedTabs:
+            collabUser.allowedTabs && collabUser.allowedTabs.length > 0
+              ? collabUser.allowedTabs
+              : ['sales', 'inventory', 'price-checker', 'catalog'],
+          salesPermissions: collabUser.salesPermissions || {
             canEditSales: true,
             canCancelSales: false,
             canViewCostsAndProfits: false,
@@ -486,73 +354,48 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
         executeAnimatedLoaderAndEnter(
           collabSession,
-          resolvedCollabStore,
-          collabComp?.logoUrl
+          resolvedStoreName,
+          resolution.logoUrl
         );
         return;
       }
 
-      registerFailedAttempt(
-        'Contraseña de acceso incorrecta. Verifica tu clave e intenta nuevamente.'
+      const adminSession: UserSession = {
+        userId: `admin_${matchedSlug}`,
+        companyId: matchedSlug,
+        companyName: resolvedStoreName,
+        isSuperAdmin: false,
+        isStandaloneSaaS: false,
+        userName:
+          matchedSlug === 'gosen'
+            ? 'Administrador Gosén'
+            : `Admin ${resolvedStoreName}`,
+        username: 'admin',
+        role: 'admin',
+        allowedTabs: [
+          'dashboard',
+          'inventory',
+          'warehouses',
+          'sales',
+          'purchases',
+          'audit',
+          'price-checker',
+          'suppliers',
+          'settings',
+          'catalog',
+          'users',
+          'activity',
+        ],
+      };
+
+      executeAnimatedLoaderAndEnter(
+        adminSession,
+        resolvedStoreName,
+        resolution.logoUrl
       );
-      return;
+    } finally {
+      setIsVerifying(false);
     }
-
-    // Check if the matched company is suspended
-    if (matchedCompanyObj && matchedCompanyObj.status === 'suspended') {
-      const moraDetail = matchedCompanyObj.moraReason
-        ? ` Motivo: ${matchedCompanyObj.moraReason}.`
-        : '';
-      setError(
-        `El acceso para "${matchedCompanyObj.name}" se encuentra suspendido por pago o renovación pendiente.${moraDetail} Comunícate con soporte.`
-      );
-      return;
-    }
-
-    setFailedAttempts(0);
-    try {
-      localStorage.removeItem('stockmaster_saas_owner_unlocked');
-    } catch {}
-
-    const targetStoreName =
-      matchedCompanyObj?.name ||
-      (matchedSlug === 'gosen'
-        ? storeSettings?.storeName || 'Tienda Gosén'
-        : storeSettings?.companyId === matchedSlug && storeSettings?.storeName
-        ? storeSettings.storeName
-        : matchedSlug.toUpperCase());
-
-    const targetLogo =
-      matchedCompanyObj?.logoUrl ||
-      (matchedSlug === 'gosen' ? storeSettings?.logoUrl || '/store-logo.jpg' : '');
-
-    const adminSession: UserSession = {
-      userId: `admin_${matchedSlug}`,
-      companyId: matchedSlug,
-      companyName: targetStoreName,
-      isSuperAdmin: false,
-      isStandaloneSaaS: false,
-      userName:
-        matchedSlug === 'gosen' ? 'Administrador Gosén' : `Admin ${targetStoreName}`,
-      username: 'admin',
-      role: 'admin',
-      allowedTabs: [
-        'dashboard',
-        'inventory',
-        'warehouses',
-        'sales',
-        'purchases',
-        'audit',
-        'price-checker',
-        'suppliers',
-        'settings',
-        'catalog',
-        'users',
-        'activity',
-      ],
-    };
-
-    executeAnimatedLoaderAndEnter(adminSession, targetStoreName, targetLogo);
   };
 
   return (
@@ -561,14 +404,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
 
       {/* =========================================================================
-          ANIMATED LOADER OVERLAY
+          ANIMATED LOADER OVERLAY (ONLY AFTER SUCCESSFUL AUTHENTICATION)
           ========================================================================= */}
       {loader.isActive && (
         <div className="fixed inset-0 z-[99999] bg-slate-950/95 backdrop-blur-2xl flex flex-col items-center justify-center p-6 text-white select-none animate-in fade-in duration-300">
           <div className="w-full max-w-md flex flex-col items-center text-center space-y-6">
             <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center">
               <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-emerald-400 border-r-teal-400 animate-spin" />
-              <div className="absolute inset-2 rounded-full border-2 border-transparent border-b-cyan-400 border-l-emerald-300 animate-spin" style={{ animationDirection: 'reverse', animationDuration: '3s' }} />
+              <div
+                className="absolute inset-2 rounded-full border-2 border-transparent border-b-cyan-400 border-l-emerald-300 animate-spin"
+                style={{ animationDirection: 'reverse', animationDuration: '3s' }}
+              />
 
               <div className="relative z-10 w-20 h-20 rounded-2xl bg-slate-900/90 border border-emerald-500/30 p-2 flex items-center justify-center shadow-xl overflow-hidden">
                 {loader.logoUrl ? (
@@ -660,7 +506,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         </div>
       )}
 
-      {/* Main Clean & Secure Login Card */}
+      {/* Main Clean & Secure Login Card — ONLY OFFICIAL APP LOGO (MIAPPHN) */}
       <div className="w-full max-w-md bg-slate-900/95 border border-slate-800 rounded-3xl shadow-2xl p-6 sm:p-8 z-10">
         {onBackToLanding && (
           <div className="mb-4">
@@ -675,53 +521,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </div>
         )}
 
-        {/* App Logo & Header */}
+        {/* Official App Logo & Header ONLY — Never exposes any client store name or logo before login */}
         <div className="flex flex-col items-center text-center mb-6">
-          {logoUrl ? (
-            <div className="flex flex-col items-center gap-3 mb-3">
-              <div className="w-24 h-24 rounded-2xl bg-slate-950 border border-slate-800 p-2.5 flex items-center justify-center overflow-hidden shadow-lg">
-                <img
-                  src={logoUrl}
-                  alt={storeName}
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <MiAppHNBannerLogo className="h-7 w-auto opacity-85" alt="MIAPPHN" />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-3 mb-3">
-              <MiAppHNCashRegisterIcon
-                className="w-16 h-16 rounded-2xl shadow-lg"
-                iconClassName="w-11 h-11 text-emerald-400"
-              />
-              <MiAppHNBannerLogo className="h-10 sm:h-11 w-auto" alt="MIAPPHN" />
-            </div>
-          )}
+          <div className="flex flex-col items-center gap-3 mb-3">
+            <MiAppHNCashRegisterIcon
+              className="w-16 h-16 rounded-2xl shadow-lg"
+              iconClassName="w-11 h-11 text-emerald-400"
+            />
+            <MiAppHNBannerLogo className="h-10 sm:h-11 w-auto" alt="MIAPPHN" />
+          </div>
 
           <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight mt-1">
-            {storeName}
+            {loginMode === 'saas_owner' ? 'Panel Central SaaS' : 'Iniciar Sesión'}
           </h1>
           <p className="text-xs text-slate-400 mt-1">
             {loginMode === 'saas_owner'
-              ? 'Ingresa tu clave de administración para continuar'
+              ? 'Ingresa tu clave maestra de administración para continuar'
               : loginMode === 'collaborator'
-              ? 'Ingresa tu usuario y contraseña de colaborador'
-              : 'Ingresa tu contraseña de acceso para entrar a tu aplicación'}
+              ? 'Ingresa tu usuario y contraseña para entrar a tu negocio'
+              : 'Ingresa tu contraseña de acceso para entrar directamente a tu negocio'}
           </p>
         </div>
-
-        {/* Suspended / Mora Notice (only if store is explicitly suspended) */}
-        {isCompanySuspended && (
-          <div className="mb-4 p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-left space-y-1">
-            <div className="flex items-center gap-2 text-rose-300 font-black text-xs uppercase tracking-wider">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>Servicio Suspendido</span>
-            </div>
-            <p className="text-[11px] text-rose-200/90 leading-relaxed">
-              El acceso para <strong>{storeName}</strong> se encuentra temporalmente suspendido por renovación pendiente. Comunícate con soporte para reactivar.
-            </p>
-          </div>
-        )}
 
         {/* Login Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -755,7 +575,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   type="text"
                   placeholder="Tu nombre de usuario"
                   value={usernameInput}
-                  disabled={loader.isActive || remainingLockSeconds > 0}
+                  disabled={loader.isActive || isVerifying || remainingLockSeconds > 0}
                   onChange={(e) => {
                     setUsernameInput(e.target.value.toLowerCase().trim());
                     if (error) setError(null);
@@ -792,7 +612,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 }}
                 placeholder="Ingresa tu contraseña"
                 autoFocus
-                disabled={loader.isActive || remainingLockSeconds > 0}
+                disabled={loader.isActive || isVerifying || remainingLockSeconds > 0}
                 autoComplete="current-password"
                 className="w-full pl-10 pr-10 py-3.5 bg-slate-950 border border-slate-800 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all text-sm font-semibold tracking-wider"
               />
@@ -842,12 +662,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
           {/* Primary Login Button */}
           <button
             type="submit"
-            disabled={loader.isActive || remainingLockSeconds > 0}
+            disabled={loader.isActive || isVerifying || remainingLockSeconds > 0}
             className="w-full py-3.5 px-4 text-slate-950 font-black text-sm rounded-2xl bg-emerald-400 hover:bg-emerald-300 transition-all duration-150 flex items-center justify-center gap-2 shadow-lg cursor-pointer disabled:opacity-50"
           >
             <span>
               {remainingLockSeconds > 0
                 ? `Bloqueado (${remainingLockSeconds}s)`
+                : isVerifying
+                ? 'Verificando acceso...'
                 : 'Iniciar Sesión'}
             </span>
             <ArrowRight className="w-4 h-4" />

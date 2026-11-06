@@ -100,13 +100,16 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   welcomeRole,
 }) => {
   const resolvedSlug = normalizeCompanySlug(companyId || storeSettings?.companyId || 'gosen');
-  const isGosenStore = !isSaaSAdmin && resolvedSlug === 'gosen';
+  const isPreLogin = !welcomeUser;
+  const isGosenStore = !isPreLogin && !isSaaSAdmin && resolvedSlug === 'gosen';
 
   const matchingCompany = companies.find(
     (c) => normalizeCompanySlug(c.slug) === resolvedSlug
   );
 
-  const storeName = isSaaSAdmin
+  const storeName = isPreLogin
+    ? 'MIAPPHN'
+    : isSaaSAdmin
     ? 'MIAPPHN • CONSOLA CENTRAL'
     : matchingCompany?.name ||
       (isGosenStore
@@ -114,7 +117,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         : storeSettings?.storeName || resolvedSlug.toUpperCase());
 
   const clientLogoUrl =
-    !isSaaSAdmin && !isGosenStore
+    !isPreLogin && !isSaaSAdmin && !isGosenStore
       ? matchingCompany?.logoUrl || storeSettings?.logoUrl
       : undefined;
 
@@ -136,31 +139,28 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 
       {/* Top Tagline */}
       <div className="relative z-10 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-900/90 border border-slate-800 shadow-lg">
-        <span
-          className={`w-2 h-2 rounded-full animate-ping ${
-            isSaaSAdmin ? 'bg-amber-400' : 'bg-emerald-400'
-          }`}
-        />
         <span className="text-[11px] font-bold uppercase tracking-widest text-emerald-400">
           {welcomeUser
             ? isSaaSAdmin
               ? 'Acceso Maestro Propietario MIAPPHN'
               : `Acceso Autorizado • ${welcomeRole === 'admin' ? 'Administrador' : 'Colaborador'}`
-            : isSaaSAdmin
-            ? 'MIAPPHN • Consola Multi-Empresa'
-            : 'MIAPPHN • Sistema Inteligente POS'}
+            : 'MIAPPHN • Acceso Seguro Multi-Empresa'}
         </span>
       </div>
 
       {/* Center Stage — Strictly Separated by Context */}
       <div className="relative z-10 flex flex-col items-center justify-center w-full max-w-md my-auto">
-        {isSaaSAdmin ? (
-          /* 1. STANDALONE MIAPPHN SAAS SUPER-ADMIN BANNER & CASH REGISTER EMBLEM */
+        {isPreLogin || isSaaSAdmin ? (
+          /* 1. PRE-LOGIN OR SAAS SUPER-ADMIN: ONLY OFFICIAL MIAPPHN APP LOGO */
           <div className="relative flex flex-col items-center justify-center gap-4 mb-6">
-            <MiAppHNBannerLogo className="h-16 sm:h-20 w-auto drop-shadow-[0_10px_24px_rgba(16,185,129,0.3)]" />
+            <MiAppHNCashRegisterIcon
+              className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl shadow-2xl shadow-emerald-500/30"
+              iconClassName="w-16 h-16 sm:w-20 sm:h-20"
+            />
+            <MiAppHNBannerLogo className="h-12 sm:h-14 w-auto drop-shadow-[0_10px_24px_rgba(16,185,129,0.3)]" />
           </div>
         ) : isGosenStore ? (
-          /* 2. EXCLUSIVE TIENDA GOSÉN WALKING METALLIC SHOE ANIMATION */
+          /* 2. EXCLUSIVE TIENDA GOSÉN WALKING METALLIC SHOE ANIMATION (ONLY AFTER LOGIN TO GOSÉN) */
           <div className="relative w-72 sm:w-80 h-44 flex items-center justify-center mb-6">
             <div className="absolute bottom-3 w-48 h-5 bg-emerald-500/25 rounded-full blur-md animate-FloorShadow" />
 
@@ -179,7 +179,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             </div>
           </div>
         ) : (
-          /* 3. OTHER SAAS CLIENTS — CLIENT LOGO OR MIAPPHN CASH REGISTER SILHOUETTE EMBLEM */
+          /* 3. OTHER SAAS CLIENTS (ONLY AFTER LOGIN TO THEIR STORE) */
           <div className="relative flex flex-col items-center justify-center mb-6">
             {clientLogoUrl ? (
               <div className="w-36 h-28 sm:w-44 sm:h-32 rounded-2xl bg-slate-900/90 border border-emerald-500/30 p-3 flex items-center justify-center shadow-2xl shadow-emerald-950/50">
@@ -207,11 +207,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             ? isSaaSAdmin
               ? 'Abriendo tu Panel Central de Clientes y Control de Mora...'
               : `Preparando tu espacio de trabajo en ${storeName}...`
-            : isSaaSAdmin
-            ? 'Administración de licencias, accesos y control de mora'
-            : isGosenStore
-            ? 'Paso a paso con tu inventario en tiempo real'
-            : storeSettings?.tagline || 'Control de Inventario y Facturación POS en tiempo real'}
+            : 'Plataforma inteligente de inventario y facturación POS'}
         </p>
 
         {/* Smooth Progress Indicator */}
