@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   SaaSGlobalConfig,
   SaaSDemoRequest,
@@ -136,10 +136,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
   const [waLink, setWaLink] = useState('');
   const [planSelectFlash, setPlanSelectFlash] = useState(false);
 
-  // Thermal receipt animation
-  const [receiptTotal, setReceiptTotal] = useState('334.65');
-  const [isPrinting, setIsPrinting] = useState(false);
-  const printerRunRef = useRef(0);
+  // Audio feedback for form submission
   const audioCtxRef = useRef<AudioContext | null>(null);
   const noiseBufRef = useRef<AudioBuffer | null>(null);
 
@@ -221,77 +218,6 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
       // Ignore audio policy restrictions
     }
   };
-
-  const playPrintSound = (startTime: number, dur: number, steps: number) => {
-    try {
-      const c = getAudioContext();
-      if (!c) return;
-      const m = c.createOscillator();
-      const g = c.createGain();
-      m.type = 'sawtooth';
-      m.frequency.value = 64;
-      g.gain.setValueAtTime(0, startTime);
-      g.gain.linearRampToValueAtTime(0.05, startTime + 0.12);
-      g.gain.setValueAtTime(0.05, startTime + dur - 0.12);
-      g.gain.linearRampToValueAtTime(0, startTime + dur);
-      m.connect(g);
-      g.connect(c.destination);
-      m.start(startTime);
-      m.stop(startTime + dur);
-
-      for (let i = 0; i < steps; i++) {
-        for (let k = 0; k < 3; k++) {
-          playBurst(c, startTime + (i * dur) / steps + k * 0.028, 0.022, 2200 + Math.random() * 1800, 0.32);
-        }
-      }
-    } catch {
-      // Ignore audio policy restrictions
-    }
-  };
-
-  const runPrint = (withSound: boolean) => {
-    const TOT = 334.65;
-    const D = 3.6;
-    const DL = 0.4;
-    const currentRun = ++printerRunRef.current;
-
-    setIsPrinting(false);
-
-    // Check prefers-reduced-motion
-    if (typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      setReceiptTotal(TOT.toFixed(2));
-      if (withSound) playCashSound();
-      return;
-    }
-
-    setTimeout(() => {
-      setIsPrinting(true);
-      setReceiptTotal('0.00');
-
-      const t0 = performance.now() + (DL + D * 0.72) * 1000;
-      const tick = (now: number) => {
-        if (currentRun !== printerRunRef.current) return;
-        const k = Math.min(Math.max((now - t0) / 700, 0), 1);
-        setReceiptTotal((TOT * (1 - Math.pow(1 - k, 3))).toFixed(2));
-        if (k < 1) requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-
-      if (withSound) {
-        const c = getAudioContext();
-        if (c) {
-          const t = c.currentTime + DL;
-          playPrintSound(t, D, 36);
-          playCashSound(t + D + 0.1);
-        }
-      }
-    }, 20);
-  };
-
-  useEffect(() => {
-    // Initial print on load without audio
-    runPrint(false);
-  }, []);
 
   const handleSelectPlan = (planId: SaaSDemoRequest['planInterest']) => {
     setSelectedPlanId(planId);
@@ -492,7 +418,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
       <main id="top">
         {/* HERO */}
         <div className="wrap hero">
-          <div>
+          <div className="hero-copy">
             <h1>Elige el plan ideal para el tamaño de tu negocio o empieza con tu demo gratis</h1>
             <p>
               Todos los planes incluyen tu enlace exclusivo aislado, respaldo en la nube, actualizaciones
@@ -509,215 +435,25 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
             <div className="note">15 días de prueba real, sin compromiso.</div>
           </div>
 
-          <div className="posw">
-            <div className={`pos ${isPrinting ? 'print' : ''}`} aria-label="Simulador de factura POS de la app">
-              <div className="slot">
-                <span className="slot-badge">TÉRMICA 80MM</span>
-                <i className="led" title="Impresora conectada"></i>
-              </div>
-              <div className="paper">
-                <div className="ticket-body">
-                  {/* Encabezado Tienda */}
-                  <div className="tk-center">
-                    <div className="tk-store">MIAPPHN • SISTEMA POS</div>
-                    <div className="tk-tagline">Tecnología POS y Control Comercial</div>
-                    <div className="tk-sub">RTN: 08011990123456</div>
-                    <div className="tk-sub">Tegucigalpa, M.D.C., Honduras</div>
-                    <div className="tk-sub">Tel: +504 9999-8888</div>
-                  </div>
-
-                  <div className="tk-divider"></div>
-
-                  {/* Datos del Comprobante Fiscal */}
-                  <div className="tk-center">
-                    <div className="tk-doc-type">FACTURA / COMPROBANTE</div>
-                  </div>
-                  <div className="tk-row">
-                    <span className="tk-bold">No:</span>
-                    <span>VTA-261020-4647</span>
-                  </div>
-                  <div className="tk-row">
-                    <span>Fecha:</span>
-                    <span>02/11/2026 10:45 AM</span>
-                  </div>
-                  <div className="tk-row">
-                    <span>Cliente:</span>
-                    <span className="tk-bold">Consumidor Final</span>
-                  </div>
-                  <div className="tk-row">
-                    <span>RTN / ID:</span>
-                    <span>08011990123456</span>
-                  </div>
-                  <div className="tk-row">
-                    <span>Atendió:</span>
-                    <span>Caja 1 (Admin)</span>
-                  </div>
-
-                  <div className="tk-divider"></div>
-
-                  {/* Encabezado de Columnas */}
-                  <div className="tk-table-hdr">
-                    <span>CANT  DESCRIPCIÓN</span>
-                    <span>TOTAL</span>
-                  </div>
-
-                  <div className="tk-divider"></div>
-
-                  {/* Artículos con código y precio unitario como en la app */}
-                  <div className="tk-items">
-                    <div className="tk-item">
-                      <div className="tk-item-top">
-                        <span className="tk-item-name">2x Aceite Vegetal 1 Litro</span>
-                        <span className="tk-item-tot">L. 96.00</span>
-                      </div>
-                      <div className="tk-item-sub">Cod: ABA-004 @ L. 48.00</div>
-                    </div>
-
-                    <div className="tk-item">
-                      <div className="tk-item-top">
-                        <span className="tk-item-name">1x Arroz Blanco Especial 5 Lbs</span>
-                        <span className="tk-item-tot">L. 78.00</span>
-                      </div>
-                      <div className="tk-item-sub">Cod: GRA-012 @ L. 78.00</div>
-                    </div>
-
-                    <div className="tk-item">
-                      <div className="tk-item-top">
-                        <span className="tk-item-name">3x Refresco Gaseosa 600ml</span>
-                        <span className="tk-item-tot">L. 75.00</span>
-                      </div>
-                      <div className="tk-item-sub">Cod: BEB-008 @ L. 25.00</div>
-                    </div>
-
-                    <div className="tk-item">
-                      <div className="tk-item-top">
-                        <span className="tk-item-name">1x Pan Molde Blanco Familiar</span>
-                        <span className="tk-item-tot">L. 42.00</span>
-                      </div>
-                      <div className="tk-item-sub">Cod: PAN-003 @ L. 42.00</div>
-                    </div>
-                  </div>
-
-                  <div className="tk-divider"></div>
-
-                  {/* Desglose de Totales */}
-                  <div className="tk-row">
-                    <span>Subtotal:</span>
-                    <span>L. 291.00</span>
-                  </div>
-                  <div className="tk-row">
-                    <span>15% ISV:</span>
-                    <span>L. 43.65</span>
-                  </div>
-                  <div className="tk-row tk-neto">
-                    <span className="tk-bold">TOTAL NETO:</span>
-                    <span className="tk-neto-val">
-                      L. <span id="tot">{receiptTotal}</span>
-                    </span>
-                  </div>
-                  <div className="tk-words">
-                    SON: TRESCIENTOS TREINTA Y CUATRO LEMPIRAS CON 65/100 CTS.
-                  </div>
-
-                  <div className="tk-divider"></div>
-
-                  {/* Desglose de Pago */}
-                  <div className="tk-row">
-                    <span>Pago:</span>
-                    <span className="tk-bold">Efectivo Contado</span>
-                  </div>
-                  <div className="tk-row">
-                    <span>Efectivo Recibido:</span>
-                    <span>L. 500.00</span>
-                  </div>
-                  <div className="tk-row">
-                    <span className="tk-bold">Cambio Entregado:</span>
-                    <span className="tk-bold">L. 165.35</span>
-                  </div>
-
-                  {/* Sello de Cobrado */}
-                  <div className="tk-badge-row">
-                    <span className="tk-paid-badge">✓ PAGADO EN CAJA</span>
-                  </div>
-
-                  {/* Código QR idéntico al generado por el motor de impresión del sistema */}
-                  <div className="tk-qr-wrap">
-                    <svg
-                      className="tk-qr-svg"
-                      viewBox="0 0 100 100"
-                      width="72"
-                      height="72"
-                      shapeRendering="crispEdges"
-                    >
-                      <rect width="100" height="100" fill="#ffffff" />
-                      {/* Patrones de esquina */}
-                      <rect x="8" y="8" width="26" height="26" fill="#0f172a" />
-                      <rect x="12" y="12" width="18" height="18" fill="#ffffff" />
-                      <rect x="16" y="16" width="10" height="10" fill="#0f172a" />
-                      <rect x="66" y="8" width="26" height="26" fill="#0f172a" />
-                      <rect x="70" y="12" width="18" height="18" fill="#ffffff" />
-                      <rect x="74" y="16" width="10" height="10" fill="#0f172a" />
-                      <rect x="8" y="66" width="26" height="26" fill="#0f172a" />
-                      <rect x="12" y="70" width="18" height="18" fill="#ffffff" />
-                      <rect x="16" y="74" width="10" height="10" fill="#0f172a" />
-                      {/* Puntos y patrones interiores */}
-                      <rect x="40" y="10" width="5" height="5" fill="#0f172a" />
-                      <rect x="52" y="10" width="5" height="5" fill="#0f172a" />
-                      <rect x="44" y="20" width="5" height="5" fill="#0f172a" />
-                      <rect x="56" y="20" width="5" height="5" fill="#0f172a" />
-                      <rect x="40" y="30" width="5" height="5" fill="#0f172a" />
-                      <rect x="48" y="30" width="5" height="5" fill="#0f172a" />
-                      <rect x="10" y="44" width="5" height="5" fill="#0f172a" />
-                      <rect x="22" y="44" width="5" height="5" fill="#0f172a" />
-                      <rect x="72" y="44" width="5" height="5" fill="#0f172a" />
-                      <rect x="84" y="44" width="5" height="5" fill="#0f172a" />
-                      <rect x="44" y="44" width="14" height="14" fill="#0f172a" />
-                      <rect x="47" y="47" width="8" height="8" fill="#ffffff" />
-                      <rect x="50" y="50" width="2" height="2" fill="#0f172a" />
-                      <rect x="40" y="68" width="5" height="5" fill="#0f172a" />
-                      <rect x="52" y="68" width="5" height="5" fill="#0f172a" />
-                      <rect x="70" y="68" width="5" height="5" fill="#0f172a" />
-                      <rect x="82" y="68" width="5" height="5" fill="#0f172a" />
-                      <rect x="44" y="80" width="5" height="5" fill="#0f172a" />
-                      <rect x="56" y="80" width="5" height="5" fill="#0f172a" />
-                      <rect x="74" y="80" width="5" height="5" fill="#0f172a" />
-                      <rect x="86" y="80" width="5" height="5" fill="#0f172a" />
-                    </svg>
-                  </div>
-
-                  {/* Pie de ticket */}
-                  <div className="tk-center tk-footer">
-                    <div className="tk-thanks">¡Gracias por su preferencia!</div>
-                    <div className="tk-foot-small">Documento Fiscal Emitido por MIAPPHN POS</div>
-                    <div className="tk-foot-url">miapphn.online</div>
-                  </div>
+          <div className="hero-showcase">
+            <div className="hero-showcase-frame">
+              <div className="hero-showcase-bar">
+                <div className="hero-showcase-dots">
+                  <span className="dot dot-emerald"></span>
+                  <span className="hero-showcase-badge">
+                    Aquí usamos nuestra App de Ventas POS • Control de Inventario y Facturación
+                  </span>
                 </div>
-                {/* Borde dentado de corte térmico */}
-                <div className="tear"></div>
+                <span className="hero-showcase-live">EN VIVO EN COMERCIOS</span>
+              </div>
+              <div className="hero-showcase-img-wrap">
+                <img
+                  src="/assets/aistudio/image_0e512b8a.png"
+                  alt="Comercios operando con nuestra App de Ventas POS, escáner e impresora térmica"
+                  className="hero-showcase-img"
+                />
               </div>
             </div>
-
-            <button
-              className="btn snd"
-              id="snd"
-              type="button"
-              onClick={() => runPrint(true)}
-            >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M4 9v6h4l5 4V5L8 9H4z" />
-                <path d="M16.5 8.5a5 5 0 010 7M19 6a9 9 0 010 12" />
-              </svg>
-              <span>Imprimir factura con sonido</span>
-            </button>
           </div>
         </div>
 
@@ -1151,27 +887,24 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         /* hero */
         .miapphn-landing .hero {
           display: grid;
-          gap: 48px;
-          padding: 64px 0 72px;
+          gap: 36px;
+          padding: 48px 0 64px;
           align-items: center;
         }
-        @media (min-width: 900px) {
-          .miapphn-landing .hero {
-            grid-template-columns: 1.25fr 1fr;
-            padding: 88px 0 96px;
-          }
+        .miapphn-landing .hero-copy {
+          max-width: 780px;
         }
         .miapphn-landing .hero h1 {
-          font-size: clamp(2.2rem, 5.2vw, 3.7rem);
-          line-height: 1.04;
+          font-size: clamp(2.1rem, 4.8vw, 3.5rem);
+          line-height: 1.06;
           font-weight: 800;
-          max-width: 15ch;
+          max-width: 22ch;
         }
         .miapphn-landing .hero p {
           color: var(--mut);
           font-size: 1.1rem;
-          max-width: 52ch;
-          margin: 20px 0 32px;
+          max-width: 60ch;
+          margin: 18px 0 28px;
         }
         .miapphn-landing .cta {
           display: flex;
@@ -1179,218 +912,75 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           gap: 12px;
         }
         .miapphn-landing .note {
-          margin-top: 18px;
+          margin-top: 16px;
           color: var(--mut);
           font-size: 0.92rem;
         }
-        /* ticket térmico realista POS 80mm */
-        .miapphn-landing .posw {
-          justify-self: center;
-          display: grid;
-          gap: 16px;
-          justify-items: center;
-          width: min(340px, 100%);
-        }
-        .miapphn-landing .pos {
+        /* Hero Showcase Image Banner */
+        .miapphn-landing .hero-showcase {
           width: 100%;
-          position: relative;
         }
-        .miapphn-landing .snd {
-          gap: 10px;
+        .miapphn-landing .hero-showcase-frame {
+          border-radius: 22px;
+          background: linear-gradient(180deg, rgba(16, 185, 129, 0.14), rgba(15, 23, 42, 0.92));
+          border: 1px solid rgba(16, 185, 129, 0.35);
+          box-shadow:
+            0 28px 70px -20px rgba(0, 0, 0, 0.75),
+            0 0 40px -12px rgba(16, 185, 129, 0.28);
+          overflow: hidden;
         }
-        .miapphn-landing .slot {
-          height: 18px;
-          border-radius: 8px;
-          background: linear-gradient(#1e293b, #0f172a);
-          border: 1px solid var(--line);
-          position: relative;
-          z-index: 2;
+        .miapphn-landing .hero-showcase-bar {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 0 10px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+          gap: 12px;
+          padding: 10px 16px;
+          background: rgba(10, 17, 32, 0.9);
+          border-bottom: 1px solid rgba(148, 163, 184, 0.16);
         }
-        .miapphn-landing .slot-badge {
-          font-size: 0.58rem;
-          font-weight: 800;
-          color: #94a3b8;
-          letter-spacing: 0.08em;
+        .miapphn-landing .hero-showcase-dots {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
         }
-        .miapphn-landing .led {
-          width: 7px;
-          height: 7px;
+        .miapphn-landing .dot-emerald {
+          width: 9px;
+          height: 9px;
           border-radius: 50%;
           background: var(--brand);
           box-shadow: 0 0 10px var(--brand);
+          flex-shrink: 0;
         }
-        .miapphn-landing .print .slot {
-          animation: shake 0.08s steps(2) 46 0.4s;
-        }
-        .miapphn-landing .print .led {
-          animation: bl 0.18s steps(2) 20 0.4s;
-        }
-        @keyframes shake {
-          50% {
-            transform: translateX(1.2px);
-          }
-        }
-        @keyframes bl {
-          50% {
-            opacity: 0.15;
-          }
-        }
-        .miapphn-landing .paper {
-          margin: -4px 12px 0;
-          position: relative;
-          z-index: 1;
-          color: var(--paperink);
-          font: 500 0.72rem / 1.38 "Courier New", Courier, ui-monospace, Menlo, Consolas, monospace;
-          box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.7);
-        }
-        .miapphn-landing .print .paper {
-          animation: feed 3.6s steps(36) 0.4s both;
-        }
-        .miapphn-landing .paper > div.ticket-body {
-          background: var(--paper);
-          padding: 18px 14px 6px;
-          border-radius: 2px 2px 0 0;
-        }
-        .miapphn-landing .tk-center {
-          text-align: center;
-        }
-        .miapphn-landing .tk-store {
-          font-size: 0.88rem;
-          font-weight: 800;
-          letter-spacing: 0.04em;
-          color: var(--paperink);
-        }
-        .miapphn-landing .tk-tagline {
-          font-size: 0.65rem;
-          opacity: 0.75;
-          margin-top: 2px;
-        }
-        .miapphn-landing .tk-sub {
-          font-size: 0.66rem;
-          opacity: 0.85;
-          line-height: 1.25;
-        }
-        .miapphn-landing .tk-doc-type {
-          font-size: 0.75rem;
-          font-weight: 800;
-          letter-spacing: 0.05em;
-          margin: 3px 0 5px;
-          color: var(--paperink);
-        }
-        .miapphn-landing .tk-divider {
-          border-top: 1px dashed var(--paperdashed);
-          margin: 6px 0;
-        }
-        .miapphn-landing .tk-row {
-          display: flex;
-          justify-content: space-between;
-          font-size: 0.69rem;
-          line-height: 1.35;
-        }
-        .miapphn-landing .tk-bold {
+        .miapphn-landing .hero-showcase-badge {
+          font-size: 0.78rem;
           font-weight: 700;
+          color: #e2e8f0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
-        .miapphn-landing .tk-table-hdr {
-          display: flex;
-          justify-content: space-between;
+        .miapphn-landing .hero-showcase-live {
+          font-size: 0.68rem;
           font-weight: 800;
-          font-size: 0.71rem;
-          letter-spacing: 0.03em;
+          letter-spacing: 0.06em;
+          color: var(--brand);
+          background: rgba(16, 185, 129, 0.12);
+          border: 1px solid rgba(16, 185, 129, 0.35);
+          padding: 3px 10px;
+          border-radius: 999px;
+          flex-shrink: 0;
         }
-        .miapphn-landing .tk-items {
-          display: flex;
-          flex-direction: column;
-          gap: 5px;
+        .miapphn-landing .hero-showcase-img-wrap {
+          width: 100%;
+          background: #0a101d;
+          line-height: 0;
         }
-        .miapphn-landing .tk-item-top {
-          display: flex;
-          justify-content: space-between;
-          font-weight: 700;
-          font-size: 0.70rem;
-        }
-        .miapphn-landing .tk-item-sub {
-          font-size: 0.63rem;
-          opacity: 0.75;
-          padding-left: 6px;
-        }
-        .miapphn-landing .tk-neto {
-          border-top: 1.5px solid var(--paperink);
-          border-bottom: 1.5px solid var(--paperink);
-          margin: 5px 0 4px;
-          padding: 4px 0;
-          font-size: 0.85rem;
-          font-weight: 800;
-        }
-        .miapphn-landing .tk-neto-val {
-          font-weight: 900;
-          font-size: 0.95rem;
-        }
-        .miapphn-landing .tk-words {
-          font-size: 0.58rem;
-          line-height: 1.25;
-          opacity: 0.85;
-          margin: 3px 0 2px;
-        }
-        .miapphn-landing .tk-badge-row {
-          display: flex;
-          justify-content: center;
-          margin: 7px 0 4px;
-        }
-        .miapphn-landing .tk-paid-badge {
-          display: inline-block;
-          padding: 2px 8px;
-          border: 1.5px solid #059669;
-          color: #047857;
-          font-weight: 800;
-          font-size: 0.66rem;
-          letter-spacing: 0.05em;
-          border-radius: 4px;
-          background: #ecfdf5;
-        }
-        .miapphn-landing .tk-qr-wrap {
-          display: flex;
-          justify-content: center;
-          margin: 6px 0 4px;
-        }
-        .miapphn-landing .tk-qr-svg {
+        .miapphn-landing .hero-showcase-img {
+          width: 100%;
+          height: auto;
           display: block;
-        }
-        .miapphn-landing .tk-footer {
-          margin-top: 4px;
-        }
-        .miapphn-landing .tk-thanks {
-          font-weight: 700;
-          font-size: 0.72rem;
-          margin-bottom: 2px;
-        }
-        .miapphn-landing .tk-foot-small {
-          font-size: 0.58rem;
-          opacity: 0.7;
-        }
-        .miapphn-landing .tk-foot-url {
-          font-size: 0.62rem;
-          font-weight: 700;
-          color: #047857;
-          margin-top: 1px;
-        }
-        .miapphn-landing .tear {
-          height: 14px;
-          background:
-            linear-gradient(135deg, var(--paper) 50%, transparent 0) 0 0 / 14px 14px,
-            linear-gradient(225deg, var(--paper) 50%, transparent 0) 0 0 / 14px 14px;
-        }
-        @keyframes feed {
-          from {
-            clip-path: inset(0 0 100% 0);
-          }
-          to {
-            clip-path: inset(0 0 -20px 0);
-          }
+          object-fit: contain;
         }
         /* planes */
         .miapphn-landing section {
