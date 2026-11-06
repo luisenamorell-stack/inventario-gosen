@@ -468,10 +468,39 @@ export interface StoreExpenseRecord {
   fromCashDrawer?: boolean;
 }
 
+export interface CreditCollectionNoticeLog {
+  id: string;
+  timestamp: number;
+  dateFormatted: string;
+  date?: string;
+  channel: 'whatsapp' | 'call' | 'in_person';
+  noticeType: 'preventive' | 'due_today' | 'overdue' | 'statement';
+  type?: 'preventive' | 'due_today' | 'overdue' | 'statement';
+  sentBy: string;
+  notes?: string;
+  note?: string;
+}
+
+export interface CreditAccountControlMeta {
+  saleId: string;
+  customTotalCost?: number;
+  nextPaymentDate?: string;
+  paymentFrequency?: 'weekly' | 'biweekly' | 'monthly' | 'daily' | 'custom';
+  installmentAmount?: number;
+  collectionNotes?: string;
+  lastNoticeAt?: number;
+  lastNoticeTimestamp?: number;
+  lastNoticeDate?: string;
+  lastNoticeType?: string;
+  noticeCount?: number;
+  notices?: CreditCollectionNoticeLog[];
+}
+
 export interface POSFinanceStoreData {
   companyId: string;
   shifts: CashRegisterShift[];
   expenses: StoreExpenseRecord[];
+  creditAccountControls?: Record<string, CreditAccountControlMeta>;
   updatedAt: number;
 }
 

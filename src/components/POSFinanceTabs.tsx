@@ -10,6 +10,8 @@ import {
   ExpenseCategory,
   CreditPaymentAbone,
   POSFinanceStoreData,
+  CreditAccountControlMeta,
+  CreditCollectionNoticeLog,
 } from '../types';
 import {
   Wallet,
@@ -36,6 +38,9 @@ import {
   Download,
   Phone,
   User,
+  Bell,
+  Pencil,
+  MessageSquare,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { PrintFormatModal } from './PrintFormatModal';
@@ -342,32 +347,189 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
   // ==================== 2. CREDIT ACCOUNTS / CARTERA STATE ====================
   const [creditSearch, setCreditSearch] = useState<string>('');
-  const [creditFilter, setCreditFilter] = useState<'pending' | 'paid' | 'all'>('pending');
+  const [creditFilter, setCreditFilter] = useState<
+    'pending' | 'alerts' | 'profit_zone' | 'recovering_cost' | 'paid' | 'all'
+  >('pending');
   const [selectedSaleForAbone, setSelectedSaleForAbone] = useState<SaleRecord | null>(null);
   const [aboneAmount, setAboneAmount] = useState<string>('');
   const [aboneMethod, setAboneMethod] = useState<'cash' | 'transfer' | 'card'>('cash');
   const [aboneNotes, setAboneNotes] = useState<string>('');
+  const [aboneNextDate, setAboneNextDate] = useState<string>('');
   const [isSubmittingAbone, setIsSubmittingAbone] = useState<boolean>(false);
+
+  // Control de Costo, Alerta de Cobro y Registro de Avisos Modal State
+  const [selectedSaleForControl, setSelectedSaleForControl] = useState<SaleRecord | null>(null);
+  const [ctrlCustomCost, setCtrlCustomCost] = useState<string>('');
+  const [ctrlNextPaymentDate, setCtrlNextPaymentDate] = useState<string>('');
+  const [ctrlFrequency, setCtrlFrequency] = useState<
+    'weekly' | 'biweekly' | 'monthly' | 'daily' | 'custom'
+  >('biweekly');
+  const [ctrlInstallmentAmount, setCtrlInstallmentAmount] = useState<string>('');
+  const [ctrlNotes, setCtrlNotes] = useState<string>('');
+  const [manualNoticeChannel, setManualNoticeChannel] = useState<'call' | 'in_person'>('call');
+  const [manualNoticeNote, setManualNoticeNote] = useState<string>('');
+  const [isSavingControl, setIsSavingControl] = useState<boolean>(false);
+
+  const inventoryCostMap = useMemo(() => {
+    const map = new Map<string, number>();
+    inventory.forEach((p) => map.set((p.code || '').trim().toLowerCase(), Number(p.cost) || 0));
+    return map;
+  }, [inventory]);
+
+  const creditAccountControls = useMemo(
+    () => posFinanceData.creditAccountControls || {},
+    [posFinanceData.creditAccountControls]
+  );
+
+  const getLocalTodayIso = () => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const addDaysToIso = (daysToAdd: number, baseIso?: string) => {
+    const base = baseIso && /^\d{4}-\d{2}-\d{2}$/.test(baseIso) ? new Date(`${baseIso}T12:00:00`) : new Date();
+    base.setDate(base.getDate() + daysToAdd);
+    const yyyy = base.getFullYear();
+    const mm = String(base.getMonth() + 1).padStart(2, '0');
+    const dd = String(base.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const getSaleCreditAnalytics = (sale: SaleRecord) => {
+    const controlMeta: CreditAccountControlMeta | undefined = creditAccountControls[sale.id];
+    const totalSale = Math.max(0, Number(sale.total) || 0);
+
+    const calculatedItemsCost = (sale.items || []).reduce((acc, it) => {
+      const unitCost =
+        Number(it.cost) > 0
+          ? Number(it.cost)
+          : inventoryCostMap.get((it.code || '').trim().toLowerCase()) || 0;
+      return acc + unitCost * (Number(it.quantity) || 1);
+    }, 0);
+
+    const hasCustomCost =
+      controlMeta?.customTotalCost !== undefined &&
+      controlMeta.customTotalCost !== null &&
+      !Number.isNaN(Number(controlMeta.customTotalCost));
+
+    const totalCost = Math.max(
+      0,
+      hasCustomCost ? Number(controlMeta!.customTotalCost) : calculatedItemsCost
+    );
+    const expectedTotalProfit = Math.max(0, totalSale - totalCost);
+
+    const paid = Math.max(0, Number(sale.amountPaid) || 0);
+    const balanceDue =
+      sale.balanceDue !== undefined
+        ? Math.max(0, Number(sale.balanceDue))
+        : Math.max(0, totalSale - paid);
+    const isPaid = balanceDue <= 0.01 || sale.creditStatus === 'paid';
+
+    const costRecovered = Math.min(totalCost, paid);
+    const costRemainingToRecover = Math.max(0, totalCost - paid);
+    const isCostRecovered = totalCost > 0 ? paid >= totalCost - 0.01 : paid > 0;
+    const realizedProfitCollected = Math.max(0, paid - totalCost);
+    const remainingProfitToCollect = isCostRecovered
+      ? balanceDue
+      : Math.min(balanceDue, expectedTotalProfit);
+
+    const costRecoveryPercent =
+      totalCost > 0 ? Math.min(100, (costRecovered / totalCost) * 100) : 100;
+    const profitCollectionPercent =
+      expectedTotalProfit > 0
+        ? Math.min(100, (realizedProfitCollected / expectedTotalProfit) * 100)
+        : 0;
+
+    // Collection Alert Calculation
+    const todayIso = getLocalTodayIso();
+    const effectiveNextDate = controlMeta?.nextPaymentDate || sale.creditDueDate || '';
+    let daysDiff: number | null = null;
+    if (effectiveNextDate && /^\d{4}-\d{2}-\d{2}$/.test(effectiveNextDate)) {
+      const targetMs = new Date(`${effectiveNextDate}T00:00:00`).getTime();
+      const todayMs = new Date(`${todayIso}T00:00:00`).getTime();
+      daysDiff = Math.round((targetMs - todayMs) / (1000 * 60 * 60 * 24));
+    }
+
+    let alertStatus: 'paid' | 'overdue' | 'due_today' | 'upcoming' | 'on_track' = 'on_track';
+    if (isPaid) {
+      alertStatus = 'paid';
+    } else if (daysDiff !== null && daysDiff < 0) {
+      alertStatus = 'overdue';
+    } else if (daysDiff !== null && daysDiff === 0) {
+      alertStatus = 'due_today';
+    } else if (daysDiff !== null && daysDiff > 0 && daysDiff <= 3) {
+      alertStatus = 'upcoming';
+    }
+
+    const notices = controlMeta?.notices || [];
+    const noticeCount = controlMeta?.noticeCount ?? notices.length;
+
+    return {
+      controlMeta,
+      totalSale,
+      calculatedItemsCost,
+      hasCustomCost,
+      totalCost,
+      expectedTotalProfit,
+      paid,
+      balanceDue,
+      isPaid,
+      costRecovered,
+      costRemainingToRecover,
+      isCostRecovered,
+      realizedProfitCollected,
+      remainingProfitToCollect,
+      costRecoveryPercent,
+      profitCollectionPercent,
+      effectiveNextDate,
+      daysDiff,
+      alertStatus,
+      notices,
+      noticeCount,
+    };
+  };
 
   const creditSales = useMemo(() => {
     return sales.filter(
       (s) =>
         s.status === 'completed' &&
-        (s.paymentMethod === 'credit' || (s.balanceDue !== undefined && s.balanceDue > 0) || (s.creditPayments && s.creditPayments.length > 0))
+        (s.paymentMethod === 'credit' ||
+          (s.balanceDue !== undefined && s.balanceDue > 0) ||
+          (s.creditPayments && s.creditPayments.length > 0))
     );
   }, [sales]);
 
   const filteredCreditSales = useMemo(() => {
     const q = creditSearch.trim().toLowerCase();
     return creditSales.filter((s) => {
-      const bal =
-        s.balanceDue !== undefined
-          ? Number(s.balanceDue)
-          : Math.max(0, Number(s.total) - Number(s.amountPaid || 0));
-      const isPaid = bal <= 0.01 || s.creditStatus === 'paid';
+      const analytics = getSaleCreditAnalytics(s);
 
-      if (creditFilter === 'pending' && isPaid) return false;
-      if (creditFilter === 'paid' && !isPaid) return false;
+      if (creditFilter === 'pending' && analytics.isPaid) return false;
+      if (creditFilter === 'paid' && !analytics.isPaid) return false;
+      if (
+        creditFilter === 'alerts' &&
+        (analytics.isPaid ||
+          (analytics.alertStatus !== 'overdue' &&
+            analytics.alertStatus !== 'due_today' &&
+            analytics.alertStatus !== 'upcoming'))
+      ) {
+        return false;
+      }
+      if (
+        creditFilter === 'profit_zone' &&
+        (analytics.isPaid || !analytics.isCostRecovered)
+      ) {
+        return false;
+      }
+      if (
+        creditFilter === 'recovering_cost' &&
+        (analytics.isPaid || analytics.isCostRecovered)
+      ) {
+        return false;
+      }
 
       if (q) {
         const matchCust = (s.customerName || '').toLowerCase().includes(q);
@@ -377,33 +539,190 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       }
       return true;
     });
-  }, [creditSales, creditSearch, creditFilter]);
+  }, [creditSales, creditSearch, creditFilter, creditAccountControls, inventoryCostMap]);
 
   const creditPortfolioStats = useMemo(() => {
     let totalReceivable = 0;
     let totalCollectedFromCredits = 0;
     let pendingAccountsCount = 0;
     let overdueCount = 0;
-    const todayStr = new Date().toISOString().slice(0, 10);
+    let dueTodayCount = 0;
+    let upcomingCount = 0;
+    let totalCostRemainingInStreet = 0;
+    let totalProfitRemainingInStreet = 0;
+    let totalRealizedProfitInHand = 0;
+    let accountsInProfitZoneCount = 0;
+    let accountsRecoveringCostCount = 0;
+    const alertSales: Array<{
+      sale: SaleRecord;
+      analytics: ReturnType<typeof getSaleCreditAnalytics>;
+    }> = [];
 
     creditSales.forEach((s) => {
-      const bal =
-        s.balanceDue !== undefined
-          ? Number(s.balanceDue)
-          : Math.max(0, Number(s.total) - Number(s.amountPaid || 0));
-      const paid = Math.max(0, Number(s.amountPaid) || 0);
-      totalCollectedFromCredits += paid;
-      if (bal > 0.01) {
-        totalReceivable += bal;
+      const a = getSaleCreditAnalytics(s);
+      totalCollectedFromCredits += a.paid;
+      totalRealizedProfitInHand += a.realizedProfitCollected;
+
+      if (!a.isPaid) {
+        totalReceivable += a.balanceDue;
         pendingAccountsCount += 1;
-        if (s.creditDueDate && s.creditDueDate < todayStr) {
+        totalCostRemainingInStreet += a.costRemainingToRecover;
+        totalProfitRemainingInStreet += a.remainingProfitToCollect;
+
+        if (a.isCostRecovered) {
+          accountsInProfitZoneCount += 1;
+        } else {
+          accountsRecoveringCostCount += 1;
+        }
+
+        if (a.alertStatus === 'overdue') {
           overdueCount += 1;
+          alertSales.push({ sale: s, analytics: a });
+        } else if (a.alertStatus === 'due_today') {
+          dueTodayCount += 1;
+          alertSales.push({ sale: s, analytics: a });
+        } else if (a.alertStatus === 'upcoming') {
+          upcomingCount += 1;
+          alertSales.push({ sale: s, analytics: a });
         }
       }
     });
 
-    return { totalReceivable, totalCollectedFromCredits, pendingAccountsCount, overdueCount };
-  }, [creditSales]);
+    // Sort alerts: overdue first, then due_today, then upcoming
+    alertSales.sort((x, y) => {
+      const rank = { overdue: 0, due_today: 1, upcoming: 2, on_track: 3, paid: 4 };
+      return rank[x.analytics.alertStatus] - rank[y.analytics.alertStatus];
+    });
+
+    return {
+      totalReceivable,
+      totalCollectedFromCredits,
+      pendingAccountsCount,
+      overdueCount,
+      dueTodayCount,
+      upcomingCount,
+      totalAlertsCount: overdueCount + dueTodayCount + upcomingCount,
+      totalCostRemainingInStreet,
+      totalProfitRemainingInStreet,
+      totalRealizedProfitInHand,
+      accountsInProfitZoneCount,
+      accountsRecoveringCostCount,
+      alertSales,
+    };
+  }, [creditSales, creditAccountControls, inventoryCostMap]);
+
+  const openControlModalForSale = (sale: SaleRecord) => {
+    const a = getSaleCreditAnalytics(sale);
+    setSelectedSaleForControl(sale);
+    setCtrlCustomCost(a.totalCost.toFixed(2));
+    setCtrlNextPaymentDate(a.effectiveNextDate || '');
+    setCtrlFrequency(a.controlMeta?.paymentFrequency || 'biweekly');
+    setCtrlInstallmentAmount(
+      a.controlMeta?.installmentAmount && a.controlMeta.installmentAmount > 0
+        ? a.controlMeta.installmentAmount.toFixed(2)
+        : ''
+    );
+    setCtrlNotes(a.controlMeta?.collectionNotes || '');
+    setManualNoticeNote('');
+  };
+
+  const handleSaveCreditAccountControl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSaleForControl) return;
+    setIsSavingControl(true);
+    try {
+      const existingMeta = creditAccountControls[selectedSaleForControl.id] || {
+        saleId: selectedSaleForControl.id,
+      };
+      const parsedCost = parseFloat(ctrlCustomCost);
+      const parsedInstallment = parseFloat(ctrlInstallmentAmount);
+
+      const updatedMeta: CreditAccountControlMeta = {
+        ...existingMeta,
+        saleId: selectedSaleForControl.id,
+        customTotalCost: !Number.isNaN(parsedCost) && parsedCost >= 0 ? parsedCost : undefined,
+        nextPaymentDate: ctrlNextPaymentDate.trim() || undefined,
+        paymentFrequency: ctrlFrequency,
+        installmentAmount:
+          !Number.isNaN(parsedInstallment) && parsedInstallment > 0 ? parsedInstallment : undefined,
+        collectionNotes: ctrlNotes.trim() || undefined,
+      };
+
+      await onSavePOSFinanceData({
+        ...posFinanceData,
+        creditAccountControls: {
+          ...creditAccountControls,
+          [selectedSaleForControl.id]: updatedMeta,
+        },
+        updatedAt: Date.now(),
+      });
+
+      showToast(
+        `Control de costo y alerta de cobro guardado para ${selectedSaleForControl.customerName || 'Cliente'}`,
+        'success'
+      );
+      setSelectedSaleForControl(null);
+    } finally {
+      setIsSavingControl(false);
+    }
+  };
+
+  const recordCollectionNoticeLog = async (
+    sale: SaleRecord,
+    type: CreditCollectionNoticeLog['noticeType'],
+    channel: CreditCollectionNoticeLog['channel'],
+    noteText: string
+  ) => {
+    const now = new Date();
+    const dateStr = now.toLocaleString('es-HN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const newNotice: CreditCollectionNoticeLog = {
+      id: `ntc_${Date.now()}`,
+      timestamp: now.getTime(),
+      dateFormatted: dateStr,
+      date: dateStr,
+      noticeType: type,
+      type,
+      channel,
+      sentBy: currentUserName,
+      notes: noteText,
+      note: noteText,
+    };
+
+    const existingMeta = creditAccountControls[sale.id] || { saleId: sale.id };
+    const prevNotices = existingMeta.notices || [];
+    const updatedMeta: CreditAccountControlMeta = {
+      ...existingMeta,
+      saleId: sale.id,
+      lastNoticeAt: now.getTime(),
+      lastNoticeTimestamp: now.getTime(),
+      lastNoticeDate: dateStr,
+      lastNoticeType:
+        type === 'overdue'
+          ? 'Cobro Vencido'
+          : type === 'due_today'
+          ? 'Día de Abono Hoy'
+          : type === 'preventive'
+          ? 'Recordatorio Preventivo'
+          : 'Estado de Cuenta',
+      noticeCount: (existingMeta.noticeCount ?? prevNotices.length) + 1,
+      notices: [newNotice, ...prevNotices].slice(0, 40),
+    };
+
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      creditAccountControls: {
+        ...creditAccountControls,
+        [sale.id]: updatedMeta,
+      },
+      updatedAt: Date.now(),
+    });
+  };
 
   const handleSubmitCreditAbone = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -412,7 +731,10 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     const currentBal =
       selectedSaleForAbone.balanceDue !== undefined
         ? Number(selectedSaleForAbone.balanceDue)
-        : Math.max(0, Number(selectedSaleForAbone.total) - Number(selectedSaleForAbone.amountPaid || 0));
+        : Math.max(
+            0,
+            Number(selectedSaleForAbone.total) - Number(selectedSaleForAbone.amountPaid || 0)
+          );
 
     const amt = parseFloat(aboneAmount) || 0;
     if (amt <= 0 || amt > currentBal + 0.05) {
@@ -439,14 +761,49 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         notes: aboneNotes.trim() || '',
       };
 
+      const analyticsBefore = getSaleCreditAnalytics(selectedSaleForAbone);
       const updatedSale = await onRecordCreditPayment(selectedSaleForAbone, newAbone);
+
+      // Update nextPaymentDate if specified or if paid in full clear alert
+      const newRemainingBalance = updatedSale.balanceDue ?? Math.max(0, currentBal - newAbone.amount);
+      if (aboneNextDate.trim() || creditAccountControls[selectedSaleForAbone.id]) {
+        const existingMeta = creditAccountControls[selectedSaleForAbone.id] || {
+          saleId: selectedSaleForAbone.id,
+        };
+        const updatedMeta: CreditAccountControlMeta = {
+          ...existingMeta,
+          saleId: selectedSaleForAbone.id,
+          nextPaymentDate:
+            newRemainingBalance <= 0.01
+              ? undefined
+              : aboneNextDate.trim() || existingMeta.nextPaymentDate,
+        };
+        await onSavePOSFinanceData({
+          ...posFinanceData,
+          creditAccountControls: {
+            ...creditAccountControls,
+            [selectedSaleForAbone.id]: updatedMeta,
+          },
+          updatedAt: Date.now(),
+        });
+      }
+
+      const newPaidTotal = (Number(selectedSaleForAbone.amountPaid) || 0) + newAbone.amount;
+      const crossedIntoProfit =
+        newRemainingBalance > 0.01 &&
+        newPaidTotal >= analyticsBefore.totalCost - 0.01 &&
+        analyticsBefore.totalCost > 0;
+
       setSelectedSaleForAbone(null);
       setAboneAmount('');
       setAboneNotes('');
+      setAboneNextDate('');
       showToast(
-        (updatedSale.balanceDue || 0) <= 0.01
-          ? `¡Cuenta de ${updatedSale.customerName} liquidada en su totalidad!`
-          : `Abono de L. ${newAbone.amount.toFixed(2)} registrado. Nuevo saldo: L. ${(updatedSale.balanceDue || 0).toFixed(2)}`,
+        newRemainingBalance <= 0.01
+          ? `¡Cuenta de ${updatedSale.customerName} liquidada en su totalidad! Ganancia total: L. ${analyticsBefore.expectedTotalProfit.toFixed(2)}`
+          : crossedIntoProfit
+          ? `Abono registrado. ¡Precio Costo (L. ${analyticsBefore.totalCost.toFixed(2)}) 100% recuperado! Los L. ${newRemainingBalance.toFixed(2)} que restan son 100% GANANCIA.`
+          : `Abono de L. ${newAbone.amount.toFixed(2)} registrado. Nuevo saldo: L. ${newRemainingBalance.toFixed(2)}`,
         'success'
       );
     } finally {
@@ -454,21 +811,53 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     }
   };
 
-  const handleSendCreditReminderWhatsApp = (sale: SaleRecord) => {
-    const bal =
-      sale.balanceDue !== undefined
-        ? Number(sale.balanceDue)
-        : Math.max(0, Number(sale.total) - Number(sale.amountPaid || 0));
-    const paid = Number(sale.amountPaid) || 0;
+  const handleSendCreditReminderWhatsApp = (
+    sale: SaleRecord,
+    templateType: CreditCollectionNoticeLog['noticeType'] = 'statement'
+  ) => {
+    const a = getSaleCreditAnalytics(sale);
+    const bal = a.balanceDue;
+    const paid = a.paid;
     const storeTitle = (storeSettings.storeName || 'NUESTRA TIENDA').toUpperCase();
+    const quotaText =
+      a.controlMeta?.installmentAmount && a.controlMeta.installmentAmount > 0
+        ? `L. ${a.controlMeta.installmentAmount.toFixed(2)}`
+        : null;
 
-    let msg = `👋 Hola *${sale.customerName || 'Estimado Cliente'}*, le saludamos de *${storeTitle}*.\n\n`;
-    msg += `Le compartimos el estado de cuenta actualizado de su compra al crédito:\n`;
+    let msg = `👋 Hola *${sale.customerName || 'Estimado Cliente'}*, le saludamos cordialmente de *${storeTitle}*.\n\n`;
+
+    if (templateType === 'overdue') {
+      msg += `🚨 *AVISO DE COBRO DE ABONO PENDIENTE*\n`;
+      msg += `Le recordamos que su fecha programada de abono (${a.effectiveNextDate || 'vencida'}) se encuentra pendiente de pago.\n`;
+      if (quotaText) {
+        msg += `💳 *Cuota / Abono acordado:* *${quotaText}*\n`;
+      }
+      msg += `\n`;
+    } else if (templateType === 'due_today') {
+      msg += `🔔 *RECORDATORIO: HOY CORRESPONDE SU ABONO*\n`;
+      msg += `Le recordamos amablemente que el día de hoy (${a.effectiveNextDate || 'Hoy'}) está programado su abono a cuenta.\n`;
+      if (quotaText) {
+        msg += `💳 *Cuota / Abono acordado:* *${quotaText}*\n`;
+      }
+      msg += `\n`;
+    } else if (templateType === 'preventive') {
+      msg += `📅 *RECORDATORIO PREVENTIVO DE PRÓXIMO ABONO*\n`;
+      if (a.effectiveNextDate) {
+        msg += `Le recordamos que su próximo abono está programado para el día *${a.effectiveNextDate}*.\n`;
+      }
+      if (quotaText) {
+        msg += `💳 *Cuota sugerida:* *${quotaText}*\n`;
+      }
+      msg += `\n`;
+    } else {
+      msg += `Le compartimos el estado de cuenta actualizado de su compra al crédito:\n`;
+    }
+
     msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
     msg += `📄 *Factura / Ticket:* ${sale.saleNumber}\n`;
     msg += `📅 *Fecha de Compra:* ${sale.date}\n`;
-    if (sale.creditDueDate) {
-      msg += `⏰ *Fecha de Vencimiento:* ${sale.creditDueDate}\n`;
+    if (a.effectiveNextDate) {
+      msg += `⏰ *Próximo Abono / Vencimiento:* ${a.effectiveNextDate}\n`;
     }
     msg += `\n🛍️ *Detalle de Artículos:*\n`;
     (sale.items || []).forEach((it) => {
@@ -488,6 +877,18 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     }
     msg += `Agradecemos su puntualidad y preferencia. ✨`;
 
+    // Record the notice automatically in Firestore
+    const noteLabel =
+      templateType === 'overdue'
+        ? `Aviso de cobro vencido enviado por WhatsApp (Saldo: L. ${bal.toFixed(2)})`
+        : templateType === 'due_today'
+        ? `Aviso de abono del día de hoy enviado por WhatsApp`
+        : templateType === 'preventive'
+        ? `Recordatorio preventivo de abono enviado por WhatsApp`
+        : `Estado de cuenta enviado por WhatsApp`;
+
+    void recordCollectionNoticeLog(sale, templateType, 'whatsapp', noteLabel);
+
     const rawPhone = (sale.customerPhone || '').replace(/\D/g, '');
     const finalPhone = rawPhone.length === 8 ? `504${rawPhone}` : rawPhone;
     const url = finalPhone
@@ -504,12 +905,6 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [expDate, setExpDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [expPeriodFilter, setExpPeriodFilter] = useState<'month' | 'today' | 'week' | 'all'>('month');
   const [isSavingExpense, setIsSavingExpense] = useState<boolean>(false);
-
-  const inventoryCostMap = useMemo(() => {
-    const map = new Map<string, number>();
-    inventory.forEach((p) => map.set((p.code || '').trim().toLowerCase(), Number(p.cost) || 0));
-    return map;
-  }, [inventory]);
 
   const financialStatement = useMemo(() => {
     const now = new Date();
@@ -1126,53 +1521,234 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
   // ==================== RENDER MODE 2: CREDIT ACCOUNTS / CARTERA ====================
   if (mode === 'credits') {
+    const aboneModalAnalytics = selectedSaleForAbone
+      ? getSaleCreditAnalytics(selectedSaleForAbone)
+      : null;
+    const simulatedAboneAmt = Math.max(0, parseFloat(aboneAmount) || 0);
+    const simulatedNewPaid = aboneModalAnalytics
+      ? Math.min(aboneModalAnalytics.totalSale, aboneModalAnalytics.paid + simulatedAboneAmt)
+      : 0;
+    const simulatedNewBalance = aboneModalAnalytics
+      ? Math.max(0, aboneModalAnalytics.totalSale - simulatedNewPaid)
+      : 0;
+    const simulatedCostRecovered = aboneModalAnalytics
+      ? Math.min(aboneModalAnalytics.totalCost, simulatedNewPaid)
+      : 0;
+    const simulatedCostRemaining = aboneModalAnalytics
+      ? Math.max(0, aboneModalAnalytics.totalCost - simulatedNewPaid)
+      : 0;
+    const simulatedIsCostRecovered = aboneModalAnalytics
+      ? aboneModalAnalytics.totalCost > 0
+        ? simulatedNewPaid >= aboneModalAnalytics.totalCost - 0.01
+        : simulatedNewPaid > 0
+      : false;
+    const simulatedRealizedProfit = aboneModalAnalytics
+      ? Math.max(0, simulatedNewPaid - aboneModalAnalytics.totalCost)
+      : 0;
+
+    const controlModalAnalytics = selectedSaleForControl
+      ? getSaleCreditAnalytics(selectedSaleForControl)
+      : null;
+
     return (
       <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-5 pb-32">
-        {/* Top KPI Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Top KPI Cards: Cartera, Costo vs Ganancia & Alertas */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs">
             <span className="text-[11px] font-bold uppercase text-amber-700 block">
               Total por Cobrar (Cartera)
             </span>
-            <span className="text-xl sm:text-2xl font-black text-amber-700 mt-1 block">
+            <span className="text-xl sm:text-2xl font-black text-amber-700 mt-1 block tabular-nums">
               L. {creditPortfolioStats.totalReceivable.toFixed(2)}
             </span>
-            <span className="text-[11px] text-slate-400">Saldo pendiente en la calle</span>
+            <span className="text-[11px] text-slate-500">
+              {creditPortfolioStats.pendingAccountsCount} cuenta(s) activa(s)
+            </span>
           </div>
 
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-            <span className="text-[11px] font-bold uppercase text-slate-500 block">
-              Cuentas Pendientes
+            <span className="text-[11px] font-bold uppercase text-slate-600 block">
+              Costo por Recuperar
             </span>
-            <span className="text-xl sm:text-2xl font-black text-slate-900 mt-1 block">
-              {creditPortfolioStats.pendingAccountsCount}
+            <span className="text-xl sm:text-2xl font-black text-slate-900 mt-1 block tabular-nums">
+              L. {creditPortfolioStats.totalCostRemainingInStreet.toFixed(2)}
             </span>
-            <span className="text-[11px] text-slate-400">Facturas al crédito activas</span>
+            <span className="text-[11px] text-slate-500">
+              {creditPortfolioStats.accountsRecoveringCostCount} cuenta(s) cubriendo costo
+            </span>
           </div>
 
           <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-xs">
             <span className="text-[11px] font-bold uppercase text-emerald-700 block">
-              Total Abonado / Recuperado
+              Ganancia por Cobrar (Calle)
             </span>
-            <span className="text-xl sm:text-2xl font-black text-emerald-700 mt-1 block">
-              L. {creditPortfolioStats.totalCollectedFromCredits.toFixed(2)}
+            <span className="text-xl sm:text-2xl font-black text-emerald-700 mt-1 block tabular-nums">
+              L. {creditPortfolioStats.totalProfitRemainingInStreet.toFixed(2)}
             </span>
-            <span className="text-[11px] text-slate-400">Primas y abonos recibidos</span>
+            <span className="text-[11px] text-emerald-700 font-semibold">
+              {creditPortfolioStats.accountsInProfitZoneCount} cuenta(s) 100% en Ganancia
+            </span>
           </div>
 
-          <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-xs">
+          <div className="bg-white p-4 rounded-2xl border border-teal-200 shadow-xs">
+            <span className="text-[11px] font-bold uppercase text-teal-700 block">
+              Ganancia Ya Cobrada (Mano)
+            </span>
+            <span className="text-xl sm:text-2xl font-black text-teal-700 mt-1 block tabular-nums">
+              L. {creditPortfolioStats.totalRealizedProfitInHand.toFixed(2)}
+            </span>
+            <span className="text-[11px] text-slate-500 tabular-nums">
+              Total abonado: L. {creditPortfolioStats.totalCollectedFromCredits.toFixed(2)}
+            </span>
+          </div>
+
+          <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-xs col-span-2 lg:col-span-1">
             <span className="text-[11px] font-bold uppercase text-rose-700 block">
-              Créditos Vencidos
+              Alertas de Cobro de Abono
             </span>
-            <span className="text-xl sm:text-2xl font-black text-rose-600 mt-1 block">
-              {creditPortfolioStats.overdueCount}
+            <span className="text-xl sm:text-2xl font-black text-rose-600 mt-1 block tabular-nums">
+              {creditPortfolioStats.totalAlertsCount}
             </span>
-            <span className="text-[11px] text-slate-400">Pasaron su fecha límite</span>
+            <span className="text-[11px] text-slate-500">
+              {creditPortfolioStats.overdueCount} vencido(s) · {creditPortfolioStats.dueTodayCount} hoy ·{' '}
+              {creditPortfolioStats.upcomingCount} próx.
+            </span>
           </div>
         </div>
 
+        {/* Centro de Alertas y Avisos de Cobro */}
+        {creditPortfolioStats.alertSales.length > 0 && (
+          <div className="bg-white rounded-2xl border border-rose-200 p-4 shadow-xs space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Bell className="w-4 h-4 text-rose-600 shrink-0" />
+                <div>
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900">
+                    Centro de Alertas y Avisos de Cobro de Abonos ({creditPortfolioStats.alertSales.length})
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Cuentas con fecha de abono vencida, que corresponden cobrar hoy o en los próximos 3 días
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCreditFilter(creditFilter === 'alerts' ? 'pending' : 'alerts')}
+                className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs cursor-pointer self-start sm:self-auto whitespace-nowrap"
+              >
+                {creditFilter === 'alerts' ? 'Ver todas las pendientes' : 'Filtrar solo alertas'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+              {creditPortfolioStats.alertSales.slice(0, 6).map(({ sale, analytics }) => {
+                const isOverdue = analytics.alertStatus === 'overdue';
+                const isDueToday = analytics.alertStatus === 'due_today';
+                const templateToUse: CreditCollectionNoticeLog['type'] = isOverdue
+                  ? 'overdue'
+                  : isDueToday
+                  ? 'due_today'
+                  : 'preventive';
+
+                return (
+                  <div
+                    key={`alert_${sale.id}`}
+                    className={`p-3 rounded-xl border flex flex-col justify-between gap-2 ${
+                      isOverdue
+                        ? 'bg-rose-50/60 border-rose-200'
+                        : isDueToday
+                        ? 'bg-amber-50/70 border-amber-200'
+                        : 'bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                          <span
+                            className={
+                              isOverdue
+                                ? 'text-rose-700'
+                                : isDueToday
+                                ? 'text-amber-800'
+                                : 'text-slate-700'
+                            }
+                          >
+                            {isOverdue
+                              ? `Cobro Atrasado (${Math.abs(analytics.daysDiff || 0)}d)`
+                              : isDueToday
+                              ? '¡Toca Cobrar Hoy!'
+                              : `Próximo Abono en ${analytics.daysDiff}d`}
+                          </span>
+                          <span className="text-slate-400">·</span>
+                          <span className="font-mono text-slate-600">{sale.saleNumber}</span>
+                        </div>
+                        <p className="text-xs font-black text-slate-900 mt-0.5">
+                          {sale.customerName || 'Cliente'}
+                        </p>
+                        <p className="text-[11px] text-slate-600 tabular-nums">
+                          Fecha abono: <strong>{analytics.effectiveNextDate}</strong>
+                          {analytics.controlMeta?.installmentAmount
+                            ? ` · Cuota: L. ${analytics.controlMeta.installmentAmount.toFixed(2)}`
+                            : ''}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-xs font-black text-slate-900 block tabular-nums">
+                          L. {analytics.balanceDue.toFixed(2)}
+                        </span>
+                        <span className="text-[10px] text-slate-500 block">
+                          {analytics.noticeCount > 0
+                            ? `${analytics.noticeCount} aviso(s)`
+                            : 'Sin avisos'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleSendCreditReminderWhatsApp(sale, templateToUse)}
+                        className="flex-1 py-1.5 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <WhatsAppIcon className="w-3.5 h-3.5 fill-white shrink-0" />
+                        <span>Enviar Aviso Cobro</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSaleForAbone(sale);
+                          setAboneAmount(
+                            analytics.controlMeta?.installmentAmount &&
+                              analytics.controlMeta.installmentAmount <= analytics.balanceDue
+                              ? analytics.controlMeta.installmentAmount.toFixed(2)
+                              : analytics.balanceDue.toFixed(2)
+                          );
+                          setAboneMethod('cash');
+                          setAboneNotes('');
+                          setAboneNextDate(analytics.effectiveNextDate || '');
+                        }}
+                        className="py-1.5 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] cursor-pointer whitespace-nowrap"
+                      >
+                        Abonar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openControlModalForSale(sale)}
+                        className="py-1.5 px-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-[11px] cursor-pointer"
+                        title="Configurar fecha de abono, costo y bitácora de avisos"
+                      >
+                        <Bell className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Search & Filter Bar */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
@@ -1185,11 +1761,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+            <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
               <button
                 type="button"
                 onClick={() => setCreditFilter('pending')}
-                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
+                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
                   creditFilter === 'pending'
                     ? 'bg-amber-600 text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -1199,10 +1775,43 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setCreditFilter('paid')}
-                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
-                  creditFilter === 'paid'
+                onClick={() => setCreditFilter('alerts')}
+                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                  creditFilter === 'alerts'
+                    ? 'bg-rose-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Alertas Cobro ({creditPortfolioStats.totalAlertsCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreditFilter('profit_zone')}
+                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                  creditFilter === 'profit_zone'
                     ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                En Ganancia ({creditPortfolioStats.accountsInProfitZoneCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreditFilter('recovering_cost')}
+                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                  creditFilter === 'recovering_cost'
+                    ? 'bg-slate-800 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Cubriendo Costo ({creditPortfolioStats.accountsRecoveringCostCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreditFilter('paid')}
+                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                  creditFilter === 'paid'
+                    ? 'bg-teal-700 text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -1211,7 +1820,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
               <button
                 type="button"
                 onClick={() => setCreditFilter('all')}
-                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-all ${
+                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
                   creditFilter === 'all'
                     ? 'bg-slate-900 text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -1230,7 +1839,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 }
                 setShowCreditPortfolioPrintModal(true);
               }}
-              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
               title="Imprimir o descargar en PDF la Cartera de Cuentas por Cobrar"
             >
               <Printer className="w-3.5 h-3.5 text-emerald-400" />
@@ -1254,56 +1863,106 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredCreditSales.map((sale) => {
-              const bal =
-                sale.balanceDue !== undefined
-                  ? Number(sale.balanceDue)
-                  : Math.max(0, Number(sale.total) - Number(sale.amountPaid || 0));
-              const paid = Number(sale.amountPaid) || 0;
-              const isPaid = bal <= 0.01 || sale.creditStatus === 'paid';
+              const analytics = getSaleCreditAnalytics(sale);
+              const {
+                totalSale,
+                totalCost,
+                expectedTotalProfit,
+                paid,
+                balanceDue: bal,
+                isPaid,
+                costRecovered,
+                costRemainingToRecover,
+                isCostRecovered,
+                realizedProfitCollected,
+                remainingProfitToCollect,
+                effectiveNextDate,
+                daysDiff,
+                alertStatus,
+                controlMeta,
+                noticeCount,
+              } = analytics;
               const abonos = sale.creditPayments || [];
+
+              // Progress bar proportions relative to totalSale
+              const costShareOfSalePct =
+                totalSale > 0 ? Math.min(100, (totalCost / totalSale) * 100) : 0;
+              const paidCostBarPct =
+                totalSale > 0 ? Math.min(costShareOfSalePct, (costRecovered / totalSale) * 100) : 0;
+              const paidProfitBarPct =
+                totalSale > 0
+                  ? Math.min(
+                      Math.max(0, 100 - costShareOfSalePct),
+                      (realizedProfitCollected / totalSale) * 100
+                    )
+                  : 0;
+
+              const freqLabel =
+                controlMeta?.paymentFrequency === 'weekly'
+                  ? 'Semanal'
+                  : controlMeta?.paymentFrequency === 'biweekly'
+                  ? 'Quincenal'
+                  : controlMeta?.paymentFrequency === 'monthly'
+                  ? 'Mensual'
+                  : controlMeta?.paymentFrequency === 'daily'
+                  ? 'Diario'
+                  : 'Personalizado';
 
               return (
                 <div
                   key={sale.id}
                   className={`bg-white rounded-2xl border p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-4 ${
-                    isPaid ? 'border-emerald-200' : 'border-amber-200/90'
+                    isPaid
+                      ? 'border-emerald-200'
+                      : alertStatus === 'overdue'
+                      ? 'border-rose-300'
+                      : isCostRecovered
+                      ? 'border-emerald-300'
+                      : 'border-amber-200/90'
                   }`}
                 >
-                  <div className="space-y-3">
+                  <div className="space-y-3.5">
                     {/* Header */}
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-xs bg-slate-100 text-slate-800 px-2 py-0.5 rounded">
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                          <span className="font-mono font-bold text-slate-800">
                             {sale.saleNumber}
                           </span>
+                          <span aria-hidden="true" className="text-slate-300">
+                            ·
+                          </span>
                           <span
-                            className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                            className={`text-[11px] font-black uppercase ${
                               isPaid
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-amber-100 text-amber-800'
+                                ? 'text-emerald-700'
+                                : isCostRecovered
+                                ? 'text-emerald-700'
+                                : 'text-amber-700'
                             }`}
                           >
-                            {isPaid ? 'PAGADO / LIQUIDADO' : 'SALDO PENDIENTE'}
+                            {isPaid
+                              ? 'Liquidado'
+                              : isCostRecovered
+                              ? 'Costo Cubierto · En Ganancia'
+                              : 'Recuperando Costo'}
                           </span>
                         </div>
                         <h3 className="text-base font-black text-slate-900 mt-1 flex items-center gap-1.5">
                           <User className="w-4 h-4 text-amber-600 shrink-0" />
                           <span>{sale.customerName || 'Cliente'}</span>
                         </h3>
-                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-0.5">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-0.5">
                           {sale.customerPhone && (
-                            <span className="flex items-center gap-1 font-semibold text-emerald-700">
-                              <Phone className="w-3 h-3" />
-                              {sale.customerPhone}
-                            </span>
+                            <>
+                              <span className="flex items-center gap-1 font-semibold text-emerald-700">
+                                <Phone className="w-3 h-3" />
+                                {sale.customerPhone}
+                              </span>
+                              <span aria-hidden="true">·</span>
+                            </>
                           )}
-                          <span>Fecha: {sale.date}</span>
-                          {sale.creditDueDate && (
-                            <span className="text-rose-600 font-bold">
-                              Vence: {sale.creditDueDate}
-                            </span>
-                          )}
+                          <span>Compra: {sale.date}</span>
                         </div>
                       </div>
 
@@ -1312,22 +1971,282 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           Saldo Pendiente
                         </span>
                         <span
-                          className={`text-lg sm:text-xl font-black block ${
+                          className={`text-lg sm:text-xl font-black block tabular-nums ${
                             isPaid ? 'text-emerald-600' : 'text-amber-700'
                           }`}
                         >
                           L. {bal.toFixed(2)}
                         </span>
-                        <span className="text-[11px] text-slate-400 block">
-                          Total: L. {sale.total.toFixed(2)} | Abonado: L. {paid.toFixed(2)}
+                        <span className="text-[11px] text-slate-500 block tabular-nums">
+                          Venta: L. {totalSale.toFixed(2)} · Abonado: L. {paid.toFixed(2)}
                         </span>
                       </div>
+                    </div>
+
+                    {/* ==================== CONTROL DE COSTO VS. GANANCIA ==================== */}
+                    <div
+                      className={`p-3 rounded-xl border space-y-2.5 ${
+                        isCostRecovered
+                          ? 'bg-emerald-50/70 border-emerald-200'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <TrendingUp
+                            className={`w-4 h-4 shrink-0 ${
+                              isCostRecovered ? 'text-emerald-700' : 'text-slate-700'
+                            }`}
+                          />
+                          <span className="text-xs font-black text-slate-900">
+                            Control de Precio Costo vs. Ganancia
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openControlModalForSale(sale)}
+                          className="text-[11px] font-bold text-slate-700 hover:text-slate-900 underline flex items-center gap-1 cursor-pointer"
+                          title="Editar el Precio Costo de este artículo/cuenta"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Ajustar Costo</span>
+                        </button>
+                      </div>
+
+                      {/* 3 Key Figures: Venta | Precio Costo | Ganancia Total */}
+                      <div className="grid grid-cols-3 gap-2 text-center bg-white/90 rounded-lg p-2 border border-slate-200/80 text-[11px]">
+                        <div>
+                          <span className="text-slate-500 block">Precio Venta</span>
+                          <span className="font-black text-slate-900 tabular-nums">
+                            L. {totalSale.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="border-x border-slate-100">
+                          <span className="text-slate-500 block">Precio Costo</span>
+                          <span className="font-black text-slate-800 tabular-nums">
+                            L. {totalCost.toFixed(2)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-emerald-700 font-semibold block">
+                            Ganancia Total
+                          </span>
+                          <span className="font-black text-emerald-700 tabular-nums">
+                            L. {expectedTotalProfit.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Dual-Zone Progress Bar: Cost Recovery + Profit Zone */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 tabular-nums">
+                          <span>
+                            Costo cubierto: L. {costRecovered.toFixed(2)} / L. {totalCost.toFixed(2)}
+                          </span>
+                          <span className="text-emerald-700">
+                            Ganancia cobrada: L. {realizedProfitCollected.toFixed(2)} / L.{' '}
+                            {expectedTotalProfit.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="relative h-2.5 w-full bg-slate-200 rounded-full overflow-hidden flex">
+                          {/* Cost recovered segment */}
+                          <div
+                            style={{ width: `${paidCostBarPct}%` }}
+                            className="h-full bg-amber-500 transition-all duration-200"
+                            title={`Costo recuperado: L. ${costRecovered.toFixed(2)}`}
+                          />
+                          {/* Profit collected segment */}
+                          <div
+                            style={{ width: `${paidProfitBarPct}%` }}
+                            className="h-full bg-emerald-600 transition-all duration-200"
+                            title={`Ganancia ya cobrada: L. ${realizedProfitCollected.toFixed(2)}`}
+                          />
+                          {/* Marker for Cost Threshold */}
+                          {costShareOfSalePct > 0 && costShareOfSalePct < 100 && (
+                            <div
+                              style={{ left: `${costShareOfSalePct}%` }}
+                              className="absolute top-0 bottom-0 w-0.5 bg-slate-900/70"
+                              title={`Meta de Precio Costo: L. ${totalCost.toFixed(2)}`}
+                            />
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Automatic Dynamic Status Message */}
+                      {isPaid ? (
+                        <div className="p-2 rounded-lg bg-emerald-100/80 border border-emerald-200 text-emerald-950 text-xs flex items-center justify-between gap-2">
+                          <span className="font-bold">
+                            Cuenta 100% Liquidada — Costo (L. {totalCost.toFixed(2)}) y Ganancia
+                            Total cobrados:
+                          </span>
+                          <span className="font-black text-emerald-800 tabular-nums shrink-0">
+                            + L. {expectedTotalProfit.toFixed(2)}
+                          </span>
+                        </div>
+                      ) : isCostRecovered ? (
+                        <div className="p-2.5 rounded-lg bg-emerald-600 text-white text-xs space-y-1 shadow-2xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-black uppercase tracking-tight">
+                              ✓ ¡Precio Costo (L. {totalCost.toFixed(2)}) 100% Recuperado!
+                            </span>
+                            <span className="font-mono font-black text-emerald-100 tabular-nums shrink-0">
+                              Ganancia Pura
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-emerald-50 leading-snug">
+                            El cliente ya abonó <strong>L. {paid.toFixed(2)}</strong>. Todo lo que
+                            queda de abonar (
+                            <strong className="underline">
+                              L. {remainingProfitToCollect.toFixed(2)}
+                            </strong>
+                            ) es <strong>100% GANANCIA</strong> para el negocio
+                            {realizedProfitCollected > 0.01
+                              ? ` (y ya tienes L. ${realizedProfitCollected.toFixed(2)} de ganancia cobrada en mano).`
+                              : '.'}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="p-2 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-950 text-[11px] leading-snug">
+                          <span className="font-bold"> Etapa 1 (Recuperando Precio Costo):</span>{' '}
+                          Faltan{' '}
+                          <strong className="font-black tabular-nums">
+                            L. {costRemainingToRecover.toFixed(2)}
+                          </strong>{' '}
+                          de abono para llegar al Precio Costo (L. {totalCost.toFixed(2)}). Al
+                          llegar a L. {totalCost.toFixed(2)}, los{' '}
+                          <strong className="text-emerald-800 font-black tabular-nums">
+                            L. {expectedTotalProfit.toFixed(2)}
+                          </strong>{' '}
+                          restantes serán 100% Ganancia.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ==================== CONTROL DE AVISOS Y ALERTAS DE COBRO ==================== */}
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <Bell
+                            className={`w-3.5 h-3.5 shrink-0 ${
+                              alertStatus === 'overdue'
+                                ? 'text-rose-600'
+                                : alertStatus === 'due_today'
+                                ? 'text-amber-600'
+                                : 'text-slate-600'
+                            }`}
+                          />
+                          <span className="font-black text-slate-900">
+                            Alertas y Control de Avisos de Cobro
+                          </span>
+                        </div>
+
+                        {!isPaid && (
+                          <span
+                            className={`text-[11px] font-bold ${
+                              alertStatus === 'overdue'
+                                ? 'text-rose-600'
+                                : alertStatus === 'due_today'
+                                ? 'text-amber-700'
+                                : alertStatus === 'upcoming'
+                                ? 'text-amber-600'
+                                : 'text-slate-600'
+                            }`}
+                          >
+                            {alertStatus === 'overdue'
+                              ? `Cobro Atrasado (${Math.abs(daysDiff || 0)} día(s))`
+                              : alertStatus === 'due_today'
+                              ? '¡Hoy Toca Cobrar Abono!'
+                              : alertStatus === 'upcoming'
+                              ? `Próximo abono en ${daysDiff} día(s)`
+                              : effectiveNextDate
+                              ? `Programado: ${effectiveNextDate}`
+                              : 'Sin fecha de próximo abono'}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+                        <div>
+                          <span>
+                            Próx. Abono:{' '}
+                            <strong className="text-slate-900">
+                              {effectiveNextDate || 'No asignado'}
+                            </strong>
+                          </span>
+                          {controlMeta?.paymentFrequency && (
+                            <>
+                              <span aria-hidden="true" className="mx-1.5 text-slate-300">
+                                ·
+                              </span>
+                              <span>Frecuencia: {freqLabel}</span>
+                            </>
+                          )}
+                          {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 && (
+                            <>
+                              <span aria-hidden="true" className="mx-1.5 text-slate-300">
+                                ·
+                              </span>
+                              <span className="font-bold text-slate-900 tabular-nums">
+                                Cuota: L. {controlMeta.installmentAmount.toFixed(2)}
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        <div className="text-slate-500">
+                          {noticeCount > 0 ? (
+                            <span>
+                              Avisos: <strong className="text-slate-800">{noticeCount}</strong> (Últ:{' '}
+                              {controlMeta?.lastNoticeDate})
+                            </span>
+                          ) : (
+                            <span>0 avisos registrados</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {!isPaid && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => openControlModalForSale(sale)}
+                            className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                          >
+                            <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                            <span>Programar Alerta / Bitácora ({noticeCount})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleSendCreditReminderWhatsApp(
+                                sale,
+                                alertStatus === 'overdue'
+                                  ? 'overdue'
+                                  : alertStatus === 'due_today'
+                                  ? 'due_today'
+                                  : 'preventive'
+                              )
+                            }
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
+                            <span>
+                              {alertStatus === 'overdue'
+                                ? 'Enviar Aviso Atraso'
+                                : alertStatus === 'due_today'
+                                ? 'Aviso Toca Hoy'
+                                : 'Recordatorio Abono'}
+                            </span>
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Items summary */}
                     <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-1">
                       {(sale.items || []).map((it, idx) => (
-                        <div key={idx} className="flex justify-between text-slate-700">
+                        <div key={idx} className="flex justify-between text-slate-700 tabular-nums">
                           <span>
                             <strong>{it.quantity}x</strong> {it.name}
                           </span>
@@ -1346,10 +2265,16 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           {abonos.map((cp) => (
                             <div
                               key={cp.id}
-                              className="flex items-center justify-between text-[11px] bg-emerald-50/60 border border-emerald-100 px-2.5 py-1 rounded-lg"
+                              className="flex items-center justify-between text-[11px] bg-emerald-50/60 border border-emerald-100 px-2.5 py-1 rounded-lg tabular-nums"
                             >
                               <span className="text-slate-600">
-                                {cp.date} ({cp.paymentMethod === 'cash' ? 'Efectivo' : cp.paymentMethod === 'transfer' ? 'Transf.' : 'Tarjeta'})
+                                {cp.date} (
+                                {cp.paymentMethod === 'cash'
+                                  ? 'Efectivo'
+                                  : cp.paymentMethod === 'transfer'
+                                  ? 'Transf.'
+                                  : 'Tarjeta'}
+                                )
                               </span>
                               <span className="font-bold text-emerald-700">
                                 + L. {cp.amount.toFixed(2)}
@@ -1368,9 +2293,15 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         type="button"
                         onClick={() => {
                           setSelectedSaleForAbone(sale);
-                          setAboneAmount(bal.toFixed(2));
+                          setAboneAmount(
+                            controlMeta?.installmentAmount &&
+                              controlMeta.installmentAmount <= bal
+                              ? controlMeta.installmentAmount.toFixed(2)
+                              : bal.toFixed(2)
+                          );
                           setAboneMethod('cash');
                           setAboneNotes('');
+                          setAboneNextDate(effectiveNextDate || '');
                         }}
                         className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 col-span-2 sm:col-span-1"
                       >
@@ -1381,7 +2312,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => handleSendCreditReminderWhatsApp(sale)}
+                      onClick={() => handleSendCreditReminderWhatsApp(sale, 'statement')}
                       className="min-h-[42px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
                     >
                       <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
@@ -1401,7 +2332,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     <button
                       type="button"
                       onClick={() => onViewSaleTicket(sale)}
-                      className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 col-span-2 sm:col-span-1"
+                      className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
                       title="Ver Factura Original"
                     >
                       <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -1414,11 +2345,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           </div>
         )}
 
-        {/* Modal to Record Partial or Full Abono */}
-        {selectedSaleForAbone && (
+        {/* ==================== MODAL 1: REGISTRAR ABONO + SIMULADOR COSTO VS GANANCIA ==================== */}
+        {selectedSaleForAbone && aboneModalAnalytics && (
           <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
-              <div className="px-5 py-4 bg-amber-600 text-white flex items-center justify-between">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden max-h-[92vh] flex flex-col">
+              <div className="px-5 py-4 bg-amber-600 text-white flex items-center justify-between shrink-0">
                 <div>
                   <h3 className="font-black text-sm sm:text-base">
                     Registrar Abono de Cliente
@@ -1436,37 +2367,71 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 </button>
               </div>
 
-              <form onSubmit={handleSubmitCreditAbone} className="p-5 space-y-4">
+              <form
+                onSubmit={handleSubmitCreditAbone}
+                className="p-5 space-y-4 overflow-y-auto"
+              >
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between text-xs">
-                  <span className="font-bold text-amber-950">Saldo Pendiente Actual:</span>
-                  <span className="text-lg font-black text-amber-800">
-                    L.{' '}
-                    {(
-                      selectedSaleForAbone.balanceDue ??
-                      selectedSaleForAbone.total - (selectedSaleForAbone.amountPaid || 0)
-                    ).toFixed(2)}
+                  <div>
+                    <span className="font-bold text-amber-950 block">Saldo Pendiente Actual:</span>
+                    <span className="text-[11px] text-amber-800 tabular-nums">
+                      Venta: L. {aboneModalAnalytics.totalSale.toFixed(2)} · Costo: L.{' '}
+                      {aboneModalAnalytics.totalCost.toFixed(2)}
+                    </span>
+                  </div>
+                  <span className="text-lg font-black text-amber-800 tabular-nums">
+                    L. {aboneModalAnalytics.balanceDue.toFixed(2)}
                   </span>
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between mb-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                     <label className="text-xs font-bold text-slate-700">
                       Monto del Abono (L.)
                     </label>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setAboneAmount(
-                          (
-                            selectedSaleForAbone.balanceDue ??
-                            selectedSaleForAbone.total - (selectedSaleForAbone.amountPaid || 0)
-                          ).toFixed(2)
-                        )
-                      }
-                      className="text-[11px] font-bold text-amber-700 hover:underline cursor-pointer"
-                    >
-                      Liquidar todo el saldo
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {aboneModalAnalytics.controlMeta?.installmentAmount &&
+                        aboneModalAnalytics.controlMeta.installmentAmount <=
+                          aboneModalAnalytics.balanceDue && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAboneAmount(
+                                aboneModalAnalytics.controlMeta!.installmentAmount!.toFixed(2)
+                              )
+                            }
+                            className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer"
+                          >
+                            Usar cuota (L.{' '}
+                            {aboneModalAnalytics.controlMeta.installmentAmount.toFixed(2)})
+                          </button>
+                        )}
+                      {!aboneModalAnalytics.isCostRecovered &&
+                        aboneModalAnalytics.costRemainingToRecover <=
+                          aboneModalAnalytics.balanceDue && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAboneAmount(
+                                aboneModalAnalytics.costRemainingToRecover.toFixed(2)
+                              )
+                            }
+                            className="text-[11px] font-bold text-slate-700 hover:underline cursor-pointer"
+                          >
+                            Cubrir costo faltante (L.{' '}
+                            {aboneModalAnalytics.costRemainingToRecover.toFixed(2)})
+                          </button>
+                        )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAboneAmount(aboneModalAnalytics.balanceDue.toFixed(2))
+                        }
+                        className="text-[11px] font-bold text-amber-700 hover:underline cursor-pointer"
+                      >
+                        Liquidar todo
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="number"
@@ -1475,8 +2440,54 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     required
                     value={aboneAmount}
                     onChange={(e) => setAboneAmount(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 tabular-nums"
                   />
+                </div>
+
+                {/* Live Cost vs Profit Impact Preview */}
+                <div
+                  className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                    simulatedIsCostRecovered
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                      : 'bg-slate-50 border-slate-200 text-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center justify-between font-bold">
+                    <span>Proyección tras este abono:</span>
+                    <span className="tabular-nums">
+                      Total Abonado: L. {simulatedNewPaid.toFixed(2)} / L.{' '}
+                      {aboneModalAnalytics.totalSale.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-slate-200/60 tabular-nums">
+                    <div>
+                      <span className="text-slate-500 block">Costo Recuperado:</span>
+                      <span className="font-black">
+                        L. {simulatedCostRecovered.toFixed(2)} de L.{' '}
+                        {aboneModalAnalytics.totalCost.toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Nuevo Saldo Restante:</span>
+                      <span className="font-black">L. {simulatedNewBalance.toFixed(2)}</span>
+                    </div>
+                  </div>
+                  {simulatedIsCostRecovered ? (
+                    <p className="text-[11px] font-bold text-emerald-800 pt-1">
+                      ✓ ¡Precio Costo (L. {aboneModalAnalytics.totalCost.toFixed(2)}) 100%
+                      cubierto!{' '}
+                      {simulatedNewBalance > 0.01
+                        ? `Todo el saldo restante (L. ${simulatedNewBalance.toFixed(2)}) queda como 100% GANANCIA (más L. ${simulatedRealizedProfit.toFixed(2)} ya en mano).`
+                        : `Cuenta liquidada con L. ${aboneModalAnalytics.expectedTotalProfit.toFixed(2)} de ganancia total.`}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-amber-900 pt-1">
+                      Faltarán <strong>L. {simulatedCostRemaining.toFixed(2)}</strong> para
+                      terminar de recuperar el Precio Costo; después los{' '}
+                      <strong>L. {aboneModalAnalytics.expectedTotalProfit.toFixed(2)}</strong>{' '}
+                      restantes serán Ganancia.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -1500,6 +2511,46 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     ))}
                   </div>
                 </div>
+
+                {/* Schedule Next Payment Alert inside Abono Modal */}
+                {simulatedNewBalance > 0.01 && (
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-800">
+                        Programar Próxima Fecha de Abono (Alerta)
+                      </label>
+                      <div className="flex items-center gap-1 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => setAboneNextDate(addDaysToIso(7))}
+                          className="px-2 py-0.5 rounded bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        >
+                          +7 días
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAboneNextDate(addDaysToIso(15))}
+                          className="px-2 py-0.5 rounded bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        >
+                          +15 días
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAboneNextDate(addDaysToIso(30))}
+                          className="px-2 py-0.5 rounded bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        >
+                          +30 días
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="date"
+                      value={aboneNextDate}
+                      onChange={(e) => setAboneNextDate(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-800"
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -1531,6 +2582,342 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== MODAL 2: CONFIGURAR COSTO, ALERTA Y BITÁCORA DE AVISOS ==================== */}
+        {selectedSaleForControl && controlModalAnalytics && (
+          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden max-h-[92vh] flex flex-col">
+              <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                <div>
+                  <h3 className="font-black text-sm sm:text-base">
+                    Control de Costo, Alerta de Cobro y Avisos
+                  </h3>
+                  <p className="text-xs text-slate-300">
+                    {selectedSaleForControl.customerName} • {selectedSaleForControl.saleNumber} •
+                    Venta Total: L. {controlModalAnalytics.totalSale.toFixed(2)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSaleForControl(null)}
+                  className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-5">
+                <form onSubmit={handleSaveCreditAccountControl} className="space-y-4">
+                  {/* Section A: Cost & Profit Configuration */}
+                  <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-900">
+                        1. Precio Costo vs. Ganancia de la Cuenta
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCtrlCustomCost(controlModalAnalytics.calculatedItemsCost.toFixed(2))
+                        }
+                        className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer"
+                      >
+                        Usar costo de inventario (L.{' '}
+                        {controlModalAnalytics.calculatedItemsCost.toFixed(2)})
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Precio Costo Total de la Venta (L.)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={ctrlCustomCost}
+                          onChange={(e) => setCtrlCustomCost(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-black text-slate-900 tabular-nums"
+                        />
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-white border border-emerald-200 flex flex-col justify-center">
+                        <span className="text-[10px] font-bold uppercase text-slate-400">
+                          Ganancia Total al Liquidar
+                        </span>
+                        <span className="text-base font-black text-emerald-700 tabular-nums">
+                          L.{' '}
+                          {Math.max(
+                            0,
+                            controlModalAnalytics.totalSale - (parseFloat(ctrlCustomCost) || 0)
+                          ).toFixed(2)}
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          Al abonar L. {(parseFloat(ctrlCustomCost) || 0).toFixed(2)}, el resto es
+                          100% ganancia
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Section B: Payment Alert & Schedule */}
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                    <span className="text-xs font-black text-slate-900 block">
+                      2. Programación de Alerta de Próximo Abono
+                    </span>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Fecha Próximo Abono
+                        </label>
+                        <input
+                          type="date"
+                          value={ctrlNextPaymentDate}
+                          onChange={(e) => setCtrlNextPaymentDate(e.target.value)}
+                          className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Frecuencia de Cobro
+                        </label>
+                        <select
+                          value={ctrlFrequency}
+                          onChange={(e) =>
+                            setCtrlFrequency(
+                              e.target.value as
+                                | 'weekly'
+                                | 'biweekly'
+                                | 'monthly'
+                                | 'daily'
+                                | 'custom'
+                            )
+                          }
+                          className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                        >
+                          <option value="daily">Diario</option>
+                          <option value="weekly">Semanal (cada 7 días)</option>
+                          <option value="biweekly">Quincenal (cada 15 días)</option>
+                          <option value="monthly">Mensual (cada 30 días)</option>
+                          <option value="custom">Personalizado</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Cuota Acordada (L.)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="Ej. 500.00"
+                          value={ctrlInstallmentAmount}
+                          onChange={(e) => setCtrlInstallmentAmount(e.target.value)}
+                          className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900 tabular-nums"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="text-slate-500 font-semibold">Programar rápido:</span>
+                      <button
+                        type="button"
+                        onClick={() => setCtrlNextPaymentDate(getLocalTodayIso())}
+                        className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                      >
+                        Hoy
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCtrlNextPaymentDate(addDaysToIso(7));
+                          setCtrlFrequency('weekly');
+                        }}
+                        className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                      >
+                        +7 días (Semanal)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCtrlNextPaymentDate(addDaysToIso(15));
+                          setCtrlFrequency('biweekly');
+                        }}
+                        className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                      >
+                        +15 días (Quincenal)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCtrlNextPaymentDate(addDaysToIso(30));
+                          setCtrlFrequency('monthly');
+                        }}
+                        className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                      >
+                        +30 días (Mensual)
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Acuerdos / Notas de Cobro
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej. Paga los días 15 y 30 de cada mes por transferencia..."
+                        value={ctrlNotes}
+                        onChange={(e) => setCtrlNotes(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={isSavingControl}
+                      className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black text-xs cursor-pointer shadow-sm"
+                    >
+                      {isSavingControl
+                        ? 'Guardando...'
+                        : 'Guardar Costo y Configuración de Alerta'}
+                    </button>
+                  </div>
+                </form>
+
+                {/* Section C: Send & Log Collection Notices */}
+                <div className="border-t border-slate-200 pt-4 space-y-3">
+                  <span className="text-xs font-black text-slate-900 block">
+                    3. Enviar Aviso de Cobro por WhatsApp (Se registra automáticamente)
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSendCreditReminderWhatsApp(selectedSaleForControl, 'preventive')
+                      }
+                      className="p-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 font-bold text-[11px] text-center cursor-pointer"
+                    >
+                      Recordatorio Preventivo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSendCreditReminderWhatsApp(selectedSaleForControl, 'due_today')
+                      }
+                      className="p-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-bold text-[11px] text-center cursor-pointer"
+                    >
+                      Aviso: Hoy Toca Abono
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSendCreditReminderWhatsApp(selectedSaleForControl, 'overdue')
+                      }
+                      className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-900 font-bold text-[11px] text-center cursor-pointer"
+                    >
+                      Aviso Cobro Vencido
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSendCreditReminderWhatsApp(selectedSaleForControl, 'statement')
+                      }
+                      className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-[11px] text-center cursor-pointer"
+                    >
+                      Estado de Cuenta
+                    </button>
+                  </div>
+
+                  {/* Manual Notice Logger (Call / In-person) */}
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                    <span className="text-[11px] font-bold text-slate-700 block">
+                      Registrar aviso realizado por Llamada o En Persona:
+                    </span>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <select
+                        value={manualNoticeChannel}
+                        onChange={(e) =>
+                          setManualNoticeChannel(e.target.value as 'call' | 'in_person')
+                        }
+                        className="px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700"
+                      >
+                        <option value="call">Llamada Telefónica</option>
+                        <option value="in_person">Visita / En Persona</option>
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="Ej. Se le llamó y confirmó que pasa mañana a las 3pm..."
+                        value={manualNoticeNote}
+                        onChange={(e) => setManualNoticeNote(e.target.value)}
+                        className="flex-1 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const note =
+                            manualNoticeNote.trim() ||
+                            (manualNoticeChannel === 'call'
+                              ? 'Aviso de cobro vía llamada telefónica'
+                              : 'Aviso de cobro en persona');
+                          await recordCollectionNoticeLog(
+                            selectedSaleForControl,
+                            'preventive',
+                            manualNoticeChannel,
+                            note
+                          );
+                          setManualNoticeNote('');
+                          showToast('Aviso de cobro registrado en la bitácora.', 'success');
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer whitespace-nowrap"
+                      >
+                        Registrar Aviso
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Notices History */}
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] font-bold uppercase text-slate-400 block">
+                      Bitácora de Avisos Enviados ({controlModalAnalytics.notices.length})
+                    </span>
+                    {controlModalAnalytics.notices.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">
+                        Aún no se han registrado avisos de cobro para esta cuenta.
+                      </p>
+                    ) : (
+                      <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                        {controlModalAnalytics.notices.map((ntc) => (
+                          <div
+                            key={ntc.id}
+                            className="p-2 rounded-lg bg-slate-50 border border-slate-200 text-[11px] flex items-start justify-between gap-2"
+                          >
+                            <div>
+                              <span className="font-bold text-slate-800">
+                                {ntc.channel === 'whatsapp'
+                                  ? 'WhatsApp'
+                                  : ntc.channel === 'call'
+                                  ? 'Llamada'
+                                  : 'En Persona'}{' '}
+                                — {ntc.note || ntc.notes}
+                              </span>
+                              <span className="text-slate-400 block">
+                                Por: {ntc.sentBy} · {ntc.date || ntc.dateFormatted}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}

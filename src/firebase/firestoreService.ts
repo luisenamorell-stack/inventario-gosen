@@ -5019,6 +5019,7 @@ export function getCachedPOSFinanceData(companyId = getActiveCompanyId()): POSFi
       companyId: slug,
       shifts: [],
       expenses: [],
+      creditAccountControls: {},
       updatedAt: Date.now(),
     }
   );
@@ -5101,10 +5102,16 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
       }))
     : [];
 
+  const creditAccountControls =
+    raw.creditAccountControls && typeof raw.creditAccountControls === 'object'
+      ? raw.creditAccountControls
+      : {};
+
   return {
     companyId: slug,
     shifts: shifts.sort((a, b) => b.openedAt - a.openedAt),
     expenses: expenses.sort((a, b) => b.timestamp - a.timestamp),
+    creditAccountControls,
     updatedAt: Number(raw.updatedAt) || Date.now(),
   };
 }
@@ -5164,6 +5171,10 @@ export async function savePOSFinanceDataToFirestore(
     companyId: slug,
     shifts: Array.isArray(data.shifts) ? data.shifts.slice(0, 120) : [],
     expenses: Array.isArray(data.expenses) ? data.expenses.slice(0, 500) : [],
+    creditAccountControls:
+      data.creditAccountControls && typeof data.creditAccountControls === 'object'
+        ? data.creditAccountControls
+        : {},
     updatedAt: Date.now(),
   };
 
@@ -5177,6 +5188,7 @@ export async function savePOSFinanceDataToFirestore(
         companyId: slug,
         shifts: normalized.shifts,
         expenses: normalized.expenses,
+        creditAccountControls: normalized.creditAccountControls,
         updatedAt: normalized.updatedAt,
       }),
       { merge: true }
