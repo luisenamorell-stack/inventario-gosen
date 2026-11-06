@@ -152,12 +152,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
       <div className="relative z-10 flex flex-col items-center justify-center w-full max-w-md my-auto">
         {isPreLogin || isSaaSAdmin ? (
           /* 1. PRE-LOGIN OR SAAS SUPER-ADMIN: ONLY OFFICIAL MIAPPHN APP LOGO */
-          <div className="relative flex flex-col items-center justify-center gap-4 mb-6">
-            <MiAppHNCashRegisterIcon
-              className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl shadow-2xl shadow-emerald-500/30"
-              iconClassName="w-16 h-16 sm:w-20 sm:h-20"
-            />
-            <MiAppHNBannerLogo className="h-12 sm:h-14 w-auto drop-shadow-[0_10px_24px_rgba(16,185,129,0.3)]" />
+          <div className="relative flex flex-col items-center justify-center mb-6">
+            <MiAppHNBannerLogo className="h-16 sm:h-20 w-auto drop-shadow-[0_10px_24px_rgba(16,185,129,0.3)]" />
           </div>
         ) : isGosenStore ? (
           /* 2. EXCLUSIVE TIENDA GOSÉN WALKING METALLIC SHOE ANIMATION (ONLY AFTER LOGIN TO GOSÉN) */

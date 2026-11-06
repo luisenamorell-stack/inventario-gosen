@@ -523,12 +523,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
         {/* Official App Logo & Header ONLY — Never exposes any client store name or logo before login */}
         <div className="flex flex-col items-center text-center mb-6">
-          <div className="flex flex-col items-center gap-3 mb-3">
-            <MiAppHNCashRegisterIcon
-              className="w-16 h-16 rounded-2xl shadow-lg"
-              iconClassName="w-11 h-11 text-emerald-400"
+          <div className="flex items-center justify-center mb-3">
+            <MiAppHNBannerLogo
+              className="h-14 sm:h-16 w-auto drop-shadow-[0_8px_24px_rgba(16,185,129,0.22)]"
+              alt="MIAPPHN"
             />
-            <MiAppHNBannerLogo className="h-10 sm:h-11 w-auto" alt="MIAPPHN" />
           </div>
 
           <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight mt-1">
