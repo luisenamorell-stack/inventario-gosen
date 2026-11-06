@@ -14,6 +14,7 @@ interface SaaSLandingPageProps {
   activeSessionLabel?: string;
   onResumeSession?: () => void;
   onEnterClientStore: (companySlug: string) => void;
+  onOpenClientLogin?: () => void;
   onOpenSaaSConsole: () => void;
   showToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void;
 }
@@ -118,12 +119,21 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
   activeSessionLabel,
   onResumeSession,
   onEnterClientStore,
+  onOpenClientLogin,
   onOpenSaaSConsole,
   showToast,
 }) => {
   const [selectedPlanId, setSelectedPlanId] = useState<SaaSDemoRequest['planInterest']>('prueba15');
   const [showClientAccessModal, setShowClientAccessModal] = useState(false);
   const [clientCodeInput, setClientCodeInput] = useState('');
+
+  const handleOpenLogin = () => {
+    if (onOpenClientLogin) {
+      onOpenClientLogin();
+    } else {
+      onEnterClientStore('gosen');
+    }
+  };
 
   // Demo form fields
   const [nombre, setNombre] = useState('');
@@ -380,10 +390,11 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
             <a href="#demo">Solicitar demo</a>
             <button
               type="button"
-              onClick={() => setShowClientAccessModal(true)}
-              className="text-slate-400 hover:text-white transition-colors cursor-pointer text-sm font-medium"
+              onClick={handleOpenLogin}
+              className="text-slate-300 hover:text-white transition-colors cursor-pointer text-sm font-bold flex items-center gap-1.5"
             >
-              Acceso Clientes
+              <Lock className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Iniciar Sesión</span>
             </button>
           </nav>
 
@@ -401,10 +412,11 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
 
             <button
               type="button"
-              onClick={() => setShowClientAccessModal(true)}
-              className="btn md:hidden text-xs py-2 px-3"
+              onClick={handleOpenLogin}
+              className="btn md:hidden text-xs py-2 px-3 flex items-center gap-1.5"
             >
-              Acceso Clientes
+              <Lock className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Iniciar Sesión</span>
             </button>
 
             <a className="btn pri whitespace-nowrap" href="#demo">
@@ -689,10 +701,10 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           <div className="flex items-center gap-4 text-xs font-semibold text-slate-400">
             <button
               type="button"
-              onClick={() => setShowClientAccessModal(true)}
+              onClick={handleOpenLogin}
               className="hover:text-white transition-colors cursor-pointer"
             >
-              Acceso Clientes
+              Iniciar Sesión
             </button>
             <span>•</span>
             <button

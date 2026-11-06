@@ -2291,6 +2291,18 @@ export const App: React.FC = () => {
               window.history.replaceState({}, '', url.toString());
             } catch {}
           }}
+          onOpenClientLogin={() => {
+            setIsSaaSPortalUrl(false);
+            setIsSalesLandingMode(false);
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('ventas');
+              url.searchParams.delete('landing');
+              url.searchParams.delete('demo');
+              url.searchParams.delete('saas');
+              window.history.replaceState({}, '', url.toString());
+            } catch {}
+          }}
           onOpenSaaSConsole={() => {
             setIsSaaSPortalUrl(true);
             setIsSalesLandingMode(false);
@@ -2335,6 +2347,10 @@ export const App: React.FC = () => {
           isSaaSPortalMode={isSaaSPortalUrl}
           onSelectCompany={handleSelectCompanyContext}
           onLoginSuccess={handleLoginSuccess}
+          onBackToLanding={() => {
+            setIsSaaSPortalUrl(false);
+            setIsSalesLandingMode(true);
+          }}
         />
       </div>
     );
