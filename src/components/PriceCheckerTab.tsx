@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Product } from '../types';
+import { Product, StoreWarehousesData, WarehouseLocation } from '../types';
+import {
+  getProductStockInWarehouse,
+  getDefaultWarehousesForStore,
+} from '../firebase/firestoreService';
 import { playSound } from '../utils/audio';
 import { AdaptiveImage } from './AdaptiveImage';
 import {
-  Tag,
   Barcode,
   Camera,
   CameraOff,
@@ -11,12 +14,18 @@ import {
   AlertCircle,
   Layers,
   Search,
-  X
+  X,
+  Package,
+  Store,
+  CheckCircle2,
+  MapPin,
 } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeScannerState } from 'html5-qrcode';
 
 interface PriceCheckerTabProps {
   inventory: Product[];
+  warehousesData?: StoreWarehousesData;
+  hasWarehousesModule?: boolean;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
@@ -29,6 +38,8 @@ const normalizeText = (text: string) =>
 
 export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
   inventory,
+  warehousesData,
+  hasWarehousesModule = true,
   showToast,
 }) => {
   const [inputCode, setInputCode] = useState('');
@@ -46,6 +57,60 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
   useEffect(() => {
     inventoryRef.current = inventory;
   }, [inventory]);
+
+  // Keep selectedProduct synced if inventory updates in real time
+  useEffect(() => {
+    if (!selectedProduct) return;
+    const updated = inventory.find(
+      (i) =>
+        (selectedProduct.id && i.id === selectedProduct.id) ||
+        normalizeText(i.code) === normalizeText(selectedProduct.code)
+    );
+    if (updated && updated !== selectedProduct) {
+      setSelectedProduct(updated);
+    }
+  }, [inventory, selectedProduct]);
+
+  // Active warehouses for this store (only shown when the company uses the Bodegas module)
+  const activeWarehouses = useMemo<WarehouseLocation[]>(() => {
+    const raw =
+      Array.isArray(warehousesData?.warehouses) && warehousesData!.warehouses.length > 0
+        ? warehousesData!.warehouses
+        : getDefaultWarehousesForStore();
+    const active = raw.filter((w) => w.isActive !== false);
+    return active.length > 0 ? active : getDefaultWarehousesForStore();
+  }, [warehousesData]);
+
+  // Check if this store uses the multi-warehouse feature
+  const usesWarehouses = useMemo(() => {
+    if (hasWarehousesModule === false) return false;
+    return activeWarehouses.length > 0;
+  }, [hasWarehousesModule, activeWarehouses]);
+
+  // Compute per-warehouse stock breakdown for the currently selected product
+  const selectedProductWarehouseBreakdown = useMemo(() => {
+    if (!selectedProduct || !usesWarehouses) return [];
+    const list = activeWarehouses.map((wh) => {
+      const stock = getProductStockInWarehouse(selectedProduct, wh.id, activeWarehouses);
+      return {
+        warehouse: wh,
+        stock,
+      };
+    });
+    // Sort so main sales floor or warehouses with available stock appear clearly
+    return list.sort((a, b) => {
+      if (a.stock > 0 && b.stock <= 0) return -1;
+      if (b.stock > 0 && a.stock <= 0) return 1;
+      if (a.warehouse.isMainSalesFloor && !b.warehouse.isMainSalesFloor) return -1;
+      if (!a.warehouse.isMainSalesFloor && b.warehouse.isMainSalesFloor) return 1;
+      return b.stock - a.stock;
+    });
+  }, [selectedProduct, usesWarehouses, activeWarehouses]);
+
+  const availableWarehousesCount = useMemo(
+    () => selectedProductWarehouseBreakdown.filter((entry) => entry.stock > 0).length,
+    [selectedProductWarehouseBreakdown]
+  );
 
   const scrollToResultCard = () => {
     setTimeout(() => {
@@ -247,24 +312,28 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
       )
     : [];
 
+  const selectedProductStock = selectedProduct
+    ? Math.max(0, Math.round(Number(selectedProduct.stock) || 0))
+    : 0;
+
   const totalGlobalStock = relatedItems.reduce(
     (sum, curr) => sum + (Number(curr.stock) || 0),
     0
   );
 
   const stockBadgeColor =
-    totalGlobalStock <= 0
-      ? 'text-red-600 bg-red-100'
-      : totalGlobalStock <= 3
-      ? 'text-orange-600 bg-orange-100'
-      : 'text-emerald-700 bg-emerald-100';
+    selectedProductStock <= 0
+      ? 'text-red-600 bg-red-100 border border-red-200'
+      : selectedProductStock <= 3
+      ? 'text-orange-700 bg-orange-100 border border-orange-200'
+      : 'text-emerald-700 bg-emerald-100 border border-emerald-200';
 
   return (
     <div className="flex-1 min-h-0 h-full w-full p-3 sm:p-6 lg:p-8 bg-slate-100 overflow-y-auto scroll-container pb-36 md:pb-24">
       <header className="mb-4 text-center max-w-2xl mx-auto">
         <h1 className="text-2xl sm:text-3xl font-bold text-slate-800">Verificador de Precios</h1>
         <p className="text-slate-500 text-xs sm:text-sm mt-1">
-          Escanea el código de barras o busca por <strong>SKU / código</strong> o <strong>nombre del artículo</strong> para ver su precio al instante.
+          Escanea el código de barras o busca por <strong>SKU / código</strong> o <strong>nombre del artículo</strong> para ver su precio{usesWarehouses ? ' y disponibilidad por bodega' : ''} al instante.
         </p>
       </header>
 
@@ -350,10 +419,19 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
 
             {/* Live Autocomplete Suggestions Dropdown */}
             {showSuggestions && inputCode.trim().length > 0 && (
-              <div className="absolute left-0 right-0 top-full mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-72 overflow-y-auto divide-y divide-slate-100">
+              <div className="absolute left-0 right-0 top-full mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-80 overflow-y-auto divide-y divide-slate-100">
                 {matchingSuggestions.length > 0 ? (
                   matchingSuggestions.map((item) => {
                     const stockNum = Number(item.stock) || 0;
+                    const availableWhSummary = usesWarehouses
+                      ? activeWarehouses
+                          .map((wh) => ({
+                            name: wh.name,
+                            qty: getProductStockInWarehouse(item, wh.id, activeWarehouses),
+                          }))
+                          .filter((w) => w.qty > 0)
+                      : [];
+
                     return (
                       <button
                         key={item.id}
@@ -379,6 +457,13 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                               {item.size ? ` · Talla ${item.size}` : ''}
                               {item.category ? ` · ${item.category}` : ''}
                             </p>
+                            {usesWarehouses && availableWhSummary.length > 0 && (
+                              <p className="text-[11px] text-emerald-700 font-semibold truncate mt-0.5">
+                                {availableWhSummary
+                                  .map((w) => `${w.name}: ${w.qty}`)
+                                  .join(' · ')}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
@@ -423,7 +508,7 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
         {/* Search Result Display */}
         <div ref={resultCardRef} className="scroll-mt-3">
           {selectedProduct ? (
-            <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-xl border-2 border-emerald-500/30 text-center animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-white p-5 sm:p-8 rounded-2xl shadow-xl border-2 border-emerald-500/30 text-center animate-in fade-in zoom-in-95 duration-200">
               {/* Quick Re-Scan Bar */}
               <div className="flex items-center justify-between gap-2 mb-4 pb-3 border-b border-slate-100">
                 <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-lg">
@@ -461,6 +546,7 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
               </h2>
               <p className="text-slate-400 font-mono text-xs mb-5">
                 Cód: {selectedProduct.code}
+                {selectedProduct.size ? ` · Talla: ${selectedProduct.size}` : ''}
               </p>
 
               {/* Price Box */}
@@ -511,7 +597,7 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                     )}
 
                     <p
-                      className={`text-5xl sm:text-6xl font-black tracking-tight ${
+                      className={`text-5xl sm:text-6xl font-black tracking-tight tabular-nums ${
                         disc > 0 ? 'text-emerald-800' : 'text-blue-900'
                       }`}
                     >
@@ -521,19 +607,140 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                 );
               })()}
 
-              {/* Global Stock Badge */}
-              <div
-                className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl ${stockBadgeColor} font-bold text-base mb-2`}
-              >
-                <Layers className="w-5 h-5" />
-                <span>Stock GLOBAL Total: {totalGlobalStock}</span>
+              {/* Stock Summary Badge */}
+              <div className="flex flex-wrap items-center justify-center gap-2 mb-4">
+                <div
+                  className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl ${stockBadgeColor} font-bold text-sm sm:text-base`}
+                >
+                  <Layers className="w-5 h-5 shrink-0" />
+                  <span>
+                    Stock Disponible: <strong className="tabular-nums">{selectedProductStock}</strong>{' '}
+                    {selectedProductStock === 1 ? 'unidad' : 'unidades'}
+                  </span>
+                </div>
+                {relatedItems.length > 1 && totalGlobalStock !== selectedProductStock && (
+                  <div className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs sm:text-sm">
+                    <span>Total todas las tallas: {totalGlobalStock}</span>
+                  </div>
+                )}
               </div>
+
+              {/* Warehouse Availability Breakdown (Shown when store uses the Bodegas module) */}
+              {usesWarehouses && selectedProductWarehouseBreakdown.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-slate-200/80 text-left">
+                  <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                        <Package className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="text-xs sm:text-sm font-extrabold text-slate-800 uppercase tracking-wide">
+                          Disponibilidad por Bodega
+                        </h3>
+                        <p className="text-[11px] text-slate-500">
+                          {availableWarehousesCount > 0
+                            ? `Disponible en ${availableWarehousesCount} de ${selectedProductWarehouseBreakdown.length} ${
+                                selectedProductWarehouseBreakdown.length === 1 ? 'bodega' : 'bodegas'
+                              }`
+                            : 'Sin existencias disponibles en ninguna bodega'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {selectedProductWarehouseBreakdown.map(({ warehouse, stock }) => {
+                      const hasStock = stock > 0;
+                      return (
+                        <div
+                          key={warehouse.id}
+                          className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all ${
+                            hasStock
+                              ? 'bg-emerald-50/70 border-emerald-200/90 shadow-2xs'
+                              : 'bg-slate-50 border-slate-200/80 opacity-75'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5 min-w-0">
+                            <div
+                              className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                                hasStock
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'bg-slate-200 text-slate-500'
+                              }`}
+                            >
+                              {warehouse.isMainSalesFloor ? (
+                                <Store className="w-4 h-4" />
+                              ) : (
+                                <Package className="w-4 h-4" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p
+                                  className={`text-xs sm:text-sm font-extrabold truncate ${
+                                    hasStock ? 'text-slate-900' : 'text-slate-600'
+                                  }`}
+                                >
+                                  {warehouse.name}
+                                </p>
+                              </div>
+                              <p className="text-[11px] text-slate-500 truncate flex items-center gap-1 mt-0.5">
+                                <span className="font-mono font-semibold">
+                                  {warehouse.code || (warehouse.isMainSalesFloor ? 'PRINCIPAL' : 'BODEGA')}
+                                </span>
+                                <span>·</span>
+                                <span>
+                                  {warehouse.isMainSalesFloor ? 'Sala de Ventas' : 'Almacén / Bodega'}
+                                </span>
+                              </p>
+                              {warehouse.address && (
+                                <p className="text-[10px] text-slate-400 truncate flex items-center gap-1 mt-0.5">
+                                  <MapPin className="w-3 h-3 shrink-0" />
+                                  <span className="truncate">{warehouse.address}</span>
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <div
+                              className={`inline-flex flex-col items-end px-2.5 py-1 rounded-lg border ${
+                                hasStock
+                                  ? 'bg-white border-emerald-200 text-emerald-800'
+                                  : 'bg-slate-100 border-slate-200 text-slate-500'
+                              }`}
+                            >
+                              <span className="text-base sm:text-lg font-black tabular-nums leading-none">
+                                {stock}
+                              </span>
+                              <span
+                                className={`text-[9px] font-extrabold uppercase tracking-wider mt-0.5 flex items-center gap-0.5 ${
+                                  hasStock ? 'text-emerald-600' : 'text-rose-500'
+                                }`}
+                              >
+                                {hasStock ? (
+                                  <>
+                                    <CheckCircle2 className="w-2.5 h-2.5" />
+                                    <span>Disp.</span>
+                                  </>
+                                ) : (
+                                  <span>Agotado</span>
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Size Variants Switcher */}
               {relatedItems.length > 1 && (
                 <div className="mt-5 pt-5 border-t border-slate-100 w-full flex flex-col items-center">
                   <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-3">
-                    Toca otra talla para ver su precio y stock
+                    Toca otra talla para ver su precio y stock por bodega
                   </p>
                   <div className="flex flex-wrap justify-center gap-2">
                     {relatedItems.map((variant) => {

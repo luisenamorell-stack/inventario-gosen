@@ -1048,6 +1048,11 @@ export const App: React.FC = () => {
             loadedModulesRef.current[`suppliers${keySuffix}`] = true;
             fetchSuppliersOnce(false, activeCompanyId).then(setSuppliers).catch(console.warn);
           }
+        } else if (activeTab === 'price-checker') {
+          if (!loadedModulesRef.current[`warehouses${keySuffix}`]) {
+            loadedModulesRef.current[`warehouses${keySuffix}`] = true;
+            fetchStoreWarehousesOnce(activeCompanyId).then(setWarehousesData).catch(console.warn);
+          }
         } else if (activeTab === 'purchases') {
           if (!loadedModulesRef.current[`purchases${keySuffix}`]) {
             loadedModulesRef.current[`purchases${keySuffix}`] = true;
@@ -3079,6 +3084,8 @@ export const App: React.FC = () => {
             {activeTabToRender === 'price-checker' && allowedTabsList.includes('price-checker') && (
               <PriceCheckerTab
                 inventory={inventory}
+                warehousesData={warehousesData}
+                hasWarehousesModule={companyAllowedModules.includes('warehouses')}
                 showToast={showToast}
               />
             )}
