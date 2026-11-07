@@ -1038,6 +1038,21 @@ app.post('/api/cloud-sync/collections', (req, res) => {
 async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
 
+  // Serve public/assets with aggressive caching in both dev and prod
+  const publicAssetsPath = path.resolve(__dirname, 'public', 'assets');
+  if (fs.existsSync(publicAssetsPath)) {
+    app.use(
+      '/assets',
+      express.static(publicAssetsPath, {
+        maxAge: '365d',
+        immutable: true,
+        setHeaders: (res) => {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        },
+      })
+    );
+  }
+
   if (!isProd) {
     // In dev, mount Vite middleware
     const { createServer } = await import('vite');
@@ -1047,11 +1062,25 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // In prod, serve static dist
+    // In prod, serve static dist with optimal cache policy
     const distPath = path.resolve(__dirname, 'dist');
     if (fs.existsSync(distPath)) {
-      app.use(express.static(distPath));
+      app.use(
+        express.static(distPath, {
+          maxAge: '365d',
+          setHeaders: (res, filePath) => {
+            if (filePath.endsWith('.html') || filePath.endsWith('sw.js') || filePath.endsWith('manifest.json')) {
+              res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            } else if (
+              /\.(js|css|webp|png|jpg|jpeg|svg|ico|woff2?|ttf)$/i.test(filePath)
+            ) {
+              res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+            }
+          },
+        })
+      );
       app.get('*', (_req, res) => {
+        res.setHeader('Cache-Control', 'no-cache');
         res.sendFile(path.resolve(distPath, 'index.html'));
       });
     }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 import {
   Product,
   Supplier,
@@ -20,23 +20,93 @@ import {
 } from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
-import { DashboardView } from './components/DashboardView';
-import { InventoryView } from './components/InventoryView';
-import { WarehousesView } from './components/WarehousesView';
-import { AuditView } from './components/AuditView';
-import { PriceCheckerTab } from './components/PriceCheckerTab';
-import { SuppliersView } from './components/SuppliersView';
-import { SalesView, SalesSubTab, WhatsAppIcon } from './components/SalesView';
-import { PurchasesView } from './components/PurchasesView';
-import { StoreSettingsView } from './components/StoreSettingsView';
-import { DigitalCatalogView } from './components/DigitalCatalogView';
-import { PublicCatalogView } from './components/PublicCatalogView';
-import { UserManagementView } from './components/UserManagementView';
-import { ActivityLogView } from './components/ActivityLogView';
-import { CompaniesSaaSView, getDaysUntilBilling, formatShortDateEs } from './components/CompaniesSaaSView';
 import { SaaSLandingPage } from './components/SaaSLandingPage';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
+import type { SalesSubTab } from './components/SalesView';
+
+// Code-split heavy authenticated POS & SaaS modules so the Landing Page and Login load with minimal JS
+const DashboardView = lazy(() =>
+  import('./components/DashboardView').then((m) => ({ default: m.DashboardView }))
+);
+const InventoryView = lazy(() =>
+  import('./components/InventoryView').then((m) => ({ default: m.InventoryView }))
+);
+const WarehousesView = lazy(() =>
+  import('./components/WarehousesView').then((m) => ({ default: m.WarehousesView }))
+);
+const AuditView = lazy(() =>
+  import('./components/AuditView').then((m) => ({ default: m.AuditView }))
+);
+const PriceCheckerTab = lazy(() =>
+  import('./components/PriceCheckerTab').then((m) => ({ default: m.PriceCheckerTab }))
+);
+const SuppliersView = lazy(() =>
+  import('./components/SuppliersView').then((m) => ({ default: m.SuppliersView }))
+);
+const SalesView = lazy(() =>
+  import('./components/SalesView').then((m) => ({ default: m.SalesView }))
+);
+const PurchasesView = lazy(() =>
+  import('./components/PurchasesView').then((m) => ({ default: m.PurchasesView }))
+);
+const StoreSettingsView = lazy(() =>
+  import('./components/StoreSettingsView').then((m) => ({ default: m.StoreSettingsView }))
+);
+const DigitalCatalogView = lazy(() =>
+  import('./components/DigitalCatalogView').then((m) => ({ default: m.DigitalCatalogView }))
+);
+const PublicCatalogView = lazy(() =>
+  import('./components/PublicCatalogView').then((m) => ({ default: m.PublicCatalogView }))
+);
+const UserManagementView = lazy(() =>
+  import('./components/UserManagementView').then((m) => ({ default: m.UserManagementView }))
+);
+const ActivityLogView = lazy(() =>
+  import('./components/ActivityLogView').then((m) => ({ default: m.ActivityLogView }))
+);
+const CompaniesSaaSView = lazy(() =>
+  import('./components/CompaniesSaaSView').then((m) => ({ default: m.CompaniesSaaSView }))
+);
+
+const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg
+    viewBox="0 0 24 24"
+    width="24"
+    height="24"
+    stroke="currentColor"
+    strokeWidth="0"
+    fill="currentColor"
+    className={className}
+    aria-hidden="true"
+  >
+    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+  </svg>
+);
+
+function getDaysUntilBilling(nextBillingDate?: string): number | null {
+  if (!nextBillingDate || !nextBillingDate.trim()) return null;
+  const parts = nextBillingDate.trim().split('-');
+  if (parts.length !== 3) return null;
+  const year = Number(parts[0]);
+  const month = Number(parts[1]) - 1;
+  const day = Number(parts[2]);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+  const target = new Date(year, month, day, 23, 59, 59);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+  const diffMs = target.getTime() - todayStart.getTime();
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+}
+
+function formatShortDateEs(dateStr?: string): string {
+  if (!dateStr) return 'Sin fecha';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  const m = Number(parts[1]) - 1;
+  return `${parts[2]}/${months[m] || parts[1]}/${parts[0]}`;
+}
 import {
   getActiveCompanyId,
   setActiveCompanyId,
@@ -752,8 +822,25 @@ export const App: React.FC = () => {
   }, [isAuthenticated, activeTab]);
 
   // 1. Smart Initial Load: Store Settings + 1-Read Inventory Sync Check + Companies Directory
+  // Deferred when on the public commercial landing page (isSalesLandingMode) to keep TBT near 0ms
   useEffect(() => {
     let isMounted = true;
+
+    if (isSalesLandingMode && !isPublicCatalogMode) {
+      fetchSaaSGlobalConfigOnce()
+        .then((cfg) => {
+          if (isMounted) {
+            setSaasGlobalConfig(cfg);
+            setIsConnecting(false);
+          }
+        })
+        .catch(() => {
+          if (isMounted) setIsConnecting(false);
+        });
+      return () => {
+        isMounted = false;
+      };
+    }
 
     const initCoreData = async () => {
       setIsSyncing(true);
@@ -806,10 +893,15 @@ export const App: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [isPublicCatalogMode, activeCompanyId]);
+  }, [isPublicCatalogMode, isSalesLandingMode, activeCompanyId]);
 
   // 1b. Real-Time Subscription to Companies Directory & SaaS Global Config
+  // Only subscribe to heavy store-specific POS collections when not on the public Sales Landing Page
   useEffect(() => {
+    if (isSalesLandingMode && !isPublicCatalogMode) {
+      return;
+    }
+
     const unsubscribeComps = subscribeToCompaniesRealtime((liveCompanies) => {
       setCompanies(liveCompanies);
       const myTenant = liveCompanies.find(
@@ -845,18 +937,20 @@ export const App: React.FC = () => {
     let unsubscribeWarehouses: (() => void) | undefined;
     let unsubscribeInventory: (() => void) | undefined;
 
-    // Real-time inventory subscription for all sessions (updates catalog, POS, and inventory views immediately)
-    unsubscribeInventory = subscribeToInventory(
-      (liveInventory) => {
-        setInventory(liveInventory);
-      },
-      (err) => {
-        console.warn('Inventory realtime listener warning:', err);
-      },
-      activeCompanyId
-    );
+    // Subscribe to real-time inventory & POS collections only when authenticated or in public catalog mode
+    if (isAuthenticated || isPublicCatalogMode) {
+      unsubscribeInventory = subscribeToInventory(
+        (liveInventory) => {
+          setInventory(liveInventory);
+        },
+        (err) => {
+          console.warn('Inventory realtime listener warning:', err);
+        },
+        activeCompanyId
+      );
+    }
 
-    if (!isPublicCatalogMode) {
+    if (isAuthenticated && !isPublicCatalogMode) {
       unsubscribeSales = subscribeToSales(
         (liveSales) => {
           setSales(liveSales);
@@ -890,18 +984,18 @@ export const App: React.FC = () => {
       if (unsubscribePosFinance) unsubscribePosFinance();
       if (unsubscribeWarehouses) unsubscribeWarehouses();
     };
-  }, [activeCompanyId, isPublicCatalogMode]);
+  }, [activeCompanyId, isPublicCatalogMode, isSalesLandingMode, isAuthenticated]);
 
-  // 2. Load Users on Login Screen (only if not in Public Catalog Mode)
+  // 2. Load Users on Login Screen (only if not in Public Catalog Mode or Sales Landing Mode)
   useEffect(() => {
-    if (isPublicCatalogMode) return;
+    if (isPublicCatalogMode || isSalesLandingMode) return;
     if (!isAuthenticated && !loadedModulesRef.current[`users_${activeCompanyId}`]) {
       loadedModulesRef.current[`users_${activeCompanyId}`] = true;
       fetchUsersOnce(false, activeCompanyId)
         .then((list) => setUsers(list))
         .catch((err) => console.warn('Users load warning:', err));
     }
-  }, [isPublicCatalogMode, isAuthenticated, activeCompanyId]);
+  }, [isPublicCatalogMode, isSalesLandingMode, isAuthenticated, activeCompanyId]);
 
   // 3. Lazy-Load Secondary Collections Based on Active Tab & Active Company
   useEffect(() => {
@@ -1004,6 +1098,8 @@ export const App: React.FC = () => {
   // 4. Real-Time Multi-Device Sync Polling (every 6s + on tab focus, 0 Firestore reads!)
   const lastHubUpdatedAtRef = useRef<number>(0);
   useEffect(() => {
+    if (isSalesLandingMode && !isPublicCatalogMode) return;
+
     let isMounted = true;
     lastHubUpdatedAtRef.current = 0;
 
@@ -1052,7 +1148,7 @@ export const App: React.FC = () => {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [activeCompanyId]);
+  }, [activeCompanyId, isSalesLandingMode, isPublicCatalogMode]);
 
   // Manual Cloud Sync Button Handler
   const handleManualSync = useCallback(async () => {
@@ -2241,13 +2337,21 @@ export const App: React.FC = () => {
             isExiting={isSplashExiting}
           />
         )}
-        <PublicCatalogView
-          inventory={inventory}
-          storeSettings={storeSettings}
-          isLoading={isInventoryLoading}
-          isAdminPreview={isAdminPreviewMode}
-          onBackToAdmin={() => setIsAdminPreviewMode(false)}
-        />
+        <Suspense
+          fallback={
+            <div className="w-full h-full flex items-center justify-center bg-slate-50 text-slate-500 text-sm font-bold">
+              Cargando catálogo...
+            </div>
+          }
+        >
+          <PublicCatalogView
+            inventory={inventory}
+            storeSettings={storeSettings}
+            isLoading={isInventoryLoading}
+            isAdminPreview={isAdminPreviewMode}
+            onBackToAdmin={() => setIsAdminPreviewMode(false)}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -2533,24 +2637,32 @@ export const App: React.FC = () => {
           />
         )}
         <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
-        <CompaniesSaaSView
-          companies={companies}
-          activeCompanyId={activeCompanyId}
-          saasGlobalConfig={saasGlobalConfig}
-          onSaveCompany={handleSaveCompany}
-          onDeleteCompany={handleDeleteCompany}
-          onSwitchCompany={handleSwitchCompanyWorkspace}
-          onSaveSaaSGlobalConfig={handleSaveSaaSGlobalConfig}
-          onLogout={handleLogout}
-          onRefreshCompanies={async () => {
-            const fresh = await fetchCompaniesOnce(true);
-            setCompanies(fresh);
-            showToast('Lista de clientes sincronizada desde la nube', 'success');
-          }}
-          onOpenSalesLanding={() => setIsSalesLandingMode(true)}
-          isStandalonePortal={true}
-          showToast={showToast}
-        />
+        <Suspense
+          fallback={
+            <div className="w-full h-full flex items-center justify-center bg-slate-950 text-emerald-400 text-sm font-bold">
+              Cargando Consola Central SaaS...
+            </div>
+          }
+        >
+          <CompaniesSaaSView
+            companies={companies}
+            activeCompanyId={activeCompanyId}
+            saasGlobalConfig={saasGlobalConfig}
+            onSaveCompany={handleSaveCompany}
+            onDeleteCompany={handleDeleteCompany}
+            onSwitchCompany={handleSwitchCompanyWorkspace}
+            onSaveSaaSGlobalConfig={handleSaveSaaSGlobalConfig}
+            onLogout={handleLogout}
+            onRefreshCompanies={async () => {
+              const fresh = await fetchCompaniesOnce(true);
+              setCompanies(fresh);
+              showToast('Lista de clientes sincronizada desde la nube', 'success');
+            }}
+            onOpenSalesLanding={() => setIsSalesLandingMode(true)}
+            isStandalonePortal={true}
+            showToast={showToast}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -2867,202 +2979,210 @@ export const App: React.FC = () => {
 
         {/* Tab Views Container — Reserves exact 64px on mobile for the fixed bottom bar */}
         <div className="flex-1 min-h-0 min-w-0 w-full flex flex-col overflow-hidden relative pb-[64px] md:pb-0">
-          {activeTabToRender === 'dashboard' && allowedTabsList.includes('dashboard') && (
-            <DashboardView
-              inventory={inventory}
-              auditHistory={auditHistory}
-              sales={sales}
-              expenses={posFinanceData.expenses}
-              isLoading={isInventoryLoading}
-              onOpenNewProduct={() => {
-                handleTabChange('inventory');
-                setOpenProductModalTrigger(true);
-              }}
-              onStartAudit={() => handleTabChange('audit')}
-              onNavigateToSales={() => {
-                setSalesSubTab('pos');
-                handleTabChange('sales');
-              }}
-              onNavigateToPurchases={() => handleTabChange('purchases')}
-              onNavigateToExpenses={() => {
-                setSalesSubTab('expenses');
-                handleTabChange('sales');
-              }}
-              onNavigateToCredits={() => {
-                setSalesSubTab('credits');
-                handleTabChange('sales');
-              }}
-              onFilterInventoryByCode={handleFilterInventoryByCode}
-              onNavigateToAudit={() => handleTabChange('audit')}
-            />
-          )}
+          <Suspense
+            fallback={
+              <div className="flex-1 w-full h-full flex items-center justify-center bg-slate-50 text-slate-500 text-xs font-bold">
+                Cargando módulo...
+              </div>
+            }
+          >
+            {activeTabToRender === 'dashboard' && allowedTabsList.includes('dashboard') && (
+              <DashboardView
+                inventory={inventory}
+                auditHistory={auditHistory}
+                sales={sales}
+                expenses={posFinanceData.expenses}
+                isLoading={isInventoryLoading}
+                onOpenNewProduct={() => {
+                  handleTabChange('inventory');
+                  setOpenProductModalTrigger(true);
+                }}
+                onStartAudit={() => handleTabChange('audit')}
+                onNavigateToSales={() => {
+                  setSalesSubTab('pos');
+                  handleTabChange('sales');
+                }}
+                onNavigateToPurchases={() => handleTabChange('purchases')}
+                onNavigateToExpenses={() => {
+                  setSalesSubTab('expenses');
+                  handleTabChange('sales');
+                }}
+                onNavigateToCredits={() => {
+                  setSalesSubTab('credits');
+                  handleTabChange('sales');
+                }}
+                onFilterInventoryByCode={handleFilterInventoryByCode}
+                onNavigateToAudit={() => handleTabChange('audit')}
+              />
+            )}
 
-          {activeTabToRender === 'sales' && allowedTabsList.includes('sales') && (
-            <SalesView
-              inventory={inventory}
-              sales={sales}
-              storeSettings={storeSettings}
-              warehousesData={warehousesData}
-              userSession={userSession}
-              users={users}
-              isLoading={isInventoryLoading}
-              initialSubTab={salesSubTab}
-              posFinanceData={posFinanceData}
-              onRecordSale={handleRecordSale}
-              onUpdateSale={handleUpdateSale}
-              onCancelSale={handleCancelSale}
-              onSavePOSFinanceData={handleSavePOSFinanceData}
-              onRecordCreditPayment={handleRecordCreditPayment}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'sales' && allowedTabsList.includes('sales') && (
+              <SalesView
+                inventory={inventory}
+                sales={sales}
+                storeSettings={storeSettings}
+                warehousesData={warehousesData}
+                userSession={userSession}
+                users={users}
+                isLoading={isInventoryLoading}
+                initialSubTab={salesSubTab}
+                posFinanceData={posFinanceData}
+                onRecordSale={handleRecordSale}
+                onUpdateSale={handleUpdateSale}
+                onCancelSale={handleCancelSale}
+                onSavePOSFinanceData={handleSavePOSFinanceData}
+                onRecordCreditPayment={handleRecordCreditPayment}
+                showToast={showToast}
+              />
+            )}
 
-          {activeTabToRender === 'inventory' && allowedTabsList.includes('inventory') && (
-            <InventoryView
-              inventory={inventory}
-              suppliers={suppliers}
-              storeSettings={storeSettings}
-              warehousesData={warehousesData}
-              isLoading={isInventoryLoading}
-              initialSearchCode={inventorySearchQuery}
-              onClearInitialSearch={() => setInventorySearchQuery('')}
-              maxProducts={companyMaxProducts}
-              saasAdminPhone={saasGlobalConfig.saasAdminPhone}
-              onSaveProduct={handleSaveProduct}
-              onBulkSaveProducts={handleBulkSaveProducts}
-              onDeleteProduct={handleDeleteProduct}
-              onOpenSupplierModal={() => {
-                handleTabChange('suppliers');
-                setOpenSupplierModalTrigger(true);
-              }}
-              showModalInitially={openProductModalTrigger}
-              onCloseInitialModal={() => setOpenProductModalTrigger(false)}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'inventory' && allowedTabsList.includes('inventory') && (
+              <InventoryView
+                inventory={inventory}
+                suppliers={suppliers}
+                storeSettings={storeSettings}
+                warehousesData={warehousesData}
+                isLoading={isInventoryLoading}
+                initialSearchCode={inventorySearchQuery}
+                onClearInitialSearch={() => setInventorySearchQuery('')}
+                maxProducts={companyMaxProducts}
+                saasAdminPhone={saasGlobalConfig.saasAdminPhone}
+                onSaveProduct={handleSaveProduct}
+                onBulkSaveProducts={handleBulkSaveProducts}
+                onDeleteProduct={handleDeleteProduct}
+                onOpenSupplierModal={() => {
+                  handleTabChange('suppliers');
+                  setOpenSupplierModalTrigger(true);
+                }}
+                showModalInitially={openProductModalTrigger}
+                onCloseInitialModal={() => setOpenProductModalTrigger(false)}
+                showToast={showToast}
+              />
+            )}
 
-          {activeTabToRender === 'warehouses' && allowedTabsList.includes('warehouses') && (
-            <WarehousesView
-              inventory={inventory}
-              suppliers={suppliers}
-              warehousesData={warehousesData}
-              storeSettings={storeSettings}
-              userSession={userSession}
-              onSaveWarehousesData={handleSaveWarehousesData}
-              onBulkSaveProducts={handleBulkSaveWarehouseProducts}
-              onBulkImportWithSummary={handleBulkSaveProducts}
-              onSaveProduct={handleSaveProduct}
-              onRecordActivity={handleLogWarehouseActivity}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'warehouses' && allowedTabsList.includes('warehouses') && (
+              <WarehousesView
+                inventory={inventory}
+                suppliers={suppliers}
+                warehousesData={warehousesData}
+                storeSettings={storeSettings}
+                userSession={userSession}
+                onSaveWarehousesData={handleSaveWarehousesData}
+                onBulkSaveProducts={handleBulkSaveWarehouseProducts}
+                onBulkImportWithSummary={handleBulkSaveProducts}
+                onSaveProduct={handleSaveProduct}
+                onRecordActivity={handleLogWarehouseActivity}
+                showToast={showToast}
+              />
+            )}
 
-          {activeTabToRender === 'price-checker' && allowedTabsList.includes('price-checker') && (
-            <PriceCheckerTab
-              inventory={inventory}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'price-checker' && allowedTabsList.includes('price-checker') && (
+              <PriceCheckerTab
+                inventory={inventory}
+                showToast={showToast}
+              />
+            )}
 
-          {activeTabToRender === 'catalog' && allowedTabsList.includes('catalog') && (
-            <DigitalCatalogView
-              storeSettings={storeSettings}
-              inventory={inventory}
-              onSaveSettings={handleSaveStoreSettings}
-              onOpenPreview={() => setIsAdminPreviewMode(true)}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'catalog' && allowedTabsList.includes('catalog') && (
+              <DigitalCatalogView
+                storeSettings={storeSettings}
+                inventory={inventory}
+                onSaveSettings={handleSaveStoreSettings}
+                onOpenPreview={() => setIsAdminPreviewMode(true)}
+                showToast={showToast}
+              />
+            )}
 
-          {activeTabToRender === 'purchases' && allowedTabsList.includes('purchases') && (
-            <PurchasesView
-              suppliers={suppliers}
-              inventory={inventory}
-              purchases={purchases}
-              storeSettings={storeSettings}
-              warehousesData={warehousesData}
-              onRecordPurchase={handleRecordPurchase}
-              onCancelPurchase={handleCancelPurchase}
-              onSaveSupplier={handleSaveSupplier}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'purchases' && allowedTabsList.includes('purchases') && (
+              <PurchasesView
+                suppliers={suppliers}
+                inventory={inventory}
+                purchases={purchases}
+                storeSettings={storeSettings}
+                warehousesData={warehousesData}
+                onRecordPurchase={handleRecordPurchase}
+                onCancelPurchase={handleCancelPurchase}
+                onSaveSupplier={handleSaveSupplier}
+                showToast={showToast}
+              />
+            )}
 
-          {activeTabToRender === 'audit' && allowedTabsList.includes('audit') && (
-            <AuditView
-              inventory={inventory}
-              suppliers={suppliers}
-              onApplyAuditChanges={handleApplyAuditChanges}
-              showToast={showToast}
-              storeSettings={storeSettings}
-            />
-          )}
+            {activeTabToRender === 'audit' && allowedTabsList.includes('audit') && (
+              <AuditView
+                inventory={inventory}
+                suppliers={suppliers}
+                onApplyAuditChanges={handleApplyAuditChanges}
+                showToast={showToast}
+                storeSettings={storeSettings}
+              />
+            )}
 
-          {activeTabToRender === 'suppliers' && allowedTabsList.includes('suppliers') && (
-            <SuppliersView
-              suppliers={suppliers}
-              inventory={inventory}
-              onSaveSupplier={handleSaveSupplier}
-              onDeleteSupplier={handleDeleteSupplier}
-              showModalInitially={openSupplierModalTrigger}
-              onCloseInitialModal={() => setOpenSupplierModalTrigger(false)}
-            />
-          )}
+            {activeTabToRender === 'suppliers' && allowedTabsList.includes('suppliers') && (
+              <SuppliersView
+                suppliers={suppliers}
+                inventory={inventory}
+                onSaveSupplier={handleSaveSupplier}
+                onDeleteSupplier={handleDeleteSupplier}
+                showModalInitially={openSupplierModalTrigger}
+                onCloseInitialModal={() => setOpenSupplierModalTrigger(false)}
+              />
+            )}
 
-          {activeTabToRender === 'users' && allowedTabsList.includes('users') && (
-            <UserManagementView
-              users={users}
-              storeSettings={storeSettings}
-              companyAllowedModules={companyAllowedModules}
-              maxUsers={companyMaxUsers}
-              onSaveUser={handleSaveUser}
-              onDeleteUser={handleDeleteUser}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'users' && allowedTabsList.includes('users') && (
+              <UserManagementView
+                users={users}
+                storeSettings={storeSettings}
+                companyAllowedModules={companyAllowedModules}
+                maxUsers={companyMaxUsers}
+                onSaveUser={handleSaveUser}
+                onDeleteUser={handleDeleteUser}
+                showToast={showToast}
+              />
+            )}
 
-          {activeTabToRender === 'activity' && allowedTabsList.includes('activity') && (
-            <ActivityLogView
-              logs={activityLogs}
-              storeSettings={storeSettings}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'activity' && allowedTabsList.includes('activity') && (
+              <ActivityLogView
+                logs={activityLogs}
+                storeSettings={storeSettings}
+                showToast={showToast}
+              />
+            )}
 
-          {activeTabToRender === 'settings' && allowedTabsList.includes('settings') && (
-            <StoreSettingsView
-              currentSettings={storeSettings}
-              onSaveSettings={handleSaveStoreSettings}
-              showToast={showToast}
-              isFirebaseConnected={isFirebaseConnected}
-              lastSyncTime={lastSyncTime}
-              pingLatency={pingLatency}
-              onTestConnection={handleTestConnection}
-              isPinging={isPinging}
-              inventoryCount={inventory.length}
-              suppliersCount={suppliers.length}
-              auditHistoryCount={auditHistory.length}
-              salesCount={sales.length}
-              purchasesCount={purchases.length}
-              onResetData={() => setShowResetConfirm(true)}
-              onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
-            />
-          )}
+            {activeTabToRender === 'settings' && allowedTabsList.includes('settings') && (
+              <StoreSettingsView
+                currentSettings={storeSettings}
+                onSaveSettings={handleSaveStoreSettings}
+                showToast={showToast}
+                isFirebaseConnected={isFirebaseConnected}
+                lastSyncTime={lastSyncTime}
+                pingLatency={pingLatency}
+                onTestConnection={handleTestConnection}
+                isPinging={isPinging}
+                inventoryCount={inventory.length}
+                suppliersCount={suppliers.length}
+                auditHistoryCount={auditHistory.length}
+                salesCount={sales.length}
+                purchasesCount={purchases.length}
+                onResetData={() => setShowResetConfirm(true)}
+                onOpenInstallPrompt={() => setIsInstallPromptOpen(true)}
+              />
+            )}
 
-          {activeTabToRender === 'companies' && isSuperAdminSession && (
-            <CompaniesSaaSView
-              companies={companies}
-              activeCompanyId={activeCompanyId}
-              saasGlobalConfig={saasGlobalConfig}
-              onSaveCompany={handleSaveCompany}
-              onDeleteCompany={handleDeleteCompany}
-              onSwitchCompany={handleSwitchCompanyWorkspace}
-              onSaveSaaSGlobalConfig={handleSaveSaaSGlobalConfig}
-              onLockSuperAdmin={handleLockSuperAdmin}
-              onOpenSalesLanding={() => setIsSalesLandingMode(true)}
-              showToast={showToast}
-            />
-          )}
+            {activeTabToRender === 'companies' && isSuperAdminSession && (
+              <CompaniesSaaSView
+                companies={companies}
+                activeCompanyId={activeCompanyId}
+                saasGlobalConfig={saasGlobalConfig}
+                onSaveCompany={handleSaveCompany}
+                onDeleteCompany={handleDeleteCompany}
+                onSwitchCompany={handleSwitchCompanyWorkspace}
+                onSaveSaaSGlobalConfig={handleSaveSaaSGlobalConfig}
+                onLockSuperAdmin={handleLockSuperAdmin}
+                onOpenSalesLanding={() => setIsSalesLandingMode(true)}
+                showToast={showToast}
+              />
+            )}
+          </Suspense>
         </div>
 
         {/* Mobile Bottom Navigation Dock (< md) — Fixed 64px height, safe-area-inset padding, vertically centered */}

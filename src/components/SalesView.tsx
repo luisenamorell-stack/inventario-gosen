@@ -171,8 +171,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
   }, [initialSubTab]);
 
-  // Mobile / Tablet POS active view: 'catalog' | 'cart' (< lg)
-  const [mobilePosTab, setMobilePosTab] = useState<'catalog' | 'cart'>('catalog');
+  // Mobile / Tablet POS active view: 'catalog' | 'cart' | 'split' (split available on md+ tablets)
+  const [mobilePosTab, setMobilePosTab] = useState<'catalog' | 'cart' | 'split'>(() =>
+    typeof window !== 'undefined' && window.innerWidth >= 768 ? 'split' : 'catalog'
+  );
 
   // ------------------ POS STATE ------------------
   const activeWarehouses = useMemo<WarehouseLocation[]>(() => {
@@ -1657,15 +1659,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
         />
       ) : activeSubTab === 'pos' ? (
         /* ==================== POS TERMINAL VIEW ==================== */
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden relative">
-          {/* Mobile / Tablet Segmented POS Switcher (< lg) */}
-          <div className="lg:hidden p-2 sm:p-2.5 bg-white border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 shadow-2xs">
+        <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden relative">
+          {/* Mobile & Tablet Segmented POS Switcher (< lg) */}
+          <div className="lg:hidden w-full md:hidden p-2 sm:p-2.5 bg-white border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 shadow-2xs">
             <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl w-full">
               <button
                 type="button"
                 onClick={() => setMobilePosTab('catalog')}
                 className={`flex-1 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer active:scale-95 ${
-                  mobilePosTab === 'catalog'
+                  mobilePosTab === 'catalog' || mobilePosTab === 'split'
                     ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
@@ -1699,10 +1701,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
           </div>
 
-          {/* Left Column: Product Catalog & Search (60% on desktop) */}
+          {/* Left Column: Product Catalog & Search (Side-by-side on Tablet md+ and Desktop lg+) */}
           <div
             className={`flex-1 min-h-0 flex flex-col border-r border-slate-200 bg-slate-50/70 overflow-hidden relative ${
-              mobilePosTab === 'cart' ? 'hidden lg:flex' : 'flex'
+              mobilePosTab === 'cart' ? 'hidden md:flex' : 'flex'
             }`}
           >
             {/* Search, Warehouse Selector and Category Filter Toolbar */}
@@ -1997,9 +1999,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
               )}
             </div>
 
-            {/* Floating Mobile Cart Pill Bar (< lg) */}
+            {/* Floating Mobile Cart Pill Bar (< md phones) */}
             {cart.length > 0 && (
-              <div className="lg:hidden sticky bottom-2 mx-3 my-2 z-20">
+              <div className="md:hidden sticky bottom-2 mx-3 my-2 z-20">
                 <button
                   type="button"
                   onClick={() => setMobilePosTab('cart')}
@@ -2023,18 +2025,18 @@ export const SalesView: React.FC<SalesViewProps> = ({
             )}
           </div>
 
-          {/* Right Column: Checkout Ticket & Cart Summary (40% on desktop, full scrollable height on mobile) */}
+          {/* Right Column: Checkout Ticket & Cart Summary (Side-by-side on Tablet md+ & Desktop lg+, full height on Mobile) */}
           <div
-            className={`flex-1 min-h-0 w-full lg:flex-initial lg:w-[420px] xl:w-[460px] flex flex-col bg-white lg:border-l border-slate-200 shadow-xl overflow-hidden ${
-              mobilePosTab === 'catalog' ? 'hidden lg:flex' : 'flex'
+            className={`flex-1 min-h-0 w-full md:flex-initial md:w-[330px] lg:w-[400px] xl:w-[450px] flex flex-col bg-white md:border-l border-slate-200 shadow-xl overflow-hidden ${
+              mobilePosTab === 'catalog' ? 'hidden md:flex' : 'flex'
             }`}
           >
-            {/* Mobile Back Button to Catalog (< lg) */}
-            <div className="lg:hidden px-3 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between shrink-0">
+            {/* Mobile Back Button to Catalog (< md phones) */}
+            <div className="md:hidden px-3 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between shrink-0">
               <button
                 type="button"
                 onClick={() => setMobilePosTab('catalog')}
-                className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer py-0.5"
+                className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer py-1"
               >
                 <ChevronLeft className="w-4 h-4" />
                 <span>Seguir agregando productos</span>
@@ -2161,12 +2163,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           </div>
 
                           <div className="flex items-center gap-1.5 ml-auto">
-                            {/* Quantity stepper */}
-                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-0.5 shadow-2xs">
+                            {/* Touch-friendly Quantity stepper for Mobile & Tablet */}
+                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl p-0.5 shadow-2xs">
                               <button
                                 type="button"
                                 onClick={() => updateCartQuantity(item.code, item.quantity - 1)}
-                                className="p-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer"
+                                className="w-8 h-8 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:bg-slate-200 rounded-lg cursor-pointer"
                                 title="Disminuir cantidad"
                               >
                                 <Minus className="w-3.5 h-3.5" />
@@ -2179,12 +2181,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 onChange={(e) =>
                                   updateCartQuantity(item.code, parseInt(e.target.value) || 1)
                                 }
-                                className="w-9 text-center text-xs font-bold text-slate-900 focus:outline-none"
+                                className="w-10 text-center text-xs sm:text-sm font-extrabold text-slate-900 focus:outline-none tabular-nums"
                               />
                               <button
                                 type="button"
                                 onClick={() => updateCartQuantity(item.code, item.quantity + 1)}
-                                className="p-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer disabled:opacity-40"
+                                className="w-8 h-8 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:bg-slate-200 rounded-lg cursor-pointer disabled:opacity-40"
                                 disabled={item.quantity >= maxStock}
                                 title="Aumentar cantidad"
                               >
@@ -2195,10 +2197,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             <button
                               type="button"
                               onClick={() => removeFromCart(item.code)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                               title="Quitar artículo del ticket"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
                         </div>

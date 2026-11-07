@@ -342,6 +342,9 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
     setIsSent(false);
   };
 
+  // Mobile/Tablet Showcase Scene focus ('all' | 'left' | 'center' | 'right')
+  const [showcaseFocus, setShowcaseFocus] = useState<'all' | 'left' | 'center' | 'right'>('center');
+
   return (
     <div className="miapphn-landing">
       {/* Embedded Vector Symbol Definition for MIAPPHN Logo */}
@@ -376,51 +379,54 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         </symbol>
       </svg>
 
-      {/* HEADER */}
+      {/* HEADER — Responsive for Mobile, Tablet & Desktop */}
       <header className="header">
-        <div className="wrap flex items-center justify-between gap-4 sm:gap-6">
-          <a className="brand flex items-center gap-2.5" href="#top" aria-label="MIAPPHN.ONLINE, ir al inicio">
+        <div className="wrap header-inner">
+          <a className="brand shrink-0" href="#top" aria-label="MIAPPHN.ONLINE, ir al inicio">
             <svg className="logo" viewBox="0 0 959 200" role="img" aria-label="MIAPPHN">
               <use href="#mlogo" />
             </svg>
           </a>
 
-          <nav className="nav hidden md:flex items-center gap-6">
-            <a href="#planes">Planes y precios</a>
-            <a href="#demo">Solicitar demo</a>
+          <nav className="nav hidden lg:flex items-center gap-6">
+            <a href="#planes" className="whitespace-nowrap">Planes y precios</a>
+            <a href="#demo" className="whitespace-nowrap">Solicitar demo</a>
             <button
               type="button"
               onClick={handleOpenLogin}
-              className="text-slate-300 hover:text-white transition-colors cursor-pointer text-sm font-bold flex items-center gap-1.5"
+              className="text-slate-300 hover:text-white transition-colors cursor-pointer text-sm font-bold flex items-center gap-1.5 whitespace-nowrap"
             >
-              <Lock className="w-3.5 h-3.5 text-emerald-400" />
+              <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span>Iniciar Sesión</span>
             </button>
           </nav>
 
-          <div className="flex items-center gap-2.5">
+          <div className="header-actions">
             {hasActiveSession && onResumeSession && (
               <button
                 type="button"
                 onClick={onResumeSession}
-                className="btn text-xs py-2 px-3 border-teal-500/40 text-teal-300"
+                className="btn btn-compact border-teal-500/40 text-teal-300 whitespace-nowrap"
               >
-                <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 mr-1.5" />
-                <span>Mi Sesión ({activeSessionLabel || 'Activa'})</span>
+                <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 mr-1.5 shrink-0" />
+                <span className="truncate max-w-[130px] sm:max-w-none">
+                  Mi Sesión ({activeSessionLabel || 'Activa'})
+                </span>
               </button>
             )}
 
             <button
               type="button"
               onClick={handleOpenLogin}
-              className="btn md:hidden text-xs py-2 px-3 flex items-center gap-1.5"
+              className="btn btn-compact lg:hidden flex items-center gap-1.5 whitespace-nowrap"
             >
-              <Lock className="w-3.5 h-3.5 text-emerald-400" />
+              <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span>Iniciar Sesión</span>
             </button>
 
-            <a className="btn pri whitespace-nowrap" href="#demo">
-              Pedir demo gratis
+            <a className="btn pri btn-compact whitespace-nowrap" href="#demo">
+              <span className="hidden sm:inline">Pedir demo gratis</span>
+              <span className="sm:hidden">Demo gratis</span>
             </a>
           </div>
         </div>
@@ -443,6 +449,14 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
               <a className="btn" href="#planes">
                 Ver planes y precios
               </a>
+              <button
+                type="button"
+                onClick={handleOpenLogin}
+                className="btn sm:hidden flex items-center justify-center gap-2"
+              >
+                <Lock className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Ya soy cliente • Iniciar Sesión</span>
+              </button>
             </div>
             <div className="note">15 días de prueba real, sin compromiso.</div>
           </div>
@@ -458,12 +472,53 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                 </div>
                 <span className="hero-showcase-live">EN VIVO EN COMERCIOS</span>
               </div>
-              <div className="hero-showcase-img-wrap">
-                <img
-                  src="/assets/aistudio/image_0e512b8a.png"
-                  alt="Comercios operando con nuestra App de Ventas POS, escáner e impresora térmica"
-                  className="hero-showcase-img"
-                />
+
+              {/* Mobile & Tablet Interactive Scene Switcher (< 900px) so the 3-panel wide image looks large and crisp on phones & tablets */}
+              <div className="hero-showcase-mobile-tabs">
+                <button
+                  type="button"
+                  onClick={() => setShowcaseFocus('left')}
+                  className={`showcase-tab-btn ${showcaseFocus === 'left' ? 'active' : ''}`}
+                >
+                  1. Tu Tienda
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowcaseFocus('center')}
+                  className={`showcase-tab-btn ${showcaseFocus === 'center' ? 'active' : ''}`}
+                >
+                  2. En Tablet / Móvil
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowcaseFocus('right')}
+                  className={`showcase-tab-btn ${showcaseFocus === 'right' ? 'active' : ''}`}
+                >
+                  3. Caja POS
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowcaseFocus('all')}
+                  className={`showcase-tab-btn ${showcaseFocus === 'all' ? 'active' : ''}`}
+                >
+                  Panorámica
+                </button>
+              </div>
+
+              <div className={`hero-showcase-img-wrap focus-${showcaseFocus}`}>
+                <picture>
+                  <source srcSet="/assets/aistudio/image_0e512b8a.webp" type="image/webp" />
+                  <img
+                    src="/assets/aistudio/image_0e512b8a.webp"
+                    alt="Comercios operando con nuestra App de Ventas POS, escáner e impresora térmica"
+                    width={1024}
+                    height={209}
+                    loading="eager"
+                    decoding="sync"
+                    fetchPriority="high"
+                    className="hero-showcase-img"
+                  />
+                </picture>
               </div>
             </div>
           </div>
@@ -485,7 +540,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                   <div className="t">{p.t}</div>
                   <h3>{p.n}</h3>
                   <div className="d">{p.d}</div>
-                  <div className="pr">
+                  <div className="pr tabular-nums">
                     L. {p.p}
                     <span>{p.per}</span>
                   </div>
@@ -691,26 +746,26 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
       {/* FOOTER */}
       <footer>
         <div className="wrap fl">
-          <div className="flex items-center gap-3">
+          <div className="footer-brand">
             <svg className="logo sm" viewBox="0 0 959 200" role="img" aria-label="MIAPPHN">
               <use href="#mlogo" />
             </svg>
             <span>© 2026 MIAPPHN.ONLINE. Soporte directo en Honduras.</span>
           </div>
 
-          <div className="flex items-center gap-4 text-xs font-semibold text-slate-400">
+          <div className="footer-links">
             <button
               type="button"
               onClick={handleOpenLogin}
-              className="hover:text-white transition-colors cursor-pointer"
+              className="hover:text-white transition-colors cursor-pointer py-1.5 px-2"
             >
               Iniciar Sesión
             </button>
-            <span>•</span>
+            <span aria-hidden="true">·</span>
             <button
               type="button"
               onClick={onOpenSaaSConsole}
-              className="hover:text-white transition-colors cursor-pointer"
+              className="hover:text-white transition-colors cursor-pointer py-1.5 px-2"
             >
               Consola SaaS
             </button>
@@ -786,7 +841,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         </div>
       )}
 
-      {/* EMBEDDED SCOPED CSS EXACTLY AS PROVIDED BY USER */}
+      {/* EMBEDDED SCOPED CSS — FULLY RESPONSIVE FOR MOBILE, TABLET & DESKTOP */}
       <style>{`
         @property --a {
           syntax: "<angle>";
@@ -827,28 +882,55 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           font-family: "Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif;
           letter-spacing: -0.02em;
           margin: 0;
+          text-wrap: balance;
         }
         .miapphn-landing .wrap {
           max-width: 1180px;
           margin: 0 auto;
-          padding: 0 20px;
+          padding: 0 16px;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .wrap {
+            padding: 0 24px;
+          }
         }
         .miapphn-landing a {
           color: inherit;
         }
+        /* Header */
         .miapphn-landing header {
           position: sticky;
           top: 0;
-          z-index: 20;
-          background: rgba(2, 6, 23, 0.88);
+          z-index: 30;
+          background: rgba(2, 6, 23, 0.9);
           backdrop-filter: blur(14px);
           border-bottom: 1px solid var(--line-subtle);
         }
-        .miapphn-landing header .wrap {
+        .miapphn-landing .header-inner {
           display: flex;
           align-items: center;
-          gap: 24px;
-          height: 64px;
+          justify-content: space-between;
+          gap: 10px;
+          min-height: 60px;
+          padding-top: 8px;
+          padding-bottom: 8px;
+        }
+        @media (min-width: 768px) {
+          .miapphn-landing .header-inner {
+            gap: 20px;
+            min-height: 68px;
+          }
+        }
+        .miapphn-landing .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-shrink: 0;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .header-actions {
+            gap: 10px;
+          }
         }
         .miapphn-landing .brand {
           display: flex;
@@ -872,7 +954,8 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          padding: 12px 22px;
+          min-height: 44px;
+          padding: 11px 20px;
           border-radius: 999px;
           font: 600 0.95rem "Hanken Grotesk", sans-serif;
           border: 1px solid var(--line);
@@ -881,6 +964,18 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           cursor: pointer;
           text-decoration: none;
           transition: transform 0.2s, box-shadow 0.2s, background 0.2s, border-color 0.2s;
+        }
+        .miapphn-landing .btn.btn-compact {
+          min-height: 40px;
+          padding: 8px 14px;
+          font-size: 0.82rem;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .btn.btn-compact {
+            min-height: 42px;
+            padding: 9px 18px;
+            font-size: 0.9rem;
+          }
         }
         .miapphn-landing .btn:hover {
           transform: translateY(-1px);
@@ -896,134 +991,283 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           background: #34d399;
           box-shadow: 0 10px 30px -8px rgba(16, 185, 129, 0.6);
         }
-        /* hero */
+        /* Hero */
         .miapphn-landing .hero {
           display: grid;
-          gap: 36px;
-          padding: 48px 0 64px;
+          gap: 24px;
+          padding: 28px 16px 40px;
           align-items: center;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .hero {
+            gap: 32px;
+            padding: 40px 24px 56px;
+          }
+        }
+        @media (min-width: 1024px) {
+          .miapphn-landing .hero {
+            gap: 36px;
+            padding: 48px 24px 64px;
+          }
         }
         .miapphn-landing .hero-copy {
           max-width: 780px;
         }
         .miapphn-landing .hero h1 {
-          font-size: clamp(2.1rem, 4.8vw, 3.5rem);
-          line-height: 1.06;
+          font-size: clamp(1.75rem, 5.2vw, 3.5rem);
+          line-height: 1.08;
           font-weight: 800;
           max-width: 22ch;
         }
         .miapphn-landing .hero p {
           color: var(--mut);
-          font-size: 1.1rem;
+          font-size: clamp(0.96rem, 2.2vw, 1.1rem);
+          line-height: 1.55;
           max-width: 60ch;
-          margin: 18px 0 28px;
+          margin: 14px 0 22px;
         }
         .miapphn-landing .cta {
           display: flex;
-          flex-wrap: wrap;
-          gap: 12px;
+          flex-direction: column;
+          gap: 10px;
+        }
+        @media (min-width: 540px) {
+          .miapphn-landing .cta {
+            flex-direction: row;
+            flex-wrap: wrap;
+            gap: 12px;
+          }
+        }
+        .miapphn-landing .cta .btn {
+          width: 100%;
+        }
+        @media (min-width: 540px) {
+          .miapphn-landing .cta .btn {
+            width: auto;
+          }
         }
         .miapphn-landing .note {
-          margin-top: 16px;
+          margin-top: 14px;
           color: var(--mut);
-          font-size: 0.92rem;
+          font-size: 0.88rem;
         }
-        /* Hero Showcase Image Banner */
+        /* Hero Showcase Image Banner — Responsive for Mobile, Tablet & Desktop */
         .miapphn-landing .hero-showcase {
           width: 100%;
         }
         .miapphn-landing .hero-showcase-frame {
-          border-radius: 22px;
+          border-radius: 18px;
           background: linear-gradient(180deg, rgba(16, 185, 129, 0.14), rgba(15, 23, 42, 0.92));
           border: 1px solid rgba(16, 185, 129, 0.35);
           box-shadow:
-            0 28px 70px -20px rgba(0, 0, 0, 0.75),
-            0 0 40px -12px rgba(16, 185, 129, 0.28);
+            0 24px 60px -20px rgba(0, 0, 0, 0.75),
+            0 0 36px -12px rgba(16, 185, 129, 0.28);
           overflow: hidden;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .hero-showcase-frame {
+            border-radius: 22px;
+          }
         }
         .miapphn-landing .hero-showcase-bar {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 12px;
-          padding: 10px 16px;
-          background: rgba(10, 17, 32, 0.9);
+          gap: 8px;
+          padding: 9px 12px;
+          background: rgba(10, 17, 32, 0.92);
           border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .hero-showcase-bar {
+            padding: 10px 16px;
+            gap: 12px;
+          }
         }
         .miapphn-landing .hero-showcase-dots {
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 8px;
           min-width: 0;
         }
         .miapphn-landing .dot-emerald {
-          width: 9px;
-          height: 9px;
+          width: 8px;
+          height: 8px;
           border-radius: 50%;
           background: var(--brand);
           box-shadow: 0 0 10px var(--brand);
           flex-shrink: 0;
         }
         .miapphn-landing .hero-showcase-badge {
-          font-size: 0.78rem;
+          font-size: 0.72rem;
           font-weight: 700;
           color: #e2e8f0;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
+        @media (min-width: 640px) {
+          .miapphn-landing .hero-showcase-badge {
+            font-size: 0.78rem;
+          }
+        }
         .miapphn-landing .hero-showcase-live {
-          font-size: 0.68rem;
+          font-size: 0.62rem;
           font-weight: 800;
-          letter-spacing: 0.06em;
+          letter-spacing: 0.05em;
           color: var(--brand);
           background: rgba(16, 185, 129, 0.12);
           border: 1px solid rgba(16, 185, 129, 0.35);
-          padding: 3px 10px;
+          padding: 3px 8px;
           border-radius: 999px;
           flex-shrink: 0;
+          white-space: nowrap;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .hero-showcase-live {
+            font-size: 0.68rem;
+            padding: 3px 10px;
+          }
+        }
+        /* Mobile/Tablet Scene Switcher Tabs (< 900px) */
+        .miapphn-landing .hero-showcase-mobile-tabs {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 4px;
+          padding: 6px;
+          background: rgba(15, 23, 42, 0.95);
+          border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+        }
+        @media (min-width: 900px) {
+          .miapphn-landing .hero-showcase-mobile-tabs {
+            display: none;
+          }
+        }
+        .miapphn-landing .showcase-tab-btn {
+          min-height: 36px;
+          padding: 6px 4px;
+          border-radius: 10px;
+          border: 1px solid transparent;
+          background: transparent;
+          color: var(--mut);
+          font: 700 0.7rem "Hanken Grotesk", sans-serif;
+          cursor: pointer;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          transition: all 0.2s ease;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .showcase-tab-btn {
+            font-size: 0.78rem;
+            padding: 7px 10px;
+          }
+        }
+        .miapphn-landing .showcase-tab-btn.active {
+          background: rgba(16, 185, 129, 0.16);
+          color: #34d399;
+          border-color: rgba(16, 185, 129, 0.4);
         }
         .miapphn-landing .hero-showcase-img-wrap {
           width: 100%;
           background: #0a101d;
           line-height: 0;
+          overflow: hidden;
+          position: relative;
         }
         .miapphn-landing .hero-showcase-img {
           width: 100%;
           height: auto;
           display: block;
-          object-fit: contain;
+          transition: object-position 0.35s ease, transform 0.35s ease;
         }
-        /* planes */
+        /* On Mobile & Tablet (< 900px), allow zoomed-in single scene focus OR full panoramic view */
+        @media (max-width: 899px) {
+          .miapphn-landing .hero-showcase-img-wrap.focus-left .hero-showcase-img,
+          .miapphn-landing .hero-showcase-img-wrap.focus-center .hero-showcase-img,
+          .miapphn-landing .hero-showcase-img-wrap.focus-right .hero-showcase-img {
+            height: 220px;
+            object-fit: cover;
+          }
+          .miapphn-landing .hero-showcase-img-wrap.focus-left .hero-showcase-img {
+            object-position: 8% center;
+          }
+          .miapphn-landing .hero-showcase-img-wrap.focus-center .hero-showcase-img {
+            object-position: 50% center;
+          }
+          .miapphn-landing .hero-showcase-img-wrap.focus-right .hero-showcase-img {
+            object-position: 92% center;
+          }
+          .miapphn-landing .hero-showcase-img-wrap.focus-all .hero-showcase-img {
+            height: auto;
+            object-fit: contain;
+          }
+        }
+        @media (min-width: 600px) and (max-width: 899px) {
+          .miapphn-landing .hero-showcase-img-wrap.focus-left .hero-showcase-img,
+          .miapphn-landing .hero-showcase-img-wrap.focus-center .hero-showcase-img,
+          .miapphn-landing .hero-showcase-img-wrap.focus-right .hero-showcase-img {
+            height: 290px;
+          }
+        }
+        /* Planes Section — 1 col on mobile, 2x2 grid on tablet, 4 cols on desktop */
         .miapphn-landing section {
-          padding: 24px 0 80px;
+          padding: 20px 0 56px;
+        }
+        @media (min-width: 768px) {
+          .miapphn-landing section {
+            padding: 24px 0 80px;
+          }
         }
         .miapphn-landing .head {
           max-width: 60ch;
-          margin-bottom: 40px;
+          margin-bottom: 28px;
+        }
+        @media (min-width: 768px) {
+          .miapphn-landing .head {
+            margin-bottom: 40px;
+          }
         }
         .miapphn-landing .head h2 {
-          font-size: clamp(1.8rem, 3.6vw, 2.6rem);
-          line-height: 1.1;
+          font-size: clamp(1.55rem, 3.6vw, 2.6rem);
+          line-height: 1.12;
           font-weight: 800;
         }
         .miapphn-landing .head p {
           color: var(--mut);
-          margin: 14px 0 0;
+          margin: 10px 0 0;
+          font-size: clamp(0.92rem, 2vw, 1rem);
         }
         .miapphn-landing .plans {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
-          gap: 18px;
+          grid-template-columns: 1fr;
+          gap: 16px;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .plans {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 18px;
+          }
+        }
+        @media (min-width: 1100px) {
+          .miapphn-landing .plans {
+            grid-template-columns: repeat(4, 1fr);
+            gap: 18px;
+          }
         }
         .miapphn-landing .card {
           display: flex;
           flex-direction: column;
-          padding: 26px 22px 22px;
+          padding: 22px 18px 20px;
           border-radius: 18px;
           background: var(--panel);
           border: 1px solid var(--line);
           position: relative;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .card {
+            padding: 26px 22px 22px;
+          }
         }
         .miapphn-landing .card .t {
           color: var(--brand);
@@ -1032,22 +1276,32 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           margin-bottom: 8px;
         }
         .miapphn-landing .card h3 {
-          font-size: 1.3rem;
+          font-size: 1.25rem;
           font-weight: 800;
         }
         .miapphn-landing .card .d {
           color: var(--mut);
           font-size: 0.9rem;
-          margin: 6px 0 18px;
-          min-height: 3em;
+          margin: 6px 0 16px;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .card .d {
+            min-height: 3em;
+            margin: 6px 0 18px;
+          }
         }
         .miapphn-landing .pr {
-          font: 800 2.5rem "Bricolage Grotesque", sans-serif;
+          font: 800 2.25rem "Bricolage Grotesque", sans-serif;
           letter-spacing: -0.03em;
           line-height: 1;
         }
+        @media (min-width: 640px) {
+          .miapphn-landing .pr {
+            font-size: 2.5rem;
+          }
+        }
         .miapphn-landing .pr span {
-          font: 500 0.9rem "Hanken Grotesk", sans-serif;
+          font: 500 0.88rem "Hanken Grotesk", sans-serif;
           color: var(--mut);
           letter-spacing: 0;
           margin-left: 6px;
@@ -1055,18 +1309,18 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         .miapphn-landing .lim {
           color: var(--brand);
           font-weight: 600;
-          font-size: 0.88rem;
-          margin: 8px 0 18px;
-          padding-bottom: 18px;
+          font-size: 0.86rem;
+          margin: 8px 0 16px;
+          padding-bottom: 16px;
           border-bottom: 1px solid var(--line);
         }
         .miapphn-landing .card ul {
           list-style: none;
-          margin: 0 0 24px;
+          margin: 0 0 22px;
           padding: 0;
           display: grid;
-          gap: 11px;
-          font-size: 0.92rem;
+          gap: 10px;
+          font-size: 0.9rem;
         }
         .miapphn-landing .card li {
           display: flex;
@@ -1105,7 +1359,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           animation: spin 5s linear infinite;
           pointer-events: none;
         }
-        @media (min-width: 1000px) {
+        @media (min-width: 1100px) {
           .miapphn-landing .feat {
             transform: translateY(-10px);
           }
@@ -1115,30 +1369,36 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
             --a: 360deg;
           }
         }
-        /* demo */
+        /* Demo Section — Responsive on Mobile, Tablet & Desktop */
         .miapphn-landing .demo {
           display: grid;
-          gap: 40px;
+          gap: 28px;
           align-items: start;
         }
         @media (min-width: 900px) {
           .miapphn-landing .demo {
             grid-template-columns: 1fr 1.1fr;
-            gap: 64px;
+            gap: 56px;
           }
         }
         .miapphn-landing .steps {
           list-style: none;
           padding: 0;
-          margin: 28px 0 0;
+          margin: 22px 0 0;
           display: grid;
-          gap: 22px;
+          gap: 16px;
           counter-reset: s;
+        }
+        @media (min-width: 640px) and (max-width: 899px) {
+          .miapphn-landing .steps {
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+          }
         }
         .miapphn-landing .steps li {
           display: grid;
           grid-template-columns: 36px 1fr;
-          gap: 14px;
+          gap: 12px;
           counter-increment: s;
         }
         .miapphn-landing .steps li::before {
@@ -1155,27 +1415,34 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         }
         .miapphn-landing .steps b {
           display: block;
+          font-size: 0.95rem;
         }
         .miapphn-landing .steps span {
           color: var(--mut);
-          font-size: 0.92rem;
+          font-size: 0.88rem;
         }
         .miapphn-landing .form {
           background: var(--panel);
           border: 1px solid var(--line-subtle);
-          border-radius: 22px;
-          padding: 28px 24px;
+          border-radius: 20px;
+          padding: 20px 16px;
           box-shadow: 0 20px 40px -15px rgba(0,0,0,0.5);
         }
+        @media (min-width: 640px) {
+          .miapphn-landing .form {
+            border-radius: 22px;
+            padding: 28px 24px;
+          }
+        }
         .miapphn-landing .form h3 {
-          font-size: 1.4rem;
+          font-size: 1.3rem;
           font-weight: 800;
           margin-bottom: 4px;
         }
         .miapphn-landing .form > p {
           color: var(--mut);
-          margin: 0 0 22px;
-          font-size: 0.92rem;
+          margin: 0 0 18px;
+          font-size: 0.9rem;
         }
         .miapphn-landing .g {
           display: grid;
@@ -1199,12 +1466,13 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         .miapphn-landing input,
         .miapphn-landing select,
         .miapphn-landing textarea {
-          font: 400 1rem "Hanken Grotesk", sans-serif;
+          font: 400 16px "Hanken Grotesk", sans-serif;
           color: var(--text);
           background: var(--ink);
           border: 1px solid var(--line);
           border-radius: 12px;
-          padding: 12px 14px;
+          min-height: 46px;
+          padding: 11px 14px;
           width: 100%;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
@@ -1222,6 +1490,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         .miapphn-landing .form .btn {
           width: 100%;
           margin-top: 18px;
+          min-height: 48px;
           padding: 14px;
         }
         .miapphn-landing .flash {
@@ -1279,41 +1548,69 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         .miapphn-landing .ok .btn + .btn {
           margin-top: 10px;
         }
+        /* Footer */
         .miapphn-landing footer {
           border-top: 1px solid var(--line);
-          padding: 28px 0;
+          padding: 24px 0 max(28px, env(safe-area-inset-bottom));
           color: var(--mut);
-          font-size: 0.9rem;
+          font-size: 0.88rem;
         }
         .miapphn-landing .logo {
-          height: 38px;
+          height: 28px;
           width: auto;
           display: block;
         }
+        @media (min-width: 480px) {
+          .miapphn-landing .logo {
+            height: 33px;
+          }
+        }
+        @media (min-width: 768px) {
+          .miapphn-landing .logo {
+            height: 38px;
+          }
+        }
         .miapphn-landing .logo.sm {
-          height: 30px;
+          height: 26px;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .logo.sm {
+            height: 30px;
+          }
         }
         .miapphn-landing .fl {
           display: flex;
+          flex-direction: column;
           align-items: center;
-          justify-content: space-between;
-          flex-wrap: wrap;
-          gap: 14px;
+          text-align: center;
+          gap: 12px;
         }
-        @media (max-width: 480px) {
-          .miapphn-landing .logo {
-            height: 30px;
+        @media (min-width: 640px) {
+          .miapphn-landing .fl {
+            flex-direction: row;
+            justify-content: space-between;
+            text-align: left;
           }
-          .miapphn-landing .logo.sm {
-            height: 26px;
-          }
-          .miapphn-landing header .wrap {
+        }
+        .miapphn-landing .footer-brand {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 8px;
+        }
+        @media (min-width: 640px) {
+          .miapphn-landing .footer-brand {
+            flex-direction: row;
             gap: 12px;
           }
-          .miapphn-landing header .btn {
-            padding: 10px 14px;
-            font-size: 0.85rem;
-          }
+        }
+        .miapphn-landing .footer-links {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-size: 0.82rem;
+          font-weight: 600;
+          color: var(--mut);
         }
       `}</style>
     </div>

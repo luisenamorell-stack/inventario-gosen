@@ -1,7 +1,7 @@
 import React from 'react';
 
 export const MIAPPHN_BANNER_LOGO_URL =
-  '/assets/aistudio/miapphn-logo-fondo-oscuro_c705844a.png';
+  '/assets/aistudio/miapphn-logo-fondo-oscuro_c705844a.webp';
 
 /**
  * Exact vector silhouette of the MIAPPHN Cash Register with Wireless Signal Arcs
@@ -110,7 +110,7 @@ export const MiAppHNCashRegisterIcon: React.FC<{
 );
 
 /**
- * Official MIAPPHN Horizontal Banner Logo (uses the uploaded banner PNG for dark backgrounds)
+ * Official MIAPPHN Horizontal Banner Logo (uses the optimized WebP banner for dark backgrounds)
  */
 export const MiAppHNBannerLogo: React.FC<{
   className?: string;
@@ -119,6 +119,10 @@ export const MiAppHNBannerLogo: React.FC<{
   <img
     src={MIAPPHN_BANNER_LOGO_URL}
     alt={alt}
+    width={400}
+    height={82}
+    decoding="async"
+    fetchPriority="high"
     className={`object-contain select-none ${className}`}
   />
 );
