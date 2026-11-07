@@ -25,7 +25,8 @@ import {
   Activity,
   AlertCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Video
 } from 'lucide-react';
 
 interface UserManagementViewProps {
@@ -44,6 +45,12 @@ const TAB_MODULES: { id: ActiveTab; label: string; description: string; icon: Re
     label: 'Ventas y Facturación (POS)',
     description: 'Permite cobrar, generar facturas/tickets y registrar ventas',
     icon: ShoppingCart,
+  },
+  {
+    id: 'online-sales',
+    label: 'Ventas Online / Live (TikTok y Redes)',
+    description: 'Permite registrar pedidos de Lives/Redes, envíos, guías y control de ganancias online',
+    icon: Video,
   },
   {
     id: 'inventory',

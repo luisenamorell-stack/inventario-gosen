@@ -1,8 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { Product, StoreSettings } from '../types';
 import { WhatsAppIcon } from './SalesView';
 import { PublicCatalogGridSkeleton } from './SkeletonLoaders';
 import { AdaptiveImage } from './AdaptiveImage';
+import {
+  buildBranchEmbedMapUrl,
+  buildBranchExternalMapsUrl,
+  getEffectiveStoreLocations,
+} from '../utils/storeLocationUtils';
 import {
   ShoppingBag,
   Search,
@@ -22,7 +27,10 @@ import {
   Copy,
   AlertCircle,
   ShoppingCart,
-  Truck
+  Truck,
+  Navigation,
+  Clock,
+  ExternalLink,
 } from 'lucide-react';
 
 interface CartItem {
@@ -55,8 +63,30 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
   const effectiveLogo = storeSettings.logoUrl || (isGosen ? '/store-logo.jpg' : '');
   const displayStoreName = storeSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Catálogo Oficial');
 
+  // Store Locations & Multi-Branch Google Maps State
+  const effectiveLocations = useMemo(
+    () =>
+      storeSettings.showLocationsInCatalog === false
+        ? []
+        : getEffectiveStoreLocations(storeSettings),
+    [storeSettings]
+  );
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+  const [isMapPanelExpanded, setIsMapPanelExpanded] = useState<boolean>(true);
+  const locationsSectionRef = useRef<HTMLDivElement | null>(null);
+
+  const activeBranch = useMemo(() => {
+    if (effectiveLocations.length === 0) return null;
+    return (
+      effectiveLocations.find((b) => b.id === selectedBranchId) ||
+      effectiveLocations.find((b) => b.isMain) ||
+      effectiveLocations[0]
+    );
+  }, [effectiveLocations, selectedBranchId]);
+
   // Delivery & Customer Delivery Info Form
   const [shippingMethod, setShippingMethod] = useState<'DVOLADA' | 'RETIRO'>('DVOLADA');
+  const [pickupBranchId, setPickupBranchId] = useState<string>('');
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
@@ -168,11 +198,19 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
   // Format WhatsApp Order Message
   const buildWhatsAppMessage = (): string => {
     const sName = displayStoreName.toUpperCase();
+    const chosenPickupBranch =
+      effectiveLocations.find((b) => b.id === pickupBranchId) ||
+      activeBranch ||
+      effectiveLocations[0] ||
+      null;
+
     const deliveryMethodText =
       shippingMethod === 'DVOLADA'
         ? showDvolada
           ? "D'VOLADA Servicios de Delivery 🚀"
           : 'Envío a Domicilio 🛵'
+        : chosenPickupBranch && effectiveLocations.length > 1
+        ? `Retiro en Tienda (${chosenPickupBranch.name}) 🏪`
         : 'Retiro en Tienda 🏪';
     let text = `🛍️ *NUEVO PEDIDO DESDE EL CATÁLOGO DIGITAL*\n`;
     text += `🏪 *${sName}*\n`;
@@ -184,6 +222,10 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
     text += `🛵 *Método de entrega:* ${deliveryMethodText}\n`;
     if (shippingMethod === 'DVOLADA' && customerAddress.trim()) {
       text += `📍 *Dirección de envío:* ${customerAddress.trim()}\n`;
+    } else if (shippingMethod === 'RETIRO' && chosenPickupBranch) {
+      text += `📍 *Sucursal de retiro:* ${chosenPickupBranch.name}${
+        chosenPickupBranch.address ? ` — ${chosenPickupBranch.address}` : ''
+      }\n`;
     }
     text += `💳 *Método de pago preferido:* ${paymentMethod}\n`;
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -218,8 +260,18 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
       return;
     }
 
+    const chosenPickupBranch =
+      shippingMethod === 'RETIRO'
+        ? effectiveLocations.find((b) => b.id === pickupBranchId) || activeBranch
+        : null;
+
     const message = buildWhatsAppMessage();
-    const rawTargetPhone = (storeSettings.whatsappOrderPhone || storeSettings.phone || '').trim();
+    const rawTargetPhone = (
+      chosenPickupBranch?.phone ||
+      storeSettings.whatsappOrderPhone ||
+      storeSettings.phone ||
+      ''
+    ).trim();
     const cleanDigits = rawTargetPhone.replace(/\D/g, '');
 
     let url = '';
@@ -322,6 +374,28 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                     <MapPin className="w-3.5 h-3.5 text-slate-400" />
                     <span>{storeSettings.address}</span>
                   </span>
+                )}
+                {effectiveLocations.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMapPanelExpanded(true);
+                      setTimeout(() => {
+                        locationsSectionRef.current?.scrollIntoView({
+                          behavior: 'smooth',
+                          block: 'start',
+                        });
+                      }, 80);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-2xs transition-all cursor-pointer"
+                  >
+                    <MapPin className="w-3 h-3" />
+                    <span>
+                      {effectiveLocations.length === 1
+                        ? 'Ver Ubicación en Google Maps'
+                        : `Ver Nuestras ${effectiveLocations.length} Tiendas en Google Maps`}
+                    </span>
+                  </button>
                 )}
               </div>
             </div>
@@ -589,6 +663,234 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
             })}
           </div>
         )}
+
+        {/* ==================== STORE LOCATIONS & GOOGLE MAPS SECTION ==================== */}
+        {effectiveLocations.length > 0 && activeBranch && (
+          <section
+            ref={locationsSectionRef}
+            className="bg-white rounded-3xl border border-slate-200/90 shadow-xs overflow-hidden mt-6"
+          >
+            {/* Section Header */}
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-950 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300 shrink-0">
+                  <MapPin className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-base sm:text-lg font-black tracking-tight text-white">
+                      {effectiveLocations.length === 1
+                        ? 'Ubicación de Nuestra Tienda'
+                        : `Nuestras Tiendas y Sucursales (${effectiveLocations.length})`}
+                    </h2>
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[10px] font-extrabold uppercase tracking-wider">
+                      Google Maps
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300">
+                    {effectiveLocations.length === 1
+                      ? 'Visítanos en nuestro local o abre la ruta directa en Google Maps.'
+                      : 'Selecciona cualquiera de nuestras tiendas para ver su dirección, horario y ubicación exacta en el mapa.'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsMapPanelExpanded((prev) => !prev)}
+                className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-colors cursor-pointer shrink-0"
+              >
+                {isMapPanelExpanded ? 'Ocultar Mapa' : 'Mostrar Mapa'}
+              </button>
+            </div>
+
+            {isMapPanelExpanded && (
+              <div className="p-4 sm:p-5 space-y-4">
+                {/* Branch Selector Cards when the store has MORE THAN 1 location */}
+                {effectiveLocations.length > 1 && (
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 block">
+                      Selecciona una Tienda / Sucursal ({effectiveLocations.length} disponibles):
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                      {effectiveLocations.map((branch, idx) => {
+                        const isSelected = activeBranch.id === branch.id;
+                        return (
+                          <button
+                            key={branch.id}
+                            type="button"
+                            onClick={() => setSelectedBranchId(branch.id)}
+                            className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-start gap-2.5 ${
+                              isSelected
+                                ? 'bg-emerald-50/90 border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs'
+                                : 'bg-slate-50/70 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
+                            }`}
+                          >
+                            <div
+                              className={`w-7 h-7 rounded-xl font-black text-xs flex items-center justify-center shrink-0 mt-0.5 ${
+                                isSelected
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-slate-200 text-slate-700'
+                              }`}
+                            >
+                              {idx + 1}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-extrabold text-xs text-slate-900 truncate">
+                                  {branch.name}
+                                </span>
+                                {branch.isMain && (
+                                  <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
+                                    Principal
+                                  </span>
+                                )}
+                              </div>
+                              {branch.city && (
+                                <span className="text-[11px] font-semibold text-emerald-700 block truncate">
+                                  {branch.city}
+                                </span>
+                              )}
+                              {branch.address && (
+                                <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">
+                                  {branch.address}
+                                </p>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Active Branch Details + Interactive Google Map Grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+                  {/* Left: Selected Branch Information & Action Buttons (5 cols) */}
+                  <div className="lg:col-span-5 bg-slate-50 rounded-2xl p-4 border border-slate-200/90 flex flex-col justify-between space-y-4">
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700 block">
+                            {effectiveLocations.length > 1
+                              ? 'Sucursal Seleccionada'
+                              : 'Tienda Oficial'}
+                          </span>
+                          <h3 className="text-base sm:text-lg font-black text-slate-900">
+                            {activeBranch.name || displayStoreName}
+                          </h3>
+                          {activeBranch.city && (
+                            <span className="text-xs font-bold text-slate-600 block">
+                              {activeBranch.city}
+                            </span>
+                          )}
+                        </div>
+                        <span className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 border border-emerald-200">
+                          <Store className="w-5 h-5" />
+                        </span>
+                      </div>
+
+                      <div className="space-y-2 text-xs text-slate-700 pt-2 border-t border-slate-200/80">
+                        {activeBranch.address && (
+                          <div className="flex items-start gap-2">
+                            <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold text-slate-900 block">Dirección:</span>
+                              <span className="text-slate-600 leading-relaxed">
+                                {activeBranch.address}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {activeBranch.schedule && (
+                          <div className="flex items-start gap-2">
+                            <Clock className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold text-slate-900 block">
+                                Horario de Atención:
+                              </span>
+                              <span className="text-slate-600">{activeBranch.schedule}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {(activeBranch.phone || storeSettings.phone) && (
+                          <div className="flex items-start gap-2">
+                            <Phone className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold text-slate-900 block">
+                                Teléfono / WhatsApp:
+                              </span>
+                              <span className="text-slate-600 font-semibold">
+                                {activeBranch.phone || storeSettings.phone}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Direct Action Buttons: Open in Google Maps & WhatsApp */}
+                    <div className="space-y-2 pt-3 border-t border-slate-200/80">
+                      <a
+                        href={buildBranchExternalMapsUrl(activeBranch, displayStoreName)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+                      >
+                        <Navigation className="w-4 h-4" />
+                        <span>Cómo llegar en Google Maps</span>
+                        <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+                      </a>
+
+                      {(activeBranch.phone || storeSettings.whatsappOrderPhone || storeSettings.phone) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const rawPhone = (
+                              activeBranch.phone ||
+                              storeSettings.whatsappOrderPhone ||
+                              storeSettings.phone ||
+                              ''
+                            ).replace(/\D/g, '');
+                            const clean =
+                              rawPhone.length === 8 ? `504${rawPhone}` : rawPhone;
+                            const msg = `¡Hola! Vi la ubicación de *${
+                              activeBranch.name || displayStoreName
+                            }* en su Catálogo Digital y quisiera hacer una consulta.`;
+                            const url = clean
+                              ? `https://wa.me/${clean}?text=${encodeURIComponent(msg)}`
+                              : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+                            window.open(url, '_blank', 'noopener,noreferrer');
+                          }}
+                          className="w-full py-2 px-4 rounded-xl bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                        >
+                          <WhatsAppIcon className="w-4 h-4 fill-emerald-600" />
+                          <span>Escribir por WhatsApp a esta Tienda</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right: Embedded Interactive Google Map (7 cols) */}
+                  <div className="lg:col-span-7 min-h-[260px] sm:min-h-[310px] rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 relative shadow-inner">
+                    <iframe
+                      key={activeBranch.id}
+                      title={`Ubicación en Google Maps de ${
+                        activeBranch.name || displayStoreName
+                      }`}
+                      src={buildBranchEmbedMapUrl(activeBranch, displayStoreName)}
+                      className="w-full h-full min-h-[260px] sm:min-h-[310px] border-0"
+                      loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
       </main>
 
       {/* Floating Bottom Cart Bar (if cart has items) */}
@@ -836,6 +1138,27 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                         showDvolada ? 'focus:ring-orange-500' : 'focus:ring-emerald-500'
                       }`}
                     />
+                  </div>
+                )}
+
+                {shippingMethod === 'RETIRO' && effectiveLocations.length > 1 && (
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Selecciona en cuál Tienda / Sucursal recogerás tu pedido
+                    </label>
+                    <select
+                      value={pickupBranchId || activeBranch?.id || ''}
+                      onChange={(e) => setPickupBranchId(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      {effectiveLocations.map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.name}
+                          {loc.city ? ` (${loc.city})` : ''}
+                          {loc.address ? ` — ${loc.address}` : ''}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 )}
 

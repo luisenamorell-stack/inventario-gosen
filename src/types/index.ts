@@ -68,6 +68,7 @@ export type ActiveTab =
   | 'inventory'
   | 'warehouses'
   | 'sales'
+  | 'online-sales'
   | 'purchases'
   | 'audit'
   | 'price-checker'
@@ -81,6 +82,7 @@ export type ActiveTab =
 export const ALL_COMPANY_MODULES: ActiveTab[] = [
   'dashboard',
   'sales',
+  'online-sales',
   'inventory',
   'warehouses',
   'price-checker',
@@ -252,6 +254,7 @@ export interface CompanyTenant {
   notes?: string;
   allowedModules?: ActiveTab[];
   enableDeliveryDvolada?: boolean;
+  enableOnlineSales?: boolean;
   maxProducts?: number; // 0 or undefined = Ilimitado
   maxUsers?: number; // 0 or undefined = Ilimitado
   paymentHistory?: SubscriptionPaymentRecord[];
@@ -301,7 +304,7 @@ export interface ActivityLogRecord {
   userName: string;
   userRole: UserRole;
   action: string;
-  module: 'sales' | 'inventory' | 'warehouses' | 'purchases' | 'audit' | 'suppliers' | 'settings' | 'users' | 'catalog';
+  module: 'sales' | 'online-sales' | 'inventory' | 'warehouses' | 'purchases' | 'audit' | 'suppliers' | 'settings' | 'users' | 'catalog';
   details?: string;
 }
 
@@ -379,6 +382,55 @@ export interface CreditPaymentAbone {
   notes?: string;
 }
 
+export type OnlineSaleChannel =
+  | 'tiktok_live'
+  | 'tiktok_shop'
+  | 'facebook_live'
+  | 'instagram'
+  | 'whatsapp'
+  | 'website';
+
+export type OnlineShippingStatus =
+  | 'pending_pack'
+  | 'guide_ready'
+  | 'shipped'
+  | 'delivered'
+  | 'returned';
+
+export interface OnlineOrderMeta {
+  isOnlineSale: boolean;
+  channel: OnlineSaleChannel;
+  liveSessionName?: string;
+  socialHandle?: string;
+  recipientName: string;
+  recipientPhone: string;
+  departmentCity: string;
+  shippingAddress: string;
+  carrierName: string;
+  trackingNumber?: string;
+  shippingChargedToCustomer: number;
+  shippingGuideCost: number;
+  packagingCost?: number;
+  shippingStatus: OnlineShippingStatus;
+  codAmountToCollect?: number;
+  dispatchedAt?: string;
+  deliveredAt?: string;
+}
+
+export interface OnlineCustomerProfile {
+  id: string;
+  name: string;
+  socialHandle?: string;
+  channel: OnlineSaleChannel;
+  phone: string;
+  departmentCity: string;
+  shippingAddress: string;
+  preferredCarrier?: string;
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface SaleRecord {
   id: string;
   companyId?: string;
@@ -405,6 +457,7 @@ export interface SaleRecord {
   status: 'completed' | 'cancelled';
   warehouseId?: string;
   warehouseName?: string;
+  onlineOrder?: OnlineOrderMeta;
   cashier?: string;
   cashierRole?: UserRole;
   lastEditedBy?: string;
@@ -466,6 +519,9 @@ export interface StoreExpenseRecord {
   paymentMethod: 'cash' | 'transfer' | 'card';
   registeredBy: string;
   fromCashDrawer?: boolean;
+  isOnlineChannelExpense?: boolean;
+  onlineChannel?: OnlineSaleChannel;
+  liveSessionName?: string;
 }
 
 export interface CreditCollectionNoticeLog {
@@ -501,6 +557,7 @@ export interface POSFinanceStoreData {
   shifts: CashRegisterShift[];
   expenses: StoreExpenseRecord[];
   creditAccountControls?: Record<string, CreditAccountControlMeta>;
+  onlineCustomers?: OnlineCustomerProfile[];
   updatedAt: number;
 }
 
@@ -541,6 +598,19 @@ export interface PurchaseInvoice {
 
 export type PrinterPaperFormat = '80mm' | '58mm' | 'letter' | 'half-letter';
 
+export interface StoreBranchLocation {
+  id: string;
+  name: string;
+  address: string;
+  city?: string;
+  phone?: string;
+  schedule?: string;
+  googleMapsUrl?: string;
+  latitude?: number;
+  longitude?: number;
+  isMain?: boolean;
+}
+
 export interface StoreSettings {
   companyId?: string;
   storeName: string;
@@ -554,8 +624,11 @@ export interface StoreSettings {
   accessPassword?: string;
   whatsappOrderPhone?: string;
   catalogWelcomeMsg?: string;
+  showLocationsInCatalog?: boolean;
+  storeLocations?: StoreBranchLocation[];
   allowedModules?: ActiveTab[];
   enableDeliveryDvolada?: boolean;
+  enableOnlineSales?: boolean;
   maxProducts?: number;
   maxUsers?: number;
   updatedAt?: number;
@@ -566,3 +639,4 @@ export interface ToastMessage {
   message: string;
   type: 'success' | 'error' | 'warning' | 'info';
 }
+

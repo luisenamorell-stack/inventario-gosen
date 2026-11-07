@@ -47,6 +47,9 @@ const SuppliersView = lazy(() =>
 const SalesView = lazy(() =>
   import('./components/SalesView').then((m) => ({ default: m.SalesView }))
 );
+const OnlineSalesView = lazy(() =>
+  import('./components/OnlineSalesView').then((m) => ({ default: m.OnlineSalesView }))
+);
 const PurchasesView = lazy(() =>
   import('./components/PurchasesView').then((m) => ({ default: m.PurchasesView }))
 );
@@ -1017,7 +1020,7 @@ export const App: React.FC = () => {
             loadedModulesRef.current[`audit${keySuffix}`] = true;
             fetchAuditHistoryOnce(false, activeCompanyId).then(setAuditHistory).catch(console.warn);
           }
-        } else if (activeTab === 'sales') {
+        } else if (activeTab === 'sales' || activeTab === 'online-sales') {
           if (!loadedModulesRef.current[`sales${keySuffix}`]) {
             loadedModulesRef.current[`sales${keySuffix}`] = true;
             fetchSalesOnce(false, activeCompanyId).then(setSales).catch(console.warn);
@@ -1173,7 +1176,7 @@ export const App: React.FC = () => {
       setSuppliers(freshSuppliers);
       setPurchases(freshPurchases);
 
-      if (activeTab === 'sales' || activeTab === 'dashboard') {
+      if (activeTab === 'sales' || activeTab === 'online-sales' || activeTab === 'dashboard') {
         const [freshSales, freshPosFinance] = await Promise.all([
           fetchSalesOnce(true, activeCompanyId),
           fetchPOSFinanceDataOnce(activeCompanyId),
@@ -1278,6 +1281,10 @@ export const App: React.FC = () => {
           address: saved.address || prev.address,
           accessPassword: saved.adminPassword || prev.accessPassword,
           allowedModules: saved.allowedModules || prev.allowedModules || [...ALL_COMPANY_MODULES],
+          enableOnlineSales:
+            saved.enableOnlineSales !== undefined
+              ? saved.enableOnlineSales
+              : (saved.allowedModules || prev.allowedModules || ALL_COMPANY_MODULES).includes('online-sales'),
           enableDeliveryDvolada:
             saved.enableDeliveryDvolada !== undefined
               ? saved.enableDeliveryDvolada
@@ -2673,12 +2680,17 @@ export const App: React.FC = () => {
   }
 
   // Compute SaaS-level allowed modules and plan limits for the active client company
-  const companyAllowedModules: ActiveTab[] =
+  const rawCompanyAllowedModules: ActiveTab[] =
     activeCompanyTenant?.allowedModules && activeCompanyTenant.allowedModules.length > 0
       ? activeCompanyTenant.allowedModules
       : storeSettings.allowedModules && storeSettings.allowedModules.length > 0
       ? storeSettings.allowedModules
       : ALL_COMPANY_MODULES;
+
+  const companyAllowedModules: ActiveTab[] =
+    activeCompanyTenant?.enableOnlineSales === false || storeSettings.enableOnlineSales === false
+      ? rawCompanyAllowedModules.filter((m) => m !== 'online-sales')
+      : rawCompanyAllowedModules;
 
   const companyMaxProducts: number =
     activeCompanyTenant?.maxProducts ?? storeSettings.maxProducts ?? 0;
@@ -3037,6 +3049,22 @@ export const App: React.FC = () => {
                 onCancelSale={handleCancelSale}
                 onSavePOSFinanceData={handleSavePOSFinanceData}
                 onRecordCreditPayment={handleRecordCreditPayment}
+                showToast={showToast}
+              />
+            )}
+
+            {activeTabToRender === 'online-sales' && allowedTabsList.includes('online-sales') && (
+              <OnlineSalesView
+                inventory={inventory}
+                sales={sales}
+                storeSettings={storeSettings}
+                warehousesData={warehousesData}
+                userSession={userSession}
+                posFinanceData={posFinanceData}
+                onRecordSale={handleRecordSale}
+                onUpdateSale={handleUpdateSale}
+                onCancelSale={handleCancelSale}
+                onSavePOSFinanceData={handleSavePOSFinanceData}
                 showToast={showToast}
               />
             )}

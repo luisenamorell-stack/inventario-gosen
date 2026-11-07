@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { StoreSettings, PrinterPaperFormat } from '../types';
+import { StoreSettings, PrinterPaperFormat, StoreBranchLocation } from '../types';
 import { uploadStoreLogo } from '../firebase/storageService';
 import { PrinterConnectionManager } from './PrintFormatModal';
+import { StoreLocationsEditor } from './StoreLocationsEditor';
 import { generateMonogramIconDataUrl } from '../utils/dynamicPwaManifest';
 import {
   Store,
@@ -86,6 +87,12 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   );
   const [accessPassword, setAccessPassword] = useState(currentSettings.accessPassword || defaultPassword);
   const [showAccessPassword, setShowAccessPassword] = useState(false);
+  const [showLocationsInCatalog, setShowLocationsInCatalog] = useState<boolean>(
+    currentSettings.showLocationsInCatalog !== false
+  );
+  const [storeLocations, setStoreLocations] = useState<StoreBranchLocation[]>(
+    Array.isArray(currentSettings.storeLocations) ? currentSettings.storeLocations : []
+  );
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -109,6 +116,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     setDefaultPrinterFormat(currentSettings.defaultPrinterFormat || '80mm');
     setReceiptFooterText(currentSettings.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.');
     setAccessPassword(currentSettings.accessPassword || defaultPassword);
+    setShowLocationsInCatalog(currentSettings.showLocationsInCatalog !== false);
+    setStoreLocations(Array.isArray(currentSettings.storeLocations) ? currentSettings.storeLocations : []);
   }, [currentSettings, isGosen, defaultPassword]);
 
   const hasUnsavedChanges =
@@ -120,7 +129,9 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     storeRtn !== (currentSettings.storeRtn || '') ||
     defaultPrinterFormat !== (currentSettings.defaultPrinterFormat || '80mm') ||
     receiptFooterText !== (currentSettings.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.') ||
-    accessPassword !== (currentSettings.accessPassword || defaultPassword);
+    accessPassword !== (currentSettings.accessPassword || defaultPassword) ||
+    showLocationsInCatalog !== (currentSettings.showLocationsInCatalog !== false) ||
+    JSON.stringify(storeLocations) !== JSON.stringify(currentSettings.storeLocations || []);
 
   // File upload handler
   const handleProcessLogoFile = async (file: File) => {
@@ -219,6 +230,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
         defaultPrinterFormat,
         receiptFooterText: receiptFooterText.trim(),
         accessPassword: accessPassword.trim(),
+        showLocationsInCatalog,
+        storeLocations,
         updatedAt: Date.now(),
       };
 
@@ -815,6 +828,24 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Card 3B: Ubicación de la Tienda y Sucursales (Google Maps en Catálogo Digital) */}
+            <StoreLocationsEditor
+              storeName={storeName}
+              defaultAddress={address}
+              defaultPhone={phone}
+              showLocationsInCatalog={showLocationsInCatalog}
+              onToggleShowInCatalog={setShowLocationsInCatalog}
+              locations={storeLocations}
+              onChangeLocations={(next) => {
+                setStoreLocations(next);
+                const mainLoc = next.find((l) => l.isMain) || next[0];
+                if (mainLoc && mainLoc.address && !address.trim()) {
+                  setAddress(mainLoc.address);
+                }
+              }}
+              showToast={showToast}
+            />
 
             {/* Card 4: Seguridad & Contraseña de Acceso */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80 space-y-5">

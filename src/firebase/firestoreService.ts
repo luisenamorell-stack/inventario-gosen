@@ -21,6 +21,7 @@ import {
   Supplier,
   AuditHistoryRecord,
   StoreSettings,
+  StoreBranchLocation,
   SaleRecord,
   CreditPaymentAbone,
   CashOutMovement,
@@ -2658,6 +2659,36 @@ export function getDefaultStoreSettingsForCompany(companyId = getActiveCompanyId
   };
 }
 
+function sanitizeStoreLocationsList(raw: any): StoreBranchLocation[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item: any, idx: number): StoreBranchLocation | null => {
+      if (!item || typeof item !== 'object') return null;
+      const name = String(item.name || '').trim();
+      const address = String(item.address || '').trim();
+      const googleMapsUrl = String(item.googleMapsUrl || '').trim();
+      if (!name && !address && !googleMapsUrl) return null;
+      const branch: StoreBranchLocation = {
+        id: String(item.id || `branch_${idx + 1}`),
+        name: name || `Sucursal #${idx + 1}`,
+        address,
+        city: item.city ? String(item.city).trim() : '',
+        phone: item.phone ? String(item.phone).trim() : '',
+        schedule: item.schedule ? String(item.schedule).trim() : '',
+        googleMapsUrl,
+        isMain: Boolean(item.isMain),
+      };
+      if (typeof item.latitude === 'number' && !isNaN(item.latitude)) {
+        branch.latitude = item.latitude;
+      }
+      if (typeof item.longitude === 'number' && !isNaN(item.longitude)) {
+        branch.longitude = item.longitude;
+      }
+      return branch;
+    })
+    .filter((b): b is StoreBranchLocation => b !== null);
+}
+
 export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): Promise<StoreSettings> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedStoreSettings(slug);
@@ -2684,9 +2715,14 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
         logoUrl: safeLogo,
         phone: data.phone || '',
         address: data.address || '',
+        storeRtn: data.storeRtn || '',
+        defaultPrinterFormat: data.defaultPrinterFormat || '80mm',
+        receiptFooterText: data.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.',
         accessPassword: data.accessPassword || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
         whatsappOrderPhone: data.whatsappOrderPhone || '',
         catalogWelcomeMsg: data.catalogWelcomeMsg || '',
+        showLocationsInCatalog: data.showLocationsInCatalog !== undefined ? Boolean(data.showLocationsInCatalog) : true,
+        storeLocations: sanitizeStoreLocationsList(data.storeLocations),
         allowedModules:
           Array.isArray(data.allowedModules) && data.allowedModules.length > 0
             ? data.allowedModules
@@ -2695,6 +2731,8 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           data.enableDeliveryDvolada !== undefined
             ? Boolean(data.enableDeliveryDvolada)
             : slug === 'gosen',
+        enableOnlineSales:
+          data.enableOnlineSales !== undefined ? Boolean(data.enableOnlineSales) : true,
         maxProducts: Math.max(0, Number(data.maxProducts) || 0),
         maxUsers: Math.max(0, Number(data.maxUsers) || 0),
         updatedAt: Number(data.updatedAt) || Date.now(),
@@ -2720,11 +2758,14 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           accessPassword: cData.adminPassword || 'ADMIN2026',
           whatsappOrderPhone: cData.phone || '',
           catalogWelcomeMsg: '',
+          showLocationsInCatalog: true,
+          storeLocations: [],
           allowedModules:
             Array.isArray(cData.allowedModules) && cData.allowedModules.length > 0
               ? cData.allowedModules
               : ALL_COMPANY_MODULES,
           enableDeliveryDvolada: Boolean(cData.enableDeliveryDvolada === true),
+          enableOnlineSales: cData.enableOnlineSales !== undefined ? Boolean(cData.enableOnlineSales) : true,
           maxProducts: Math.max(0, Number(cData.maxProducts) || 0),
           maxUsers: Math.max(0, Number(cData.maxUsers) || 0),
           updatedAt: Date.now(),
@@ -2772,9 +2813,14 @@ export function subscribeToStoreSettings(
           logoUrl: safeLogo,
           phone: data.phone || '',
           address: data.address || '',
+          storeRtn: data.storeRtn || '',
+          defaultPrinterFormat: data.defaultPrinterFormat || '80mm',
+          receiptFooterText: data.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.',
           accessPassword: data.accessPassword || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
           whatsappOrderPhone: data.whatsappOrderPhone || '',
           catalogWelcomeMsg: data.catalogWelcomeMsg || '',
+          showLocationsInCatalog: data.showLocationsInCatalog !== undefined ? Boolean(data.showLocationsInCatalog) : true,
+          storeLocations: sanitizeStoreLocationsList(data.storeLocations),
           allowedModules:
             Array.isArray(data.allowedModules) && data.allowedModules.length > 0
               ? data.allowedModules
@@ -2783,6 +2829,8 @@ export function subscribeToStoreSettings(
             data.enableDeliveryDvolada !== undefined
               ? Boolean(data.enableDeliveryDvolada)
               : slug === 'gosen',
+          enableOnlineSales:
+            data.enableOnlineSales !== undefined ? Boolean(data.enableOnlineSales) : true,
           maxProducts: Math.max(0, Number(data.maxProducts) || 0),
           maxUsers: Math.max(0, Number(data.maxUsers) || 0),
           updatedAt: Number(data.updatedAt) || Date.now(),
@@ -2807,6 +2855,7 @@ export async function saveStoreSettingsToFirestore(
   const docRef = doc(db, 'settings', getStoreProfileDocId(slug));
   const rawLogo = settings.logoUrl?.trim() || '';
   const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
+  const sanitizedLocations = sanitizeStoreLocationsList(settings.storeLocations);
   const payload: any = {
     companyId: slug,
     storeName: settings.storeName.trim() || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
@@ -2814,9 +2863,14 @@ export async function saveStoreSettingsToFirestore(
     logoUrl: safeLogo,
     phone: settings.phone?.trim() || '',
     address: settings.address?.trim() || '',
+    storeRtn: settings.storeRtn?.trim() || '',
+    defaultPrinterFormat: settings.defaultPrinterFormat || '80mm',
+    receiptFooterText: settings.receiptFooterText?.trim() || '¡Gracias por su compra! Vuelva pronto.',
     accessPassword: settings.accessPassword?.trim() || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
     whatsappOrderPhone: settings.whatsappOrderPhone?.trim() || '',
     catalogWelcomeMsg: settings.catalogWelcomeMsg?.trim() || '',
+    showLocationsInCatalog: settings.showLocationsInCatalog !== false,
+    storeLocations: sanitizedLocations,
     updatedAt: Date.now(),
   };
 
@@ -2825,6 +2879,9 @@ export async function saveStoreSettingsToFirestore(
   }
   if (settings.enableDeliveryDvolada !== undefined) {
     payload.enableDeliveryDvolada = Boolean(settings.enableDeliveryDvolada);
+  }
+  if (settings.enableOnlineSales !== undefined) {
+    payload.enableOnlineSales = Boolean(settings.enableOnlineSales);
   }
   if (settings.maxProducts !== undefined) {
     payload.maxProducts = Math.max(0, Number(settings.maxProducts) || 0);
@@ -2837,7 +2894,7 @@ export async function saveStoreSettingsToFirestore(
   syncCollectionsWithBackendHub({ settings: { ...settings, ...payload } }, slug).catch(() => {});
 
   try {
-    await setDoc(docRef, payload, { merge: true });
+    await setDoc(docRef, stripUndefinedDeep(payload), { merge: true });
     // Also keep the company tenant record in sync if it exists
     const compRef = doc(db, 'companies', slug);
     await setDoc(
@@ -2935,6 +2992,31 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
       status: data.status === 'cancelled' ? 'cancelled' : 'completed',
       warehouseId: data.warehouseId ? String(data.warehouseId) : undefined,
       warehouseName: data.warehouseName ? String(data.warehouseName) : undefined,
+      onlineOrder:
+        data.onlineOrder && typeof data.onlineOrder === 'object'
+          ? {
+              isOnlineSale: Boolean(data.onlineOrder.isOnlineSale),
+              channel: data.onlineOrder.channel || 'tiktok_live',
+              liveSessionName: data.onlineOrder.liveSessionName || '',
+              socialHandle: data.onlineOrder.socialHandle || '',
+              recipientName: data.onlineOrder.recipientName || data.customerName || 'Cliente Online',
+              recipientPhone: data.onlineOrder.recipientPhone || data.customerPhone || '',
+              departmentCity: data.onlineOrder.departmentCity || '',
+              shippingAddress: data.onlineOrder.shippingAddress || '',
+              carrierName: data.onlineOrder.carrierName || '',
+              trackingNumber: data.onlineOrder.trackingNumber || '',
+              shippingChargedToCustomer: Number(data.onlineOrder.shippingChargedToCustomer) || 0,
+              shippingGuideCost: Number(data.onlineOrder.shippingGuideCost) || 0,
+              packagingCost: Number(data.onlineOrder.packagingCost) || 0,
+              shippingStatus: data.onlineOrder.shippingStatus || 'pending_pack',
+              codAmountToCollect:
+                data.onlineOrder.codAmountToCollect !== undefined
+                  ? Number(data.onlineOrder.codAmountToCollect)
+                  : undefined,
+              dispatchedAt: data.onlineOrder.dispatchedAt || undefined,
+              deliveredAt: data.onlineOrder.deliveredAt || undefined,
+            }
+          : undefined,
       cashier: data.cashier || 'Administrador',
       cashierRole:
         data.cashierRole === 'admin' || data.cashierRole === 'collaborator'
@@ -3064,6 +3146,7 @@ export async function recordSaleInFirestore(
     status: 'completed',
     warehouseId: saleData.warehouseId ? String(saleData.warehouseId).trim().slice(0, 100) : undefined,
     warehouseName: saleData.warehouseName ? String(saleData.warehouseName).trim().slice(0, 150) : undefined,
+    onlineOrder: saleData.onlineOrder ? saleData.onlineOrder : undefined,
     cashier: String(saleData.cashier || 'Administrador').trim().slice(0, 100),
     cashierRole:
       saleData.cashierRole === 'admin' || saleData.cashierRole === 'collaborator'
@@ -3296,6 +3379,8 @@ export async function updateSaleInFirestore(
     status: updatedSale.status === 'cancelled' ? 'cancelled' : 'completed',
     warehouseId: updatedSale.warehouseId || originalSale.warehouseId || undefined,
     warehouseName: updatedSale.warehouseName || originalSale.warehouseName || undefined,
+    onlineOrder:
+      updatedSale.onlineOrder !== undefined ? updatedSale.onlineOrder : originalSale.onlineOrder,
     cashier: String(updatedSale.cashier || originalSale.cashier || 'Administrador').trim().slice(0, 100),
     cashierRole: updatedSale.cashierRole || originalSale.cashierRole || 'admin',
     lastEditedBy: String(updatedSale.lastEditedBy || 'Administrador').slice(0, 150),
@@ -4294,6 +4379,12 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
       data.enableDeliveryDvolada !== undefined
         ? Boolean(data.enableDeliveryDvolada)
         : slug === 'gosen',
+    enableOnlineSales:
+      data.enableOnlineSales !== undefined
+        ? Boolean(data.enableOnlineSales)
+        : Array.isArray(data.allowedModules)
+        ? data.allowedModules.includes('online-sales')
+        : true,
     maxProducts: Math.max(0, Number(data.maxProducts) || 0),
     maxUsers: Math.max(0, Number(data.maxUsers) || 0),
     paymentHistory: parsedHistory,
@@ -4404,6 +4495,10 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     notes: (company.notes || '').trim(),
     allowedModules: safeAllowedModules,
     enableDeliveryDvolada: safeDeliveryDvolada,
+    enableOnlineSales:
+      company.enableOnlineSales !== undefined
+        ? Boolean(company.enableOnlineSales)
+        : safeAllowedModules.includes('online-sales'),
     maxProducts: safeMaxProducts,
     maxUsers: safeMaxUsers,
     paymentHistory: safePaymentHistory,
@@ -5099,6 +5194,9 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
           : 'cash',
         registeredBy: String(e.registeredBy || 'Administrador'),
         fromCashDrawer: Boolean(e.fromCashDrawer),
+        isOnlineChannelExpense: Boolean(e.isOnlineChannelExpense),
+        onlineChannel: e.onlineChannel || undefined,
+        liveSessionName: e.liveSessionName ? String(e.liveSessionName) : undefined,
       }))
     : [];
 
@@ -5107,11 +5205,14 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
       ? raw.creditAccountControls
       : {};
 
+  const onlineCustomers = Array.isArray(raw.onlineCustomers) ? raw.onlineCustomers : [];
+
   return {
     companyId: slug,
     shifts: shifts.sort((a, b) => b.openedAt - a.openedAt),
     expenses: expenses.sort((a, b) => b.timestamp - a.timestamp),
     creditAccountControls,
+    onlineCustomers,
     updatedAt: Number(raw.updatedAt) || Date.now(),
   };
 }
@@ -5175,6 +5276,7 @@ export async function savePOSFinanceDataToFirestore(
       data.creditAccountControls && typeof data.creditAccountControls === 'object'
         ? data.creditAccountControls
         : {},
+    onlineCustomers: Array.isArray(data.onlineCustomers) ? data.onlineCustomers.slice(0, 1000) : [],
     updatedAt: Date.now(),
   };
 
@@ -5189,6 +5291,7 @@ export async function savePOSFinanceDataToFirestore(
         shifts: normalized.shifts,
         expenses: normalized.expenses,
         creditAccountControls: normalized.creditAccountControls,
+        onlineCustomers: normalized.onlineCustomers,
         updatedAt: normalized.updatedAt,
       }),
       { merge: true }

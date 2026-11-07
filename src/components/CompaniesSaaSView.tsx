@@ -74,6 +74,7 @@ import {
   Layers,
   Zap,
   Calendar,
+  Video,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
@@ -90,6 +91,7 @@ export const SAAS_MODULE_OPTIONS: {
 }[] = [
   { id: 'dashboard', label: 'Dashboard y Ganancias', desc: 'Métricas financieras, utilidad neta y resumen', icon: PieChart },
   { id: 'sales', label: 'Ventas y Facturación (POS)', desc: 'Caja registradora, tickets y cobros', icon: ShoppingCart },
+  { id: 'online-sales', label: 'Ventas Online / Live (TikTok y Redes)', desc: 'Control de ventas por redes, clientes, envíos, costo de guías y ganancias', icon: Video },
   { id: 'inventory', label: 'Control de Inventario', desc: 'Artículos, fotos, tallas y carga Excel', icon: List },
   { id: 'warehouses', label: 'Bodegas y Traslados', desc: 'Múltiples bodegas, sucursales y traslados con comprobante', icon: Package },
   { id: 'price-checker', label: 'Consultor de Precios', desc: 'Escáner rápido de precios en mostrador', icon: Tag },
@@ -137,6 +139,7 @@ export const SAAS_PLAN_PRESETS: {
     modules: [
       'dashboard',
       'sales',
+      'online-sales',
       'inventory',
       'warehouses',
       'price-checker',
@@ -147,7 +150,7 @@ export const SAAS_PLAN_PRESETS: {
       'settings',
     ],
     enableDvolada: false,
-    desc: 'Incluye Bodegas y Traslados, Catálogo QR, Compras y Proveedores (Hasta 1,500 prod. y 5 colab.)',
+    desc: 'Incluye Ventas Online/Live, Bodegas, Catálogo QR, Compras y Proveedores (Hasta 1,500 prod. y 5 colab.)',
   },
   {
     id: 'empresarial',
@@ -159,7 +162,7 @@ export const SAAS_PLAN_PRESETS: {
     maxUsers: 0,
     modules: [...ALL_COMPANY_MODULES],
     enableDvolada: true,
-    desc: 'Los 11 módulos + Auditoría Física + Bitácora + D’Volada + Productos/Usuarios ilimitados',
+    desc: 'Todos los módulos + Ventas Online/Live + Auditoría Física + Bitácora + D’Volada + Productos/Usuarios ilimitados',
   },
   {
     id: 'prueba15',
@@ -859,6 +862,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       await onSaveCompany({
         ...permissionsCompany,
         allowedModules: permModules,
+        enableOnlineSales: permModules.includes('online-sales'),
         enableDeliveryDvolada: permDeliveryDvolada,
         maxProducts: Math.max(0, Number(permMaxProducts) || 0),
         maxUsers: Math.max(0, Number(permMaxUsers) || 0),
@@ -872,6 +876,34 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       showToast('Error al guardar permisos: ' + (err?.message || 'desconocido'), 'error');
     } finally {
       setIsSavingPerms(false);
+    }
+  };
+
+  const handleQuickToggleOnlineSalesForClient = async (comp: CompanyTenant) => {
+    const currentMods =
+      Array.isArray(comp.allowedModules) && comp.allowedModules.length > 0
+        ? [...comp.allowedModules]
+        : [...ALL_COMPANY_MODULES];
+    const currentlyActive =
+      comp.enableOnlineSales !== false && currentMods.includes('online-sales');
+    const nextMods: ActiveTab[] = currentlyActive
+      ? currentMods.filter((m) => m !== 'online-sales')
+      : [...currentMods, 'online-sales'];
+
+    try {
+      await onSaveCompany({
+        ...comp,
+        allowedModules: nextMods,
+        enableOnlineSales: !currentlyActive,
+      });
+      showToast(
+        !currentlyActive
+          ? `🔴 Panel "Ventas Online / Live (TikTok)" ACTIVADO para "${comp.name}"`
+          : `⚪ Panel "Ventas Online / Live" DESACTIVADO para "${comp.name}"`,
+        !currentlyActive ? 'success' : 'info'
+      );
+    } catch (err: any) {
+      showToast('Error al actualizar módulo Ventas Online: ' + (err?.message || 'desconocido'), 'error');
     }
   };
 
@@ -1309,6 +1341,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         address: address.trim(),
         notes: notes.trim(),
         allowedModules,
+        enableOnlineSales: allowedModules.includes('online-sales'),
         enableDeliveryDvolada,
         maxProducts: Math.max(0, Number(maxProducts) || 0),
         maxUsers: Math.max(0, Number(maxUsers) || 0),
@@ -2410,6 +2443,30 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                         <Truck className="w-3 h-3" /> D&apos;VOLADA
                       </span>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={() => handleQuickToggleOnlineSalesForClient(comp)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 border transition-colors cursor-pointer ${
+                        comp.enableOnlineSales !== false &&
+                        (!Array.isArray(comp.allowedModules) ||
+                          comp.allowedModules.length === 0 ||
+                          comp.allowedModules.includes('online-sales'))
+                          ? 'bg-rose-100 text-rose-800 border-rose-300 hover:bg-rose-200'
+                          : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                      }`}
+                      title="Activar o desactivar con 1 clic el panel de Ventas Online / Live (TikTok, Redes Sociales y Guías) para este cliente"
+                    >
+                      <Video className="w-3 h-3" />
+                      <span>
+                        {comp.enableOnlineSales !== false &&
+                        (!Array.isArray(comp.allowedModules) ||
+                          comp.allowedModules.length === 0 ||
+                          comp.allowedModules.includes('online-sales'))
+                          ? 'Ventas Online / Live: ON'
+                          : 'Ventas Online / Live: OFF'}
+                      </span>
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
@@ -3325,11 +3382,45 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                 </div>
               </div>
 
-              {/* Special Integration Toggle: Delivery D'VOLADA */}
-              <div className="pt-2 border-t border-slate-100">
-                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 block mb-2">
-                  Funciones Especiales de Catálogo Digital
+              {/* Special Integration Toggle: Ventas Online / Live (TikTok & Redes Sociales) */}
+              <div className="pt-2 border-t border-slate-100 space-y-2.5">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 block">
+                  Funciones Especiales de Ventas Online y Catálogo
                 </span>
+                <label
+                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
+                    permModules.includes('online-sales')
+                      ? 'bg-rose-50/80 border-rose-300 text-slate-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-500'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                        permModules.includes('online-sales')
+                          ? 'bg-rose-600 text-white'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <Video className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="font-black text-xs text-slate-900">
+                        Panel de Ventas Online / Live (TikTok, Redes Sociales y Control de Guías)
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Activa el módulo para registrar pedidos de TikTok Live/Redes, descontar de la bodega seleccionada, registrar clientes, destinos, costos de guías, gastos de pauta y ganancias netas.
+                      </p>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={permModules.includes('online-sales')}
+                    onChange={() => handleToggleQuickPermModule('online-sales')}
+                    className="rounded text-rose-600 focus:ring-rose-500 w-5 h-5 cursor-pointer shrink-0"
+                  />
+                </label>
+
                 <label
                   className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
                     permDeliveryDvolada
@@ -4321,6 +4412,31 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                     );
                   })}
                 </div>
+
+                {/* Ventas Online / Live (TikTok & Redes) toggle */}
+                <label
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none text-xs ${
+                    allowedModules.includes('online-sales')
+                      ? 'bg-rose-50 border-rose-300 text-rose-950'
+                      : 'bg-white border-slate-200 text-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={allowedModules.includes('online-sales')}
+                      onChange={() => handleToggleFormModule('online-sales')}
+                      className="rounded text-rose-600 focus:ring-rose-500 w-3.5 h-3.5 cursor-pointer shrink-0"
+                    />
+                    <Video className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span className="font-bold">
+                      Habilitar Panel de Ventas Online / Live (TikTok, Redes, Guías y Ganancias)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
+                    {allowedModules.includes('online-sales') ? 'Activado' : 'Oculto'}
+                  </span>
+                </label>
 
                 {/* Delivery D'VOLADA toggle */}
                 <label

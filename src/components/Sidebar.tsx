@@ -25,7 +25,8 @@ import {
   ShieldCheck,
   Building2,
   Key,
-  EyeOff
+  EyeOff,
+  Video
 } from 'lucide-react';
 import { MiAppHNCashRegisterIcon } from './MiAppHNLogo';
 
@@ -121,6 +122,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Ventas (POS)',
       icon: ShoppingCart,
       activeColor: 'bg-emerald-600 text-white',
+    },
+    {
+      id: 'online-sales' as ActiveTab,
+      label: 'Ventas Online / Live',
+      icon: Video,
+      activeColor: 'bg-rose-600 text-white',
     },
     {
       id: 'inventory' as ActiveTab,

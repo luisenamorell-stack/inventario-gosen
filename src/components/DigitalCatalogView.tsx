@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { StoreSettings, Product, getOfficialAppBaseUrl } from '../types';
+import { StoreSettings, Product, StoreBranchLocation, getOfficialAppBaseUrl } from '../types';
 import {
   Share2,
   Copy,
@@ -20,6 +20,7 @@ import {
   Truck
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
+import { StoreLocationsEditor } from './StoreLocationsEditor';
 
 interface DigitalCatalogViewProps {
   storeSettings: StoreSettings;
@@ -47,6 +48,22 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
     storeSettings.catalogWelcomeMsg ||
       '¡Bienvenido a nuestro catálogo digital! Selecciona tus productos disponibles y haz tu pedido directamente por WhatsApp.'
   );
+  const [showLocationsInCatalog, setShowLocationsInCatalog] = useState<boolean>(
+    storeSettings.showLocationsInCatalog !== false
+  );
+  const [storeLocations, setStoreLocations] = useState<StoreBranchLocation[]>(
+    Array.isArray(storeSettings.storeLocations) ? storeSettings.storeLocations : []
+  );
+
+  useEffect(() => {
+    setWhatsappPhone(storeSettings.whatsappOrderPhone || storeSettings.phone || '');
+    setWelcomeMsg(
+      storeSettings.catalogWelcomeMsg ||
+        '¡Bienvenido a nuestro catálogo digital! Selecciona tus productos disponibles y haz tu pedido directamente por WhatsApp.'
+    );
+    setShowLocationsInCatalog(storeSettings.showLocationsInCatalog !== false);
+    setStoreLocations(Array.isArray(storeSettings.storeLocations) ? storeSettings.storeLocations : []);
+  }, [storeSettings]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -129,8 +146,10 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
         ...storeSettings,
         whatsappOrderPhone: whatsappPhone.trim(),
         catalogWelcomeMsg: welcomeMsg.trim(),
+        showLocationsInCatalog,
+        storeLocations,
       });
-      if (showToast) showToast('¡Ajustes del Catálogo Digital guardados exitosamente!', 'success');
+      if (showToast) showToast('¡Ajustes y ubicaciones del Catálogo Digital guardados exitosamente!', 'success');
     } catch (err: any) {
       if (showToast) showToast(`Error al guardar: ${err?.message || err}`, 'error');
     } finally {
@@ -316,6 +335,31 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+
+          {/* Card 3: Ubicación de la Tienda y Sucursales (Google Maps en Catálogo Digital) */}
+          <div className="space-y-3">
+            <StoreLocationsEditor
+              storeName={storeSettings.storeName || 'Mi Tienda'}
+              defaultAddress={storeSettings.address || ''}
+              defaultPhone={whatsappPhone || storeSettings.phone || ''}
+              showLocationsInCatalog={showLocationsInCatalog}
+              onToggleShowInCatalog={setShowLocationsInCatalog}
+              locations={storeLocations}
+              onChangeLocations={setStoreLocations}
+              showToast={showToast}
+            />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={handleSaveCatalogSettings}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center gap-2 cursor-pointer transition-all shadow-sm"
+              >
+                <Save className="w-4 h-4" />
+                <span>{isSaving ? 'Guardando...' : 'Guardar Ubicaciones y Mapa del Catálogo'}</span>
+              </button>
+            </div>
           </div>
         </div>
 
