@@ -2692,7 +2692,7 @@ function sanitizeStoreLocationsList(raw: any): StoreBranchLocation[] {
 export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): Promise<StoreSettings> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedStoreSettings(slug);
-  const hubSync = await syncCollectionsWithBackendHub(cached ? { settings: cached } : {}, slug);
+  const hubSync = await syncCollectionsWithBackendHub({}, slug);
   if (isFirestoreQuotaExhausted()) {
     if (hubSync?.settings) {
       setCachedStoreSettings(hubSync.settings, slug);
@@ -2708,6 +2708,22 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
       const data = snapshot.data();
       const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
       const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
+      const rawAllowedModules: ActiveTab[] =
+        Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+          ? data.allowedModules
+          : ALL_COMPANY_MODULES;
+      const isOnlineSalesEnabled =
+        data.enableOnlineSales !== undefined
+          ? Boolean(data.enableOnlineSales)
+          : Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+          ? data.allowedModules.includes('online-sales')
+          : true;
+      const effectiveAllowedModules: ActiveTab[] = isOnlineSalesEnabled
+        ? rawAllowedModules.includes('online-sales')
+          ? rawAllowedModules
+          : [...rawAllowedModules, 'online-sales']
+        : rawAllowedModules.filter((m: ActiveTab) => m !== 'online-sales');
+
       const settings: StoreSettings = {
         companyId: slug,
         storeName: data.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
@@ -2723,16 +2739,12 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
         catalogWelcomeMsg: data.catalogWelcomeMsg || '',
         showLocationsInCatalog: data.showLocationsInCatalog !== undefined ? Boolean(data.showLocationsInCatalog) : true,
         storeLocations: sanitizeStoreLocationsList(data.storeLocations),
-        allowedModules:
-          Array.isArray(data.allowedModules) && data.allowedModules.length > 0
-            ? data.allowedModules
-            : ALL_COMPANY_MODULES,
+        allowedModules: effectiveAllowedModules,
         enableDeliveryDvolada:
           data.enableDeliveryDvolada !== undefined
             ? Boolean(data.enableDeliveryDvolada)
             : slug === 'gosen',
-        enableOnlineSales:
-          data.enableOnlineSales !== undefined ? Boolean(data.enableOnlineSales) : true,
+        enableOnlineSales: isOnlineSalesEnabled,
         maxProducts: Math.max(0, Number(data.maxProducts) || 0),
         maxUsers: Math.max(0, Number(data.maxUsers) || 0),
         updatedAt: Number(data.updatedAt) || Date.now(),
@@ -2748,6 +2760,22 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
         const cData = compSnap.data();
         const rawLogo = cData.logoUrl || '';
         const safeLogo = rawLogo === '/store-logo.jpg' ? '' : rawLogo;
+        const rawAllowedModules: ActiveTab[] =
+          Array.isArray(cData.allowedModules) && cData.allowedModules.length > 0
+            ? cData.allowedModules
+            : ALL_COMPANY_MODULES;
+        const isOnlineSalesEnabled =
+          cData.enableOnlineSales !== undefined
+            ? Boolean(cData.enableOnlineSales)
+            : Array.isArray(cData.allowedModules) && cData.allowedModules.length > 0
+            ? cData.allowedModules.includes('online-sales')
+            : true;
+        const effectiveAllowedModules: ActiveTab[] = isOnlineSalesEnabled
+          ? rawAllowedModules.includes('online-sales')
+            ? rawAllowedModules
+            : [...rawAllowedModules, 'online-sales']
+          : rawAllowedModules.filter((m: ActiveTab) => m !== 'online-sales');
+
         const fallbackSettings: StoreSettings = {
           companyId: slug,
           storeName: cData.name || slug.toUpperCase(),
@@ -2760,12 +2788,9 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           catalogWelcomeMsg: '',
           showLocationsInCatalog: true,
           storeLocations: [],
-          allowedModules:
-            Array.isArray(cData.allowedModules) && cData.allowedModules.length > 0
-              ? cData.allowedModules
-              : ALL_COMPANY_MODULES,
+          allowedModules: effectiveAllowedModules,
           enableDeliveryDvolada: Boolean(cData.enableDeliveryDvolada === true),
-          enableOnlineSales: cData.enableOnlineSales !== undefined ? Boolean(cData.enableOnlineSales) : true,
+          enableOnlineSales: isOnlineSalesEnabled,
           maxProducts: Math.max(0, Number(cData.maxProducts) || 0),
           maxUsers: Math.max(0, Number(cData.maxUsers) || 0),
           updatedAt: Date.now(),
@@ -2806,7 +2831,23 @@ export function subscribeToStoreSettings(
         const data = snapshot.data();
         const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
         const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
-        onData({
+        const rawAllowedModules: ActiveTab[] =
+          Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+            ? data.allowedModules
+            : ALL_COMPANY_MODULES;
+        const isOnlineSalesEnabled =
+          data.enableOnlineSales !== undefined
+            ? Boolean(data.enableOnlineSales)
+            : Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+            ? data.allowedModules.includes('online-sales')
+            : true;
+        const effectiveAllowedModules: ActiveTab[] = isOnlineSalesEnabled
+          ? rawAllowedModules.includes('online-sales')
+            ? rawAllowedModules
+            : [...rawAllowedModules, 'online-sales']
+          : rawAllowedModules.filter((m: ActiveTab) => m !== 'online-sales');
+
+        const liveSettings: StoreSettings = {
           companyId: slug,
           storeName: data.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
           tagline: data.tagline || 'Control de Inventario y Ventas',
@@ -2821,20 +2862,18 @@ export function subscribeToStoreSettings(
           catalogWelcomeMsg: data.catalogWelcomeMsg || '',
           showLocationsInCatalog: data.showLocationsInCatalog !== undefined ? Boolean(data.showLocationsInCatalog) : true,
           storeLocations: sanitizeStoreLocationsList(data.storeLocations),
-          allowedModules:
-            Array.isArray(data.allowedModules) && data.allowedModules.length > 0
-              ? data.allowedModules
-              : ALL_COMPANY_MODULES,
+          allowedModules: effectiveAllowedModules,
           enableDeliveryDvolada:
             data.enableDeliveryDvolada !== undefined
               ? Boolean(data.enableDeliveryDvolada)
               : slug === 'gosen',
-          enableOnlineSales:
-            data.enableOnlineSales !== undefined ? Boolean(data.enableOnlineSales) : true,
+          enableOnlineSales: isOnlineSalesEnabled,
           maxProducts: Math.max(0, Number(data.maxProducts) || 0),
           maxUsers: Math.max(0, Number(data.maxUsers) || 0),
           updatedAt: Number(data.updatedAt) || Date.now(),
-        });
+        };
+        setCachedStoreSettings(liveSettings, slug);
+        onData(liveSettings);
       } else {
         onData(getDefaultStoreSettingsForCompany(slug));
       }
@@ -4352,6 +4391,22 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
       }))
     : [];
 
+  const rawAllowedModules: ActiveTab[] =
+    Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+      ? (data.allowedModules as ActiveTab[])
+      : ALL_COMPANY_MODULES;
+  const isOnlineSalesEnabled =
+    data.enableOnlineSales !== undefined
+      ? Boolean(data.enableOnlineSales)
+      : Array.isArray(data.allowedModules) && data.allowedModules.length > 0
+      ? data.allowedModules.includes('online-sales')
+      : true;
+  const effectiveAllowedModules: ActiveTab[] = isOnlineSalesEnabled
+    ? rawAllowedModules.includes('online-sales')
+      ? rawAllowedModules
+      : [...rawAllowedModules, 'online-sales']
+    : rawAllowedModules.filter((m) => m !== 'online-sales');
+
   return {
     id: slug,
     name: data.name || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
@@ -4371,20 +4426,12 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
     tagline: data.tagline || 'Control de Inventario y Ventas',
     address: data.address || '',
     notes: data.notes || '',
-    allowedModules:
-      Array.isArray(data.allowedModules) && data.allowedModules.length > 0
-        ? (data.allowedModules as ActiveTab[])
-        : ALL_COMPANY_MODULES,
+    allowedModules: effectiveAllowedModules,
     enableDeliveryDvolada:
       data.enableDeliveryDvolada !== undefined
         ? Boolean(data.enableDeliveryDvolada)
         : slug === 'gosen',
-    enableOnlineSales:
-      data.enableOnlineSales !== undefined
-        ? Boolean(data.enableOnlineSales)
-        : Array.isArray(data.allowedModules)
-        ? data.allowedModules.includes('online-sales')
-        : true,
+    enableOnlineSales: isOnlineSalesEnabled,
     maxProducts: Math.max(0, Number(data.maxProducts) || 0),
     maxUsers: Math.max(0, Number(data.maxUsers) || 0),
     paymentHistory: parsedHistory,
@@ -4395,10 +4442,27 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
 
 export async function fetchCompaniesOnce(_forceRefresh = false): Promise<CompanyTenant[]> {
   const cached = getCachedCompanies();
+  const hubSync = await syncCollectionsWithBackendHub({}, 'gosen').catch(() => null);
   try {
     const snapshot = await getDocs(collection(db, 'companies'));
     const map = new Map<string, CompanyTenant>();
     map.set('gosen', { ...DEFAULT_GOSEN_COMPANY });
+
+    if (cached && cached.length > 0) {
+      cached.forEach((c) => {
+        const s = normalizeCompanySlug(c.slug || c.id);
+        map.set(s, sanitizeCompanyDoc(s, c));
+      });
+    }
+
+    if (Array.isArray(hubSync?.companies) && hubSync.companies.length > 0) {
+      hubSync.companies.forEach((c) => {
+        if (c && (c.slug || c.id)) {
+          const s = normalizeCompanySlug(c.slug || c.id);
+          map.set(s, sanitizeCompanyDoc(s, c));
+        }
+      });
+    }
 
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
@@ -4415,6 +4479,25 @@ export async function fetchCompaniesOnce(_forceRefresh = false): Promise<Company
     setCachedCompanies(list);
     return list;
   } catch (error) {
+    if (Array.isArray(hubSync?.companies) && hubSync.companies.length > 0) {
+      const map = new Map<string, CompanyTenant>();
+      map.set('gosen', { ...DEFAULT_GOSEN_COMPANY });
+      if (cached && cached.length > 0) {
+        cached.forEach((c) => {
+          const s = normalizeCompanySlug(c.slug || c.id);
+          map.set(s, sanitizeCompanyDoc(s, c));
+        });
+      }
+      hubSync.companies.forEach((c) => {
+        if (c && (c.slug || c.id)) {
+          const s = normalizeCompanySlug(c.slug || c.id);
+          map.set(s, sanitizeCompanyDoc(s, c));
+        }
+      });
+      const list = Array.from(map.values());
+      setCachedCompanies(list);
+      return list;
+    }
     if (cached && cached.length > 0) return cached;
     return [DEFAULT_GOSEN_COMPANY];
   }
@@ -4460,10 +4543,20 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
 
   const rawLogo = (company.logoUrl || '').trim();
   const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
-  const safeAllowedModules: ActiveTab[] =
+  const rawAllowedModules: ActiveTab[] =
     Array.isArray(company.allowedModules) && company.allowedModules.length > 0
       ? company.allowedModules
       : ALL_COMPANY_MODULES;
+  const safeEnableOnlineSales =
+    company.enableOnlineSales !== undefined
+      ? Boolean(company.enableOnlineSales)
+      : rawAllowedModules.includes('online-sales');
+  const safeAllowedModules: ActiveTab[] = safeEnableOnlineSales
+    ? rawAllowedModules.includes('online-sales')
+      ? rawAllowedModules
+      : [...rawAllowedModules, 'online-sales']
+    : rawAllowedModules.filter((m) => m !== 'online-sales');
+
   const safeDeliveryDvolada =
     company.enableDeliveryDvolada !== undefined
       ? Boolean(company.enableDeliveryDvolada)
@@ -4495,16 +4588,48 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     notes: (company.notes || '').trim(),
     allowedModules: safeAllowedModules,
     enableDeliveryDvolada: safeDeliveryDvolada,
-    enableOnlineSales:
-      company.enableOnlineSales !== undefined
-        ? Boolean(company.enableOnlineSales)
-        : safeAllowedModules.includes('online-sales'),
+    enableOnlineSales: safeEnableOnlineSales,
     maxProducts: safeMaxProducts,
     maxUsers: safeMaxUsers,
     paymentHistory: safePaymentHistory,
     createdAt: company.createdAt || Date.now(),
     isPrimary: slug === 'gosen',
   };
+
+  // Update local companies cache immediately
+  const existingComps = getCachedCompanies() || [DEFAULT_GOSEN_COMPANY];
+  const compIdx = existingComps.findIndex((c) => normalizeCompanySlug(c.slug) === slug);
+  const updatedComps =
+    compIdx >= 0
+      ? existingComps.map((c, i) => (i === compIdx ? normalized : c))
+      : [normalized, ...existingComps];
+  setCachedCompanies(updatedComps);
+
+  // Also initialize/sync the company's store_profile settings document
+  const existingSettings = getCachedStoreSettings(slug);
+  const profileRef = doc(db, 'settings', getStoreProfileDocId(slug));
+  const profilePayload: StoreSettings = {
+    ...(existingSettings || {}),
+    companyId: slug,
+    storeName: normalized.name,
+    tagline: normalized.tagline,
+    logoUrl: normalized.logoUrl,
+    phone: normalized.phone,
+    address: normalized.address,
+    accessPassword: normalized.adminPassword,
+    whatsappOrderPhone: existingSettings?.whatsappOrderPhone || normalized.phone,
+    allowedModules: normalized.allowedModules,
+    enableDeliveryDvolada: normalized.enableDeliveryDvolada,
+    enableOnlineSales: normalized.enableOnlineSales,
+    maxProducts: normalized.maxProducts,
+    maxUsers: normalized.maxUsers,
+    updatedAt: Date.now(),
+  };
+  setCachedStoreSettings(profilePayload, slug);
+  syncCollectionsWithBackendHub(
+    { companies: [normalized], settings: profilePayload },
+    slug
+  ).catch(() => {});
 
   try {
     const batch = writeBatch(db);
@@ -4530,6 +4655,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
         notes: normalized.notes,
         allowedModules: normalized.allowedModules,
         enableDeliveryDvolada: normalized.enableDeliveryDvolada,
+        enableOnlineSales: normalized.enableOnlineSales,
         maxProducts: normalized.maxProducts,
         maxUsers: normalized.maxUsers,
         paymentHistory: normalized.paymentHistory,
@@ -4539,25 +4665,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
       { merge: true }
     );
 
-    // Also initialize/sync the company's store_profile settings document
-    const profileRef = doc(db, 'settings', getStoreProfileDocId(slug));
-    const profilePayload: StoreSettings = {
-      companyId: slug,
-      storeName: normalized.name,
-      tagline: normalized.tagline,
-      logoUrl: normalized.logoUrl,
-      phone: normalized.phone,
-      address: normalized.address,
-      accessPassword: normalized.adminPassword,
-      whatsappOrderPhone: normalized.phone,
-      allowedModules: normalized.allowedModules,
-      enableDeliveryDvolada: normalized.enableDeliveryDvolada,
-      maxProducts: normalized.maxProducts,
-      maxUsers: normalized.maxUsers,
-      updatedAt: Date.now(),
-    };
-    batch.set(profileRef, profilePayload, { merge: true });
-    setCachedStoreSettings(profilePayload, slug);
+    batch.set(profileRef, stripUndefinedDeep(profilePayload), { merge: true });
 
     await batch.commit();
     return normalized;
@@ -5668,7 +5776,15 @@ export async function resolveClientLoginAcrossAllTenants(params: {
   const cleanPass = params.passwordInput.trim();
   const upperPass = cleanPass.toUpperCase();
   const cleanUser = (params.usernameInput || '').trim().toLowerCase();
-  const preferred = params.preferredSlug ? normalizeCompanySlug(params.preferredSlug) : '';
+  const hasUrlEmpresa =
+    typeof window !== 'undefined' &&
+    Boolean(
+      new URLSearchParams(window.location.search).get('empresa') ||
+        new URLSearchParams(window.location.search).get('tienda') ||
+        new URLSearchParams(window.location.search).get('cliente')
+    );
+  const preferred =
+    hasUrlEmpresa && params.preferredSlug ? normalizeCompanySlug(params.preferredSlug) : '';
 
   const matchCompanyFromList = (list: CompanyTenant[]): CompanyTenant | undefined => {
     // 1. If URL has an explicit company parameter (?empresa=...), check that company first
@@ -5676,8 +5792,11 @@ export async function resolveClientLoginAcrossAllTenants(params: {
       const prefComp = list.find((c) => normalizeCompanySlug(c.slug) === preferred);
       if (prefComp) {
         const expected = (prefComp.adminPassword || '').trim().toUpperCase();
+        const cachedSettings = getCachedStoreSettings(preferred);
+        const settingsPass = (cachedSettings?.accessPassword || '').trim().toUpperCase();
         if (
           (expected && expected === upperPass) ||
+          (settingsPass && settingsPass === upperPass) ||
           (preferred === 'tiendagyg' && upperPass === 'GYG2026') ||
           (preferred === 'gosen' && (upperPass === 'GOSEN2026' || upperPass === 'ADMIN2026'))
         ) {
@@ -5686,22 +5805,37 @@ export async function resolveClientLoginAcrossAllTenants(params: {
       }
     }
 
-    // 2. Check all companies by their unique adminPassword
-    const exactOrUpper = list.find((comp) => {
+    // 2. Check non-primary client companies first so a client store password never collides with default gosen
+    const clientMatch = list.find((comp) => {
       const slug = normalizeCompanySlug(comp.slug);
+      if (slug === 'gosen') return false;
       const pass = (comp.adminPassword || '').trim().toUpperCase();
-      // Check cached store settings for this company too
       const cachedSettings = getCachedStoreSettings(slug);
       const settingsPass = (cachedSettings?.accessPassword || '').trim().toUpperCase();
       return (
         (pass.length > 0 && pass === upperPass) ||
         (settingsPass.length > 0 && settingsPass === upperPass) ||
-        (slug === 'tiendagyg' && upperPass === 'GYG2026') ||
-        (slug === 'gosen' && (upperPass === 'GOSEN2026' || upperPass === 'ADMIN2026'))
+        (slug === 'tiendagyg' && upperPass === 'GYG2026')
+      );
+    });
+    if (clientMatch) return clientMatch;
+
+    // 3. Check primary gosen company
+    const gosenMatch = list.find((comp) => {
+      const slug = normalizeCompanySlug(comp.slug);
+      if (slug !== 'gosen') return false;
+      const pass = (comp.adminPassword || '').trim().toUpperCase();
+      const cachedSettings = getCachedStoreSettings('gosen');
+      const settingsPass = (cachedSettings?.accessPassword || '').trim().toUpperCase();
+      return (
+        (pass.length > 0 && pass === upperPass) ||
+        (settingsPass.length > 0 && settingsPass === upperPass) ||
+        upperPass === 'GOSEN2026' ||
+        upperPass === 'ADMIN2026'
       );
     });
 
-    return exactOrUpper;
+    return gosenMatch;
   };
 
   // --- A. COLLABORATOR MODE ---
@@ -5785,6 +5919,13 @@ export async function resolveClientLoginAcrossAllTenants(params: {
 
   // --- B. DIRECT STORE PASSWORD MODE ---
   let allCompanies = params.companiesInMemory;
+  if (allCompanies.length <= 1) {
+    try {
+      allCompanies = await fetchCompaniesOnce(true);
+    } catch {
+      // Ignore offline error
+    }
+  }
   let matchedComp = matchCompanyFromList(allCompanies);
 
   // If not matched in memory, query fresh companies & store_profile settings from Firestore

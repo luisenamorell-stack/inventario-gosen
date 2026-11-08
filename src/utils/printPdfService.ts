@@ -4236,7 +4236,7 @@ export function buildWarehouseStockReportHtml(
   selectedWarehouseId: string,
   storeSettings: StoreSettings,
   format: PrinterPaperFormat = 'letter',
-  canViewCosts = false
+  canViewCosts = true
 ): string {
   const isThermal = format === '80mm' || format === '58mm';
   const storeName = storeSettings.storeName || 'MI TIENDA';
@@ -4246,7 +4246,7 @@ export function buildWarehouseStockReportHtml(
       ? activeWhs.find((w) => w.id === selectedWarehouseId)
       : undefined;
   const scopeTitle = targetWh
-    ? `EXISTENCIAS EN BODEGA: ${targetWh.name.toUpperCase()} (${targetWh.code})`
+    ? `INVENTARIO EXCLUSIVO DE BODEGA: ${targetWh.name.toUpperCase()} (${targetWh.code})`
     : 'EXISTENCIAS CONSOLIDADAS POR BODEGA';
 
   const totalUnits = products.reduce((sum, p) => {
@@ -4256,6 +4256,13 @@ export function buildWarehouseStockReportHtml(
     return sum + Math.max(0, qty);
   }, 0);
 
+  const totalCostVal = products.reduce((sum, p) => {
+    const qty = targetWh
+      ? getProductStockInWarehouse(p, targetWh.id, warehouses)
+      : Number(p.stock) || 0;
+    return sum + Math.max(0, qty) * (Number(p.cost) || 0);
+  }, 0);
+
   const totalSaleVal = products.reduce((sum, p) => {
     const qty = targetWh
       ? getProductStockInWarehouse(p, targetWh.id, warehouses)
@@ -4263,54 +4270,72 @@ export function buildWarehouseStockReportHtml(
     return sum + Math.max(0, qty) * (Number(p.price) || 0);
   }, 0);
 
+  const totalProfitVal = totalSaleVal - totalCostVal;
+
   return `
     <div style="font-variant-numeric:tabular-nums;">
       <div class="text-center" style="border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:14px;">
         <div style="font-size:${isThermal ? '15px' : '20px'};font-weight:900;text-transform:uppercase;color:#0f172a;">${storeName}</div>
         <div style="font-size:${isThermal ? '11.5px' : '14px'};font-weight:900;color:#1e1b4b;margin-top:4px;">${scopeTitle}</div>
-        <div style="font-size:11px;color:#475569;margin-top:3px;">Artículos listados: ${products.length} • Total Unidades: ${totalUnits.toLocaleString('es-HN')} uds • Valor Comercial: ${formatCurrencyL(totalSaleVal)}</div>
+        <div style="font-size:11px;color:#475569;margin-top:3px;">
+          Artículos: <strong>${products.length}</strong> • Unidades: <strong>${totalUnits.toLocaleString('es-HN')} uds</strong>
+          ${canViewCosts ? ` • Costo Total: <strong>${formatCurrencyL(totalCostVal)}</strong>` : ''}
+          • Venta Total: <strong>${formatCurrencyL(totalSaleVal)}</strong>
+          ${canViewCosts ? ` • Ganancia Estimada: <strong style="color:#047857;">+${formatCurrencyL(totalProfitVal)}</strong>` : ''}
+        </div>
       </div>
 
-      <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:${isThermal ? '9.5px' : '11px'};">
+      <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:${isThermal ? '9px' : '10.5px'};">
         <thead>
           <tr style="background:#0f172a;color:#ffffff;">
-            <th style="padding:7px 8px;text-align:left;">CÓDIGO SKU</th>
+            <th style="padding:7px 8px;text-align:left;">CÓDIGO</th>
             <th style="padding:7px 8px;text-align:left;">ARTÍCULO</th>
             ${isThermal ? '' : `<th style="padding:7px 8px;text-align:left;">CATEGORÍA</th>`}
-            <th style="padding:7px 8px;text-align:right;">PRECIO</th>
             ${
               targetWh
-                ? `<th style="padding:7px 8px;text-align:center;background:#1e1b4b;">${targetWh.name.toUpperCase()}</th>`
+                ? `<th style="padding:7px 8px;text-align:center;background:#1e1b4b;">STOCK EN ${targetWh.name.toUpperCase()}</th>`
                 : activeWhs
                     .map(
                       (w) =>
                         `<th style="padding:7px 8px;text-align:center;">${w.name} (${w.code})</th>`
                     )
-                    .join('')
+                    .join('') + `<th style="padding:7px 8px;text-align:center;">STOCK TOTAL</th>`
             }
-            <th style="padding:7px 8px;text-align:center;">TOTAL GLOBAL</th>
+            ${canViewCosts ? `<th style="padding:7px 8px;text-align:right;">PRECIO COSTO</th>` : ''}
+            <th style="padding:7px 8px;text-align:right;">PRECIO VENTA</th>
+            ${canViewCosts ? `<th style="padding:7px 8px;text-align:right;">GANANCIA UNIT.</th>` : ''}
+            ${canViewCosts && !isThermal ? `<th style="padding:7px 8px;text-align:right;">GANANCIA TOTAL</th>` : ''}
           </tr>
         </thead>
         <tbody>
           ${products
             .map((p, idx) => {
+              const qty = targetWh
+                ? getProductStockInWarehouse(p, targetWh.id, warehouses)
+                : Number(p.stock) || 0;
+              const unitCost = Number(p.cost) || 0;
+              const unitPrice = Number(p.price) || 0;
+              const unitProfit = unitPrice - unitCost;
+              const rowProfit = Math.max(0, qty) * unitProfit;
               return `
                 <tr style="border-bottom:1px solid #e2e8f0;background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
                   <td style="padding:6px 8px;font-family:monospace;font-weight:800;">${p.code}</td>
                   <td style="padding:6px 8px;font-weight:700;">${p.name}${p.size ? ` (${p.size})` : ''}</td>
                   ${isThermal ? '' : `<td style="padding:6px 8px;color:#475569;">${p.category || 'General'}</td>`}
-                  <td style="padding:6px 8px;text-align:right;font-weight:700;">${formatCurrencyL(p.price)}</td>
                   ${
                     targetWh
-                      ? `<td style="padding:6px 8px;text-align:center;font-weight:900;color:#047857;">${getProductStockInWarehouse(p, targetWh.id, warehouses)}</td>`
+                      ? `<td style="padding:6px 8px;text-align:center;font-weight:900;color:#1e1b4b;background:#eef2ff;">${qty} uds</td>`
                       : activeWhs
                           .map(
                             (w) =>
                               `<td style="padding:6px 8px;text-align:center;font-weight:800;">${getProductStockInWarehouse(p, w.id, warehouses)}</td>`
                           )
-                          .join('')
+                          .join('') + `<td style="padding:6px 8px;text-align:center;font-weight:900;">${p.stock} uds</td>`
                   }
-                  <td style="padding:6px 8px;text-align:center;font-weight:900;">${p.stock}</td>
+                  ${canViewCosts ? `<td style="padding:6px 8px;text-align:right;color:#475569;">${formatCurrencyL(unitCost)}</td>` : ''}
+                  <td style="padding:6px 8px;text-align:right;font-weight:700;">${formatCurrencyL(unitPrice)}</td>
+                  ${canViewCosts ? `<td style="padding:6px 8px;text-align:right;font-weight:800;color:${unitProfit >= 0 ? '#047857' : '#be123c'};">${unitProfit >= 0 ? '+' : ''}${formatCurrencyL(unitProfit)}</td>` : ''}
+                  ${canViewCosts && !isThermal ? `<td style="padding:6px 8px;text-align:right;font-weight:900;color:${rowProfit >= 0 ? '#047857' : '#be123c'};">${rowProfit >= 0 ? '+' : ''}${formatCurrencyL(rowProfit)}</td>` : ''}
                 </tr>
               `;
             })
@@ -4326,7 +4351,7 @@ export async function downloadWarehouseStockReportPdf(
   warehouses: WarehouseLocation[],
   selectedWarehouseId: string,
   storeSettings: StoreSettings,
-  canViewCosts = false
+  canViewCosts = true
 ): Promise<void> {
   await preloadStoreLogoForPdf(storeSettings.logoUrl);
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
@@ -4357,6 +4382,8 @@ export async function downloadWarehouseStockReportPdf(
     return sum + Math.max(0, qty) * (Number(p.cost) || 0);
   }, 0);
 
+  const totalProfitVal = totalSaleVal - totalCostVal;
+
   let y = drawExecutivePdfHeader(doc, {
     storeSettings,
     documentTitle: targetWh
@@ -4369,28 +4396,28 @@ export async function downloadWarehouseStockReportPdf(
 
   y = drawExecutiveKpiCards(doc, y, [
     {
-      label: 'Alcance del Reporte',
+      label: targetWh ? `Bodega: ${targetWh.code}` : 'Alcance del Reporte',
       value: targetWh ? targetWh.name.slice(0, 22) : 'Todas las Bodegas',
-      subtext: targetWh ? `Código: ${targetWh.code}` : `${activeWhs.length} bodegas activas`,
+      subtext: `${products.length} artículos • ${totalUnits.toLocaleString('es-HN')} uds`,
       valueRgb: [15, 23, 42],
     },
     {
-      label: 'Referencias (SKUs)',
-      value: `${products.length} artículos`,
-      subtext: 'Con filtro actual',
+      label: 'Valor Precio Costo',
+      value: canViewCosts ? formatCurrencyL(totalCostVal) : 'Reservado',
+      subtext: 'Inversión en mercadería',
+      valueRgb: [71, 85, 105],
+    },
+    {
+      label: 'Valor Precio Venta',
+      value: formatCurrencyL(totalSaleVal),
+      subtext: 'Valor comercial total',
       valueRgb: [67, 56, 202],
     },
     {
-      label: 'Unidades Físicas',
-      value: `${totalUnits.toLocaleString('es-HN')} uds`,
-      subtext: targetWh ? 'En esta bodega' : 'Suma global de bodegas',
+      label: 'Ganancia Estimada',
+      value: canViewCosts ? `+${formatCurrencyL(totalProfitVal)}` : 'Reservado',
+      subtext: 'Utilidad proyectada (Venta - Costo)',
       valueRgb: [4, 120, 87],
-    },
-    {
-      label: 'Valor Comercial',
-      value: formatCurrencyL(totalSaleVal),
-      subtext: canViewCosts ? `Costo: ${formatCurrencyL(totalCostVal)}` : 'Precio de venta',
-      valueRgb: [180, 83, 9],
     },
   ]);
 
@@ -4398,41 +4425,65 @@ export async function downloadWarehouseStockReportPdf(
     'Código SKU',
     'Artículo / Descripción',
     'Categoría',
-    'Precio Venta',
     ...(targetWh
       ? [`Stock en ${targetWh.name}`]
-      : activeWhs.map((w) => `${w.name} (${w.code})`)),
-    'Total Global',
+      : [...activeWhs.map((w) => `${w.name} (${w.code})`), 'Stock Total']),
+    ...(canViewCosts ? ['Precio Costo', 'Costo Total'] : []),
+    'Precio Venta',
+    'Venta Total',
+    ...(canViewCosts ? ['Ganancia Unit.', 'Ganancia Total'] : []),
   ];
 
-  const bodyRows = products.map((p) => [
-    p.code,
-    `${p.name}${p.size ? ` (${p.size})` : ''}`,
-    p.category || 'General',
-    formatCurrencyL(p.price),
-    ...(targetWh
-      ? [`${getProductStockInWarehouse(p, targetWh.id, warehouses)} uds`]
-      : activeWhs.map((w) => `${getProductStockInWarehouse(p, w.id, warehouses)}`)),
-    `${p.stock} uds`,
-  ]);
+  const bodyRows = products.map((p) => {
+    const qty = targetWh
+      ? getProductStockInWarehouse(p, targetWh.id, warehouses)
+      : Number(p.stock) || 0;
+    const unitCost = Number(p.cost) || 0;
+    const unitPrice = Number(p.price) || 0;
+    const unitProfit = unitPrice - unitCost;
+    const rowCost = Math.max(0, qty) * unitCost;
+    const rowSale = Math.max(0, qty) * unitPrice;
+    const rowProfit = Math.max(0, qty) * unitProfit;
+
+    return [
+      p.code,
+      `${p.name}${p.size ? ` (${p.size})` : ''}`,
+      p.category || 'General',
+      ...(targetWh
+        ? [`${qty} uds`]
+        : [
+            ...activeWhs.map((w) => `${getProductStockInWarehouse(p, w.id, warehouses)}`),
+            `${p.stock} uds`,
+          ]),
+      ...(canViewCosts ? [formatCurrencyL(unitCost), formatCurrencyL(rowCost)] : []),
+      formatCurrencyL(unitPrice),
+      formatCurrencyL(rowSale),
+      ...(canViewCosts
+        ? [
+            `${unitProfit >= 0 ? '+' : ''}${formatCurrencyL(unitProfit)}`,
+            `${rowProfit >= 0 ? '+' : ''}${formatCurrencyL(rowProfit)}`,
+          ]
+        : []),
+    ];
+  });
 
   autoTable(doc, {
     startY: y,
     head: [headRow],
     body: bodyRows,
     theme: 'grid',
-    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 8, cellPadding: 2.8 },
-    bodyStyles: { fontSize: 7.8, cellPadding: 2.5 },
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 7.5, cellPadding: 2.5 },
+    bodyStyles: { fontSize: 7.4, cellPadding: 2.2 },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
-      0: { fontStyle: 'bold', cellWidth: 26 },
+      0: { fontStyle: 'bold', cellWidth: 24 },
       1: { fontStyle: 'bold' },
-      3: { halign: 'right' },
+      3: { halign: 'center', fontStyle: 'bold' },
     },
     margin: { left: 14, right: 14 },
   });
 
-  drawPdfPageFooters(doc, storeSettings, 'Existencias por Bodega');
+  drawPdfPageFooters(doc, storeSettings, 'Existencias, Costos y Ganancias por Bodega');
   const safeSuffix = targetWh ? targetWh.code : 'Consolidado';
   doc.save(`Inventario_Bodega_${safeSuffix}_${new Date().toISOString().slice(0, 10)}.pdf`);
 }

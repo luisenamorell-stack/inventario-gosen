@@ -146,6 +146,7 @@ import {
   loadInventoryFromIndexedDB,
   subscribeToInventory,
   fetchStoreSettingsOnce,
+  subscribeToStoreSettings,
   fetchSuppliersOnce,
   fetchSalesOnce,
   subscribeToSales,
@@ -737,17 +738,23 @@ export const App: React.FC = () => {
   const handleTabChange = (targetTab: ActiveTab) => {
     if (!userSession) return;
 
-    const isSuper = Boolean(userSession.role === 'admin' && userSession.isSuperAdmin === true);
-    if (!isSuper && targetTab !== 'companies') {
+    if (targetTab !== 'companies') {
       const activeComp = companies.find(
         (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
       );
-      const compModules =
+      const rawCompModules =
         activeComp?.allowedModules && activeComp.allowedModules.length > 0
           ? activeComp.allowedModules
           : storeSettings.allowedModules && storeSettings.allowedModules.length > 0
           ? storeSettings.allowedModules
           : ALL_COMPANY_MODULES;
+      const isOnlineSalesOff =
+        activeComp?.enableOnlineSales === false ||
+        storeSettings.enableOnlineSales === false ||
+        !rawCompModules.includes('online-sales');
+      const compModules = isOnlineSalesOff
+        ? rawCompModules.filter((m) => m !== 'online-sales')
+        : rawCompModules;
 
       if (!compModules.includes(targetTab)) {
         showToast('Esta función no está incluida o habilitada en el plan de tu tienda.', 'warning');
@@ -869,7 +876,32 @@ export const App: React.FC = () => {
         ]);
 
         if (!isMounted) return;
-        setStoreSettings(settings);
+        const matchedTenant = companiesList.find(
+          (c) => normalizeCompanySlug(c.slug) === normalizeCompanySlug(activeCompanyId)
+        );
+        const syncedSettings: StoreSettings = matchedTenant
+          ? {
+              ...settings,
+              allowedModules:
+                matchedTenant.allowedModules && matchedTenant.allowedModules.length > 0
+                  ? matchedTenant.enableOnlineSales === false
+                    ? matchedTenant.allowedModules.filter((m) => m !== 'online-sales')
+                    : matchedTenant.allowedModules
+                  : settings.allowedModules,
+              enableOnlineSales:
+                matchedTenant.enableOnlineSales !== undefined
+                  ? matchedTenant.enableOnlineSales
+                  : settings.enableOnlineSales,
+              enableDeliveryDvolada:
+                matchedTenant.enableDeliveryDvolada !== undefined
+                  ? matchedTenant.enableDeliveryDvolada
+                  : settings.enableDeliveryDvolada,
+              maxProducts: matchedTenant.maxProducts ?? settings.maxProducts ?? 0,
+              maxUsers: matchedTenant.maxUsers ?? settings.maxUsers ?? 0,
+            }
+          : settings;
+        setStoreSettings(syncedSettings);
+        setCachedStoreSettings(syncedSettings, activeCompanyId);
         if (invResult.items.length > 0) {
           setInventory(invResult.items);
         }
@@ -912,12 +944,24 @@ export const App: React.FC = () => {
       );
       if (myTenant) {
         setStoreSettings((prev) => {
+          const baseMods =
+            myTenant.allowedModules && myTenant.allowedModules.length > 0
+              ? myTenant.allowedModules
+              : prev.allowedModules || [...ALL_COMPANY_MODULES];
+          const isOnlineEnabled =
+            myTenant.enableOnlineSales !== undefined
+              ? Boolean(myTenant.enableOnlineSales)
+              : baseMods.includes('online-sales');
+          const effectiveMods: ActiveTab[] = isOnlineEnabled
+            ? baseMods.includes('online-sales')
+              ? baseMods
+              : [...baseMods, 'online-sales']
+            : baseMods.filter((m) => m !== 'online-sales');
+
           const updated: StoreSettings = {
             ...prev,
-            allowedModules:
-              myTenant.allowedModules && myTenant.allowedModules.length > 0
-                ? myTenant.allowedModules
-                : prev.allowedModules || [...ALL_COMPANY_MODULES],
+            allowedModules: effectiveMods,
+            enableOnlineSales: isOnlineEnabled,
             enableDeliveryDvolada:
               myTenant.enableDeliveryDvolada !== undefined
                 ? myTenant.enableDeliveryDvolada
@@ -930,6 +974,21 @@ export const App: React.FC = () => {
         });
       }
     });
+
+    const unsubscribeSettings = subscribeToStoreSettings(
+      (liveSettings) => {
+        setStoreSettings((prev) => {
+          const updated: StoreSettings = {
+            ...prev,
+            ...liveSettings,
+          };
+          setCachedStoreSettings(updated, activeCompanyId);
+          return updated;
+        });
+      },
+      undefined,
+      activeCompanyId
+    );
 
     const unsubscribeGlobal = subscribeToSaaSGlobalConfig((liveCfg) => {
       setSaasGlobalConfig(liveCfg);
@@ -981,6 +1040,7 @@ export const App: React.FC = () => {
 
     return () => {
       unsubscribeComps();
+      unsubscribeSettings();
       unsubscribeGlobal();
       if (unsubscribeInventory) unsubscribeInventory();
       if (unsubscribeSales) unsubscribeSales();
@@ -1120,17 +1180,22 @@ export const App: React.FC = () => {
           const isInitial = lastHubUpdatedAtRef.current === 0;
           lastHubUpdatedAtRef.current = serverTs;
           if (!isInitial || force) {
-            const [invRes, freshWarehouses, freshPurchases, freshSuppliers] = await Promise.all([
-              fetchInventorySmart(false, activeCompanyId),
-              fetchStoreWarehousesOnce(activeCompanyId),
-              fetchPurchasesOnce(false, activeCompanyId),
-              fetchSuppliersOnce(false, activeCompanyId),
-            ]);
+            const [invRes, freshWarehouses, freshPurchases, freshSuppliers, freshSettings, freshCompanies] =
+              await Promise.all([
+                fetchInventorySmart(false, activeCompanyId),
+                fetchStoreWarehousesOnce(activeCompanyId),
+                fetchPurchasesOnce(false, activeCompanyId),
+                fetchSuppliersOnce(false, activeCompanyId),
+                fetchStoreSettingsOnce(activeCompanyId),
+                fetchCompaniesOnce(false),
+              ]);
             if (!isMounted) return;
             setInventory(invRes.items);
             setWarehousesData(freshWarehouses);
             setPurchases(freshPurchases);
             setSuppliers(freshSuppliers);
+            setStoreSettings(freshSettings);
+            setCompanies(freshCompanies);
             setLastSyncTime(new Date());
           }
         }
@@ -2410,6 +2475,8 @@ export const App: React.FC = () => {
           onOpenClientLogin={() => {
             setIsSaaSPortalUrl(false);
             setIsSalesLandingMode(false);
+            setIsAuthenticated(false);
+            setUserSession(null);
             try {
               const url = new URL(window.location.href);
               url.searchParams.delete('ventas');
@@ -2687,10 +2754,19 @@ export const App: React.FC = () => {
       ? storeSettings.allowedModules
       : ALL_COMPANY_MODULES;
 
-  const companyAllowedModules: ActiveTab[] =
-    activeCompanyTenant?.enableOnlineSales === false || storeSettings.enableOnlineSales === false
-      ? rawCompanyAllowedModules.filter((m) => m !== 'online-sales')
-      : rawCompanyAllowedModules;
+  const isOnlineSalesDisabledForCompany =
+    activeCompanyTenant?.enableOnlineSales === false ||
+    storeSettings.enableOnlineSales === false ||
+    (activeCompanyTenant?.allowedModules &&
+      activeCompanyTenant.allowedModules.length > 0 &&
+      !activeCompanyTenant.allowedModules.includes('online-sales')) ||
+    (storeSettings.allowedModules &&
+      storeSettings.allowedModules.length > 0 &&
+      !storeSettings.allowedModules.includes('online-sales'));
+
+  const companyAllowedModules: ActiveTab[] = isOnlineSalesDisabledForCompany
+    ? rawCompanyAllowedModules.filter((m) => m !== 'online-sales')
+    : rawCompanyAllowedModules;
 
   const companyMaxProducts: number =
     activeCompanyTenant?.maxProducts ?? storeSettings.maxProducts ?? 0;
@@ -2720,7 +2796,7 @@ export const App: React.FC = () => {
       : (userSession.allowedTabs || ['sales', 'inventory', 'price-checker']);
 
   const allowedTabsList: ActiveTab[] = isSuperAdminSession
-    ? ALL_COMPANY_MODULES
+    ? companyAllowedModules
     : baseRoleTabs.filter((tab) => companyAllowedModules.includes(tab));
 
   // If the current activeTab was disabled by the SaaS Administrator, switch to the first allowed module

@@ -391,34 +391,13 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           <nav className="nav hidden lg:flex items-center gap-6">
             <a href="#planes" className="whitespace-nowrap">Planes y precios</a>
             <a href="#demo" className="whitespace-nowrap">Solicitar demo</a>
-            <button
-              type="button"
-              onClick={handleOpenLogin}
-              className="text-slate-300 hover:text-white transition-colors cursor-pointer text-sm font-bold flex items-center gap-1.5 whitespace-nowrap"
-            >
-              <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span>Iniciar Sesión</span>
-            </button>
           </nav>
 
           <div className="header-actions">
-            {hasActiveSession && onResumeSession && (
-              <button
-                type="button"
-                onClick={onResumeSession}
-                className="btn btn-compact border-teal-500/40 text-teal-300 whitespace-nowrap"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 mr-1.5 shrink-0" />
-                <span className="truncate max-w-[130px] sm:max-w-none">
-                  Mi Sesión ({activeSessionLabel || 'Activa'})
-                </span>
-              </button>
-            )}
-
             <button
               type="button"
               onClick={handleOpenLogin}
-              className="btn btn-compact lg:hidden flex items-center gap-1.5 whitespace-nowrap"
+              className="btn btn-compact flex items-center gap-1.5 whitespace-nowrap"
             >
               <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span>Iniciar Sesión</span>
@@ -449,14 +428,6 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
               <a className="btn" href="#planes">
                 Ver planes y precios
               </a>
-              <button
-                type="button"
-                onClick={handleOpenLogin}
-                className="btn sm:hidden flex items-center justify-center gap-2"
-              >
-                <Lock className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Ya soy cliente • Iniciar Sesión</span>
-              </button>
             </div>
             <div className="note">15 días de prueba real, sin compromiso.</div>
           </div>
@@ -754,13 +725,13 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           </div>
 
           <div className="footer-links">
-            <button
-              type="button"
-              onClick={handleOpenLogin}
-              className="hover:text-white transition-colors cursor-pointer py-1.5 px-2"
-            >
-              Iniciar Sesión
-            </button>
+            <a href="#planes" className="hover:text-white transition-colors py-1.5 px-2">
+              Planes
+            </a>
+            <span aria-hidden="true">·</span>
+            <a href="#demo" className="hover:text-white transition-colors py-1.5 px-2">
+              Solicitar Demo
+            </a>
             <span aria-hidden="true">·</span>
             <button
               type="button"

@@ -197,9 +197,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Filter items based on SaaS company module permissions + user role permissions
   const effectiveCompanyModules = companyAllowedModules || storeSettings?.allowedModules;
   const navItems = allNavItems.filter((item) => {
-    // 1. Check SaaS company-level allowed modules (unless SuperAdmin is inspecting)
-    if (!isSuperAdmin && effectiveCompanyModules && effectiveCompanyModules.length > 0) {
+    // 1. Check SaaS company-level allowed modules
+    if (effectiveCompanyModules && effectiveCompanyModules.length > 0) {
       if (!effectiveCompanyModules.includes(item.id)) return false;
+    }
+    if (item.id === 'online-sales' && storeSettings?.enableOnlineSales === false) {
+      return false;
     }
     if (!userSession) return true;
     if (userSession.role === 'admin') return true;

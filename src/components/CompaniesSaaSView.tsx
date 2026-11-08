@@ -796,11 +796,15 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setStatus(comp.status || 'active');
     setMoraReason(comp.moraReason || '');
     setAutoSuspendClient(comp.autoSuspend !== false);
-    setAllowedModules(
+    const baseMods =
       Array.isArray(comp.allowedModules) && comp.allowedModules.length > 0
         ? [...comp.allowedModules]
-        : [...ALL_COMPANY_MODULES]
-    );
+        : [...ALL_COMPANY_MODULES];
+    const effectiveMods =
+      comp.enableOnlineSales === false
+        ? baseMods.filter((m) => m !== 'online-sales')
+        : baseMods;
+    setAllowedModules(effectiveMods);
     setEnableDeliveryDvolada(
       comp.enableDeliveryDvolada !== undefined ? Boolean(comp.enableDeliveryDvolada) : comp.slug === 'gosen'
     );
@@ -812,11 +816,15 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
 
   const openPermissionsModal = (comp: CompanyTenant) => {
     setPermissionsCompany(comp);
-    setPermModules(
+    const baseMods =
       Array.isArray(comp.allowedModules) && comp.allowedModules.length > 0
         ? [...comp.allowedModules]
-        : [...ALL_COMPANY_MODULES]
-    );
+        : [...ALL_COMPANY_MODULES];
+    const effectiveMods =
+      comp.enableOnlineSales === false
+        ? baseMods.filter((m) => m !== 'online-sales')
+        : baseMods;
+    setPermModules(effectiveMods);
     setPermDeliveryDvolada(
       comp.enableDeliveryDvolada !== undefined ? Boolean(comp.enableDeliveryDvolada) : comp.slug === 'gosen'
     );
@@ -859,10 +867,11 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     }
     setIsSavingPerms(true);
     try {
+      const hasOnlineSales = permModules.includes('online-sales');
       await onSaveCompany({
         ...permissionsCompany,
         allowedModules: permModules,
-        enableOnlineSales: permModules.includes('online-sales'),
+        enableOnlineSales: hasOnlineSales,
         enableDeliveryDvolada: permDeliveryDvolada,
         maxProducts: Math.max(0, Number(permMaxProducts) || 0),
         maxUsers: Math.max(0, Number(permMaxUsers) || 0),
@@ -886,9 +895,10 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         : [...ALL_COMPANY_MODULES];
     const currentlyActive =
       comp.enableOnlineSales !== false && currentMods.includes('online-sales');
-    const nextMods: ActiveTab[] = currentlyActive
+    const rawNextMods: ActiveTab[] = currentlyActive
       ? currentMods.filter((m) => m !== 'online-sales')
-      : [...currentMods, 'online-sales'];
+      : Array.from(new Set([...currentMods, 'online-sales']));
+    const nextMods: ActiveTab[] = rawNextMods.length > 0 ? rawNextMods : ['sales'];
 
     try {
       await onSaveCompany({
