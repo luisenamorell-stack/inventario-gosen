@@ -31,7 +31,12 @@ import {
   Navigation,
   Clock,
   ExternalLink,
+  Landmark,
+  CreditCard,
+  Banknote,
 } from 'lucide-react';
+import { CatalogBankAccountCard } from './StoreBankAccountsEditor';
+import { getCachedStoreSettings } from '../firebase/firestoreService';
 
 interface CartItem {
   product: Product;
@@ -91,8 +96,35 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'Efectivo' | 'Transferencia' | 'Tarjeta al recibir'>('Efectivo');
+  const [selectedBankAccountId, setSelectedBankAccountId] = useState<string>('');
   const [orderNotes, setOrderNotes] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isBankModalOpen, setIsBankModalOpen] = useState<boolean>(false);
+
+  const activeBankAccounts = useMemo(() => {
+    const propBanks = Array.isArray(storeSettings.bankAccounts)
+      ? storeSettings.bankAccounts.filter(
+          (b) => b && b.isActive !== false && (b.accountNumber || b.bankName)
+        )
+      : [];
+    if (propBanks.length > 0) return propBanks;
+
+    const cached = getCachedStoreSettings(storeSettings.companyId || 'gosen');
+    if (cached && Array.isArray(cached.bankAccounts)) {
+      return cached.bankAccounts.filter(
+        (b) => b && b.isActive !== false && (b.accountNumber || b.bankName)
+      );
+    }
+    return [];
+  }, [storeSettings.bankAccounts, storeSettings.companyId]);
+
+  const selectedBankAccount = useMemo(() => {
+    if (activeBankAccounts.length === 0) return null;
+    return (
+      activeBankAccounts.find((b) => b.id === selectedBankAccountId) ||
+      activeBankAccounts[0]
+    );
+  }, [activeBankAccounts, selectedBankAccountId]);
 
   const showToast = (msg: string, _type?: string) => {
     setToastMessage(msg);
@@ -227,7 +259,12 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
         chosenPickupBranch.address ? ` — ${chosenPickupBranch.address}` : ''
       }\n`;
     }
-    text += `💳 *Método de pago preferido:* ${paymentMethod}\n`;
+    text += `💳 *Método de pago preferido:* ${
+      paymentMethod === 'Transferencia' ? 'Transferencia Bancaria' : paymentMethod
+    }\n`;
+    if (paymentMethod === 'Transferencia' && selectedBankAccount) {
+      text += `🏦 *Cuenta seleccionada para transferencia:* ${selectedBankAccount.bankName} — Cta ${selectedBankAccount.accountType || 'Ahorro'}: ${selectedBankAccount.accountNumber} (Titular: ${selectedBankAccount.holderName})\n`;
+    }
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
     text += `📦 *DETALLE DEL PEDIDO (${totalCartItemsCount} ${totalCartItemsCount === 1 ? 'producto' : 'productos'}):*\n\n`;
 
@@ -394,6 +431,18 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                       {effectiveLocations.length === 1
                         ? 'Ver Ubicación en Google Maps'
                         : `Ver Nuestras ${effectiveLocations.length} Tiendas en Google Maps`}
+                    </span>
+                  </button>
+                )}
+                {activeBankAccounts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsBankModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] shadow-2xs transition-all cursor-pointer"
+                  >
+                    <Landmark className="w-3 h-3 text-emerald-400" />
+                    <span>
+                      Cuentas Bancarias ({activeBankAccounts.length})
                     </span>
                   </button>
                 )}
@@ -921,7 +970,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
       {/* ==================== CUSTOMER ORDER MODAL ==================== */}
       {isOrderModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh] text-slate-800">
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[92vh] text-slate-800">
             {/* Modal Header */}
             <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
@@ -1115,7 +1164,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                     <select
                       value={paymentMethod}
                       onChange={(e) => setPaymentMethod(e.target.value as any)}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     >
                       <option value="Efectivo">Efectivo al recibir</option>
                       <option value="Transferencia">Transferencia Bancaria</option>
@@ -1123,6 +1172,105 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                     </select>
                   </div>
                 </div>
+
+                {/* Quick Visual Payment Selector Buttons */}
+                <div className="space-y-1.5 pt-1">
+                  <span className="block font-semibold text-slate-600 text-[11px]">
+                    Elige cómo deseas pagar tu pedido:
+                  </span>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('Efectivo')}
+                      className={`p-2 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                        paymentMethod === 'Efectivo'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-2 ring-emerald-500/20 font-extrabold'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 font-semibold'
+                      }`}
+                    >
+                      <Banknote className="w-4 h-4 text-emerald-600" />
+                      <span className="text-[11px] leading-tight">Efectivo</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('Transferencia')}
+                      className={`p-2 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                        paymentMethod === 'Transferencia'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-2 ring-emerald-500/20 font-extrabold'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 font-semibold'
+                      }`}
+                    >
+                      <Landmark className="w-4 h-4 text-emerald-600" />
+                      <span className="text-[11px] leading-tight">Transferencia Bancaria</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('Tarjeta al recibir')}
+                      className={`p-2 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                        paymentMethod === 'Tarjeta al recibir'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-2 ring-emerald-500/20 font-extrabold'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 font-semibold'
+                      }`}
+                    >
+                      <CreditCard className="w-4 h-4 text-emerald-600" />
+                      <span className="text-[11px] leading-tight">Tarjeta al recibir</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* ==================== BANK ACCOUNTS FOR TRANSFERENCIA BANCARIA ==================== */}
+                {paymentMethod === 'Transferencia' && (
+                  <div className="mt-2 p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-3 animate-in fade-in duration-150">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                          <Landmark className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="font-black text-slate-900 text-xs sm:text-sm">
+                            Cuentas Bancarias Disponibles para Transferencia
+                          </h4>
+                          <p className="text-[11px] text-slate-600">
+                            Toca <strong>"Copiar Cuenta"</strong> o <strong>"Copiar Nombre"</strong> para pegar los datos exactos en tu banco sin equivocaciones.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {activeBankAccounts.length > 0 ? (
+                      <div className="space-y-2.5">
+                        {activeBankAccounts.map((acc) => (
+                          <CatalogBankAccountCard
+                            key={acc.id}
+                            account={acc}
+                            isSelected={selectedBankAccount?.id === acc.id}
+                            onSelect={() => setSelectedBankAccountId(acc.id)}
+                            onCopyFeedback={(msg) => showToast(msg)}
+                          />
+                        ))}
+                        <div className="p-2.5 rounded-xl bg-white/90 border border-emerald-200/80 text-[11px] text-emerald-950 font-medium flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>
+                            Una vez realizada tu transferencia por <strong>L. {cartTotal.toFixed(2)}</strong>, envía tu pedido y adjunta el comprobante en el chat de WhatsApp.
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-600 space-y-1.5">
+                        <p className="font-bold text-slate-800">
+                          Al enviar tu pedido por WhatsApp te compartiremos el número de cuenta bancaria para realizar la transferencia.
+                        </p>
+                        {isAdminPreview && (
+                          <p className="text-[11px] text-emerald-700 font-semibold">
+                            💡 Vista de Administrador: Puedes configurar tus cuentas bancarias con logos de bancos desde Configuración de la Tienda o en el panel del Catálogo Digital.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {shippingMethod === 'DVOLADA' && (
                   <div>
@@ -1196,6 +1344,55 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
               >
                 <Copy className="w-4 h-4 text-emerald-600" />
                 <span>Copiar Texto</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== QUICK BANK ACCOUNTS MODAL ==================== */}
+      {isBankModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh] text-slate-800">
+            <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold border border-emerald-200">
+                  <Landmark className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
+                    Cuentas Bancarias Oficiales
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    {displayStoreName} · Toca para copiar sin errores
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsBankModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-200 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
+              {activeBankAccounts.map((acc) => (
+                <CatalogBankAccountCard
+                  key={acc.id}
+                  account={acc}
+                  onCopyFeedback={(msg) => showToast(msg)}
+                />
+              ))}
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsBankModalOpen(false)}
+                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl cursor-pointer"
+              >
+                Cerrar
               </button>
             </div>
           </div>

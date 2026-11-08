@@ -660,6 +660,19 @@ export interface StoreBranchLocation {
   isMain?: boolean;
 }
 
+export interface StoreBankAccount {
+  id: string;
+  bankId?: string;
+  bankName: string;
+  accountNumber: string;
+  accountType: string; // 'Ahorro' | 'Cheques' | 'Billetera Móvil'
+  currency?: 'HNL' | 'USD' | string;
+  holderName: string;
+  holderIdOrRtn?: string;
+  customLogoUrl?: string;
+  isActive?: boolean;
+}
+
 export interface StoreSettings {
   companyId?: string;
   storeName: string;
@@ -675,6 +688,7 @@ export interface StoreSettings {
   catalogWelcomeMsg?: string;
   showLocationsInCatalog?: boolean;
   storeLocations?: StoreBranchLocation[];
+  bankAccounts?: StoreBankAccount[];
   allowedModules?: ActiveTab[];
   enableDeliveryDvolada?: boolean;
   enableOnlineSales?: boolean;

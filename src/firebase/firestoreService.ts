@@ -22,6 +22,7 @@ import {
   AuditHistoryRecord,
   StoreSettings,
   StoreBranchLocation,
+  StoreBankAccount,
   SaleRecord,
   CreditPaymentAbone,
   CashOutMovement,
@@ -2689,16 +2690,47 @@ function sanitizeStoreLocationsList(raw: any): StoreBranchLocation[] {
     .filter((b): b is StoreBranchLocation => b !== null);
 }
 
+function sanitizeStoreBankAccountsList(raw: any): StoreBankAccount[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item: any, idx: number): StoreBankAccount | null => {
+      if (!item || typeof item !== 'object') return null;
+      const bankName = String(item.bankName || '').trim();
+      const accountNumber = String(item.accountNumber || '').trim();
+      const holderName = String(item.holderName || '').trim();
+      if (!bankName && !accountNumber && !holderName) return null;
+      return {
+        id: String(item.id || `store_bank_${idx + 1}`),
+        bankId: item.bankId ? String(item.bankId).trim() : '',
+        bankName: bankName || 'Banco',
+        accountNumber,
+        accountType: item.accountType ? String(item.accountType).trim() : 'Ahorro',
+        currency: item.currency ? String(item.currency).trim() : 'HNL',
+        holderName,
+        holderIdOrRtn: item.holderIdOrRtn ? String(item.holderIdOrRtn).trim() : '',
+        customLogoUrl: item.customLogoUrl ? String(item.customLogoUrl).trim() : '',
+        isActive: item.isActive !== false,
+      };
+    })
+    .filter((b): b is StoreBankAccount => b !== null);
+}
+
 export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): Promise<StoreSettings> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedStoreSettings(slug);
-  const hubSync = await syncCollectionsWithBackendHub({}, slug);
+  const hubSync = await syncCollectionsWithBackendHub(cached ? { settings: cached } : {}, slug);
+  const newestLocalOrHub: StoreSettings | null =
+    hubSync?.settings && cached
+      ? (Number(hubSync.settings.updatedAt) || 0) >= (Number(cached.updatedAt) || 0)
+        ? hubSync.settings
+        : cached
+      : hubSync?.settings || cached || null;
+
   if (isFirestoreQuotaExhausted()) {
-    if (hubSync?.settings) {
-      setCachedStoreSettings(hubSync.settings, slug);
-      return hubSync.settings;
+    if (newestLocalOrHub) {
+      setCachedStoreSettings(newestLocalOrHub, slug);
+      return newestLocalOrHub;
     }
-    if (cached) return cached;
     return getDefaultStoreSettingsForCompany(slug);
   }
   try {
@@ -2706,6 +2738,16 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
     const snapshot = await getDoc(docRef);
     if (snapshot.exists()) {
       const data = snapshot.data();
+      const snapTs = Number(data.updatedAt) || 0;
+      const localTs = Number(newestLocalOrHub?.updatedAt) || 0;
+
+      // If our local cache or backend hub has a strictly newer save than this snapshot, honor the newer save
+      if (newestLocalOrHub && localTs > snapTs) {
+        setCachedStoreSettings(newestLocalOrHub, slug);
+        syncCollectionsWithBackendHub({ settings: newestLocalOrHub }, slug).catch(() => {});
+        return newestLocalOrHub;
+      }
+
       const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
       const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
       const rawAllowedModules: ActiveTab[] =
@@ -2724,6 +2766,16 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           : [...rawAllowedModules, 'online-sales']
         : rawAllowedModules.filter((m: ActiveTab) => m !== 'online-sales');
 
+      const parsedBanks =
+        data.bankAccounts !== undefined
+          ? sanitizeStoreBankAccountsList(data.bankAccounts)
+          : sanitizeStoreBankAccountsList(newestLocalOrHub?.bankAccounts);
+
+      const parsedLocations =
+        data.storeLocations !== undefined
+          ? sanitizeStoreLocationsList(data.storeLocations)
+          : sanitizeStoreLocationsList(newestLocalOrHub?.storeLocations);
+
       const settings: StoreSettings = {
         companyId: slug,
         storeName: data.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
@@ -2738,7 +2790,8 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
         whatsappOrderPhone: data.whatsappOrderPhone || '',
         catalogWelcomeMsg: data.catalogWelcomeMsg || '',
         showLocationsInCatalog: data.showLocationsInCatalog !== undefined ? Boolean(data.showLocationsInCatalog) : true,
-        storeLocations: sanitizeStoreLocationsList(data.storeLocations),
+        storeLocations: parsedLocations,
+        bankAccounts: parsedBanks,
         allowedModules: effectiveAllowedModules,
         enableDeliveryDvolada:
           data.enableDeliveryDvolada !== undefined
@@ -2747,11 +2800,16 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
         enableOnlineSales: isOnlineSalesEnabled,
         maxProducts: Math.max(0, Number(data.maxProducts) || 0),
         maxUsers: Math.max(0, Number(data.maxUsers) || 0),
-        updatedAt: Number(data.updatedAt) || Date.now(),
+        updatedAt: snapTs || Date.now(),
       };
       setCachedStoreSettings(settings, slug);
       syncCollectionsWithBackendHub({ settings }, slug).catch(() => {});
       return settings;
+    }
+
+    if (newestLocalOrHub) {
+      setCachedStoreSettings(newestLocalOrHub, slug);
+      return newestLocalOrHub;
     }
 
     if (slug !== 'gosen') {
@@ -2787,7 +2845,8 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           whatsappOrderPhone: cData.phone || '',
           catalogWelcomeMsg: '',
           showLocationsInCatalog: true,
-          storeLocations: [],
+          storeLocations: sanitizeStoreLocationsList(cData.storeLocations),
+          bankAccounts: sanitizeStoreBankAccountsList(cData.bankAccounts),
           allowedModules: effectiveAllowedModules,
           enableDeliveryDvolada: Boolean(cData.enableDeliveryDvolada === true),
           enableOnlineSales: isOnlineSalesEnabled,
@@ -2801,18 +2860,13 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
       }
     }
 
-    if (hubSync?.settings) {
-      setCachedStoreSettings(hubSync.settings, slug);
-      return hubSync.settings;
-    }
     return getDefaultStoreSettingsForCompany(slug);
   } catch (error) {
     isQuotaOrNetworkError(error);
-    if (hubSync?.settings) {
-      setCachedStoreSettings(hubSync.settings, slug);
-      return hubSync.settings;
+    if (newestLocalOrHub) {
+      setCachedStoreSettings(newestLocalOrHub, slug);
+      return newestLocalOrHub;
     }
-    if (cached) return cached;
     return getDefaultStoreSettingsForCompany(slug);
   }
 }
@@ -2827,8 +2881,18 @@ export function subscribeToStoreSettings(
   return onSnapshot(
     docRef,
     (snapshot) => {
+      const currentCached = getCachedStoreSettings(slug);
       if (snapshot.exists()) {
         const data = snapshot.data();
+        const snapTs = Number(data.updatedAt) || 0;
+        const cachedTs = Number(currentCached?.updatedAt) || 0;
+
+        // Do not let an older cached Firestore snapshot overwrite a newer local/hub save
+        if (currentCached && cachedTs > snapTs) {
+          onData(currentCached);
+          return;
+        }
+
         const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
         const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
         const rawAllowedModules: ActiveTab[] =
@@ -2847,6 +2911,16 @@ export function subscribeToStoreSettings(
             : [...rawAllowedModules, 'online-sales']
           : rawAllowedModules.filter((m: ActiveTab) => m !== 'online-sales');
 
+        const parsedBanks =
+          data.bankAccounts !== undefined
+            ? sanitizeStoreBankAccountsList(data.bankAccounts)
+            : sanitizeStoreBankAccountsList(currentCached?.bankAccounts);
+
+        const parsedLocations =
+          data.storeLocations !== undefined
+            ? sanitizeStoreLocationsList(data.storeLocations)
+            : sanitizeStoreLocationsList(currentCached?.storeLocations);
+
         const liveSettings: StoreSettings = {
           companyId: slug,
           storeName: data.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
@@ -2861,7 +2935,8 @@ export function subscribeToStoreSettings(
           whatsappOrderPhone: data.whatsappOrderPhone || '',
           catalogWelcomeMsg: data.catalogWelcomeMsg || '',
           showLocationsInCatalog: data.showLocationsInCatalog !== undefined ? Boolean(data.showLocationsInCatalog) : true,
-          storeLocations: sanitizeStoreLocationsList(data.storeLocations),
+          storeLocations: parsedLocations,
+          bankAccounts: parsedBanks,
           allowedModules: effectiveAllowedModules,
           enableDeliveryDvolada:
             data.enableDeliveryDvolada !== undefined
@@ -2870,12 +2945,12 @@ export function subscribeToStoreSettings(
           enableOnlineSales: isOnlineSalesEnabled,
           maxProducts: Math.max(0, Number(data.maxProducts) || 0),
           maxUsers: Math.max(0, Number(data.maxUsers) || 0),
-          updatedAt: Number(data.updatedAt) || Date.now(),
+          updatedAt: snapTs || Date.now(),
         };
         setCachedStoreSettings(liveSettings, slug);
         onData(liveSettings);
       } else {
-        onData(getDefaultStoreSettingsForCompany(slug));
+        onData(currentCached || getDefaultStoreSettingsForCompany(slug));
       }
     },
     (error) => {
@@ -2895,6 +2970,7 @@ export async function saveStoreSettingsToFirestore(
   const rawLogo = settings.logoUrl?.trim() || '';
   const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
   const sanitizedLocations = sanitizeStoreLocationsList(settings.storeLocations);
+  const sanitizedBankAccounts = sanitizeStoreBankAccountsList(settings.bankAccounts);
   const payload: any = {
     companyId: slug,
     storeName: settings.storeName.trim() || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
@@ -2910,6 +2986,7 @@ export async function saveStoreSettingsToFirestore(
     catalogWelcomeMsg: settings.catalogWelcomeMsg?.trim() || '',
     showLocationsInCatalog: settings.showLocationsInCatalog !== false,
     storeLocations: sanitizedLocations,
+    bankAccounts: sanitizedBankAccounts,
     updatedAt: Date.now(),
   };
 

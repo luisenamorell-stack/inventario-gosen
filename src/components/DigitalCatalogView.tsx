@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { StoreSettings, Product, StoreBranchLocation, getOfficialAppBaseUrl } from '../types';
+import { StoreSettings, Product, StoreBranchLocation, StoreBankAccount, getOfficialAppBaseUrl } from '../types';
 import {
   Share2,
   Copy,
@@ -17,10 +17,12 @@ import {
   Phone,
   Layers,
   ShoppingBag,
-  Truck
+  Truck,
+  Landmark,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { StoreLocationsEditor } from './StoreLocationsEditor';
+import { StoreBankAccountsEditor, mergeBankAccountsWithPendingDraft } from './StoreBankAccountsEditor';
 
 interface DigitalCatalogViewProps {
   storeSettings: StoreSettings;
@@ -54,6 +56,10 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
   const [storeLocations, setStoreLocations] = useState<StoreBranchLocation[]>(
     Array.isArray(storeSettings.storeLocations) ? storeSettings.storeLocations : []
   );
+  const [bankAccounts, setBankAccounts] = useState<StoreBankAccount[]>(
+    Array.isArray(storeSettings.bankAccounts) ? storeSettings.bankAccounts : []
+  );
+  const [pendingBankDraft, setPendingBankDraft] = useState<StoreBankAccount | null>(null);
 
   useEffect(() => {
     setWhatsappPhone(storeSettings.whatsappOrderPhone || storeSettings.phone || '');
@@ -63,6 +69,7 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
     );
     setShowLocationsInCatalog(storeSettings.showLocationsInCatalog !== false);
     setStoreLocations(Array.isArray(storeSettings.storeLocations) ? storeSettings.storeLocations : []);
+    setBankAccounts(Array.isArray(storeSettings.bankAccounts) ? storeSettings.bankAccounts : []);
   }, [storeSettings]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -142,14 +149,18 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
     e.preventDefault();
     setIsSaving(true);
     try {
+      const effectiveBanks = mergeBankAccountsWithPendingDraft(bankAccounts, pendingBankDraft);
+      setBankAccounts(effectiveBanks);
+      setPendingBankDraft(null);
       await onSaveSettings({
         ...storeSettings,
         whatsappOrderPhone: whatsappPhone.trim(),
         catalogWelcomeMsg: welcomeMsg.trim(),
         showLocationsInCatalog,
         storeLocations,
+        bankAccounts: effectiveBanks,
       });
-      if (showToast) showToast('¡Ajustes y ubicaciones del Catálogo Digital guardados exitosamente!', 'success');
+      if (showToast) showToast('¡Ajustes, cuentas bancarias y ubicaciones del Catálogo Digital guardados exitosamente!', 'success');
     } catch (err: any) {
       if (showToast) showToast(`Error al guardar: ${err?.message || err}`, 'error');
     } finally {
@@ -195,6 +206,10 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
           <span className="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1 rounded-xl border border-slate-700">
             <WhatsAppIcon className="w-3.5 h-3.5 fill-emerald-400" />
             <span>Recepción de pedidos: <strong className="text-emerald-400 font-bold">{whatsappPhone || storeSettings.phone || 'Configurar número'}</strong></span>
+          </span>
+          <span className="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1 rounded-xl border border-slate-700">
+            <Landmark className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Cuentas bancarias activas: <strong className="text-emerald-400 font-bold">{bankAccounts.length}</strong></span>
           </span>
         </div>
       </div>
@@ -336,6 +351,27 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
               </div>
             </form>
           </div>
+
+          {/* Card 2B: Cuentas Bancarias para Transferencias en el Catálogo Digital */}
+          <StoreBankAccountsEditor
+            storeName={storeSettings.storeName || 'Mi Tienda'}
+            defaultRtn={storeSettings.storeRtn || ''}
+            bankAccounts={bankAccounts}
+            onChangeBankAccounts={setBankAccounts}
+            onDraftAccountChange={setPendingBankDraft}
+            onQuickSave={async (nextBanks) => {
+              setPendingBankDraft(null);
+              await onSaveSettings({
+                ...storeSettings,
+                whatsappOrderPhone: whatsappPhone.trim(),
+                catalogWelcomeMsg: welcomeMsg.trim(),
+                showLocationsInCatalog,
+                storeLocations,
+                bankAccounts: nextBanks,
+              });
+            }}
+            showToast={showToast}
+          />
 
           {/* Card 3: Ubicación de la Tienda y Sucursales (Google Maps en Catálogo Digital) */}
           <div className="space-y-3">

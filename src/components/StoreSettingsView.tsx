@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { StoreSettings, PrinterPaperFormat, StoreBranchLocation } from '../types';
+import { StoreSettings, PrinterPaperFormat, StoreBranchLocation, StoreBankAccount } from '../types';
 import { uploadStoreLogo } from '../firebase/storageService';
 import { PrinterConnectionManager } from './PrintFormatModal';
 import { StoreLocationsEditor } from './StoreLocationsEditor';
+import { StoreBankAccountsEditor, mergeBankAccountsWithPendingDraft } from './StoreBankAccountsEditor';
 import { generateMonogramIconDataUrl } from '../utils/dynamicPwaManifest';
 import {
   Store,
@@ -93,6 +94,10 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   const [storeLocations, setStoreLocations] = useState<StoreBranchLocation[]>(
     Array.isArray(currentSettings.storeLocations) ? currentSettings.storeLocations : []
   );
+  const [bankAccounts, setBankAccounts] = useState<StoreBankAccount[]>(
+    Array.isArray(currentSettings.bankAccounts) ? currentSettings.bankAccounts : []
+  );
+  const [pendingBankDraft, setPendingBankDraft] = useState<StoreBankAccount | null>(null);
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -118,6 +123,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     setAccessPassword(currentSettings.accessPassword || defaultPassword);
     setShowLocationsInCatalog(currentSettings.showLocationsInCatalog !== false);
     setStoreLocations(Array.isArray(currentSettings.storeLocations) ? currentSettings.storeLocations : []);
+    setBankAccounts(Array.isArray(currentSettings.bankAccounts) ? currentSettings.bankAccounts : []);
   }, [currentSettings, isGosen, defaultPassword]);
 
   const hasUnsavedChanges =
@@ -131,7 +137,9 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     receiptFooterText !== (currentSettings.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.') ||
     accessPassword !== (currentSettings.accessPassword || defaultPassword) ||
     showLocationsInCatalog !== (currentSettings.showLocationsInCatalog !== false) ||
-    JSON.stringify(storeLocations) !== JSON.stringify(currentSettings.storeLocations || []);
+    JSON.stringify(storeLocations) !== JSON.stringify(currentSettings.storeLocations || []) ||
+    JSON.stringify(bankAccounts) !== JSON.stringify(currentSettings.bankAccounts || []) ||
+    Boolean(pendingBankDraft?.accountNumber?.trim());
 
   // File upload handler
   const handleProcessLogoFile = async (file: File) => {
@@ -219,6 +227,9 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
 
     setIsSaving(true);
     try {
+      const effectiveBanks = mergeBankAccountsWithPendingDraft(bankAccounts, pendingBankDraft);
+      setBankAccounts(effectiveBanks);
+      setPendingBankDraft(null);
       const updatedSettings: StoreSettings = {
         ...currentSettings,
         storeName: storeName.trim(),
@@ -232,6 +243,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
         accessPassword: accessPassword.trim(),
         showLocationsInCatalog,
         storeLocations,
+        bankAccounts: effectiveBanks,
         updatedAt: Date.now(),
       };
 
@@ -828,6 +840,35 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Card 3A: Cuentas Bancarias para Transferencias en el Catálogo Digital */}
+            <StoreBankAccountsEditor
+              storeName={storeName}
+              defaultRtn={storeRtn}
+              bankAccounts={bankAccounts}
+              onChangeBankAccounts={setBankAccounts}
+              onDraftAccountChange={setPendingBankDraft}
+              onQuickSave={async (nextBanks) => {
+                setPendingBankDraft(null);
+                await onSaveSettings({
+                  ...currentSettings,
+                  storeName: storeName.trim() || currentSettings.storeName,
+                  tagline: tagline.trim(),
+                  logoUrl: logoUrl.trim(),
+                  phone: phone.trim(),
+                  address: address.trim(),
+                  storeRtn: storeRtn.trim(),
+                  defaultPrinterFormat,
+                  receiptFooterText: receiptFooterText.trim(),
+                  accessPassword: accessPassword.trim() || defaultPassword,
+                  showLocationsInCatalog,
+                  storeLocations,
+                  bankAccounts: nextBanks,
+                  updatedAt: Date.now(),
+                });
+              }}
+              showToast={showToast}
+            />
 
             {/* Card 3B: Ubicación de la Tienda y Sucursales (Google Maps en Catálogo Digital) */}
             <StoreLocationsEditor
