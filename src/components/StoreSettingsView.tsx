@@ -6,6 +6,11 @@ import { StoreLocationsEditor } from './StoreLocationsEditor';
 import { StoreBankAccountsEditor, mergeBankAccountsWithPendingDraft } from './StoreBankAccountsEditor';
 import { generateMonogramIconDataUrl } from '../utils/dynamicPwaManifest';
 import {
+  CATALOG_THEME_PRESETS,
+  buildPaletteFromBrandColors,
+  extractPaletteFromLogoSource,
+} from '../utils/catalogThemeEngine';
+import {
   Store,
   Upload,
   Camera,
@@ -98,6 +103,12 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     Array.isArray(currentSettings.bankAccounts) ? currentSettings.bankAccounts : []
   );
   const [pendingBankDraft, setPendingBankDraft] = useState<StoreBankAccount | null>(null);
+  const [catalogAccentColor, setCatalogAccentColor] = useState<string>(
+    currentSettings.catalogAccentColor || ''
+  );
+  const [catalogHeaderBg, setCatalogHeaderBg] = useState<string>(
+    currentSettings.catalogHeaderBg || ''
+  );
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -124,6 +135,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     setShowLocationsInCatalog(currentSettings.showLocationsInCatalog !== false);
     setStoreLocations(Array.isArray(currentSettings.storeLocations) ? currentSettings.storeLocations : []);
     setBankAccounts(Array.isArray(currentSettings.bankAccounts) ? currentSettings.bankAccounts : []);
+    setCatalogAccentColor(currentSettings.catalogAccentColor || '');
+    setCatalogHeaderBg(currentSettings.catalogHeaderBg || '');
   }, [currentSettings, isGosen, defaultPassword]);
 
   const hasUnsavedChanges =
@@ -139,6 +152,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     showLocationsInCatalog !== (currentSettings.showLocationsInCatalog !== false) ||
     JSON.stringify(storeLocations) !== JSON.stringify(currentSettings.storeLocations || []) ||
     JSON.stringify(bankAccounts) !== JSON.stringify(currentSettings.bankAccounts || []) ||
+    catalogAccentColor !== (currentSettings.catalogAccentColor || '') ||
+    catalogHeaderBg !== (currentSettings.catalogHeaderBg || '') ||
     Boolean(pendingBankDraft?.accountNumber?.trim());
 
   // File upload handler
@@ -159,13 +174,23 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     setUploadProgress(10);
 
     try {
+      // Automatically extract dominant brand colors directly from the uploaded logo file
+      extractPaletteFromLogoSource(file)
+        .then((extracted) => {
+          if (extracted) {
+            setCatalogAccentColor(extracted.accentColor);
+            setCatalogHeaderBg(extracted.headerBg);
+          }
+        })
+        .catch(() => {});
+
       const downloadUrl = await uploadStoreLogo(file, (percent) => {
         setUploadProgress(percent);
       });
 
       setLogoUrl(downloadUrl);
       if (showToast) {
-        showToast('Logo subido a Firebase Storage con éxito', 'success');
+        showToast('Logo subido y colores del catálogo sincronizados con éxito', 'success');
       }
     } catch (err: any) {
       console.error('Error uploading store logo:', err);
@@ -244,6 +269,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
         showLocationsInCatalog,
         storeLocations,
         bankAccounts: effectiveBanks,
+        catalogAccentColor: catalogAccentColor.trim(),
+        catalogHeaderBg: catalogHeaderBg.trim(),
         updatedAt: Date.now(),
       };
 
@@ -564,6 +591,156 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Catalog Brand Theme Preview & Color Selector */}
+              {(() => {
+                const previewPalette = buildPaletteFromBrandColors(
+                  catalogAccentColor || '#d5ab46',
+                  catalogHeaderBg || undefined
+                );
+                return (
+                  <div className="pt-4 border-t border-slate-100 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
+                          Diseño y Color del Catálogo Digital (Según el Logo)
+                        </h3>
+                        <p className="text-[11px] text-slate-500">
+                          El catálogo digital toma los colores de tu logo para el encabezado, categorías y botones.
+                        </p>
+                      </div>
+                      {logoUrl && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const res = await extractPaletteFromLogoSource(logoUrl);
+                            if (res) {
+                              setCatalogAccentColor(res.accentColor);
+                              setCatalogHeaderBg(res.headerBg);
+                              showToast?.('Colores extraídos automáticamente de tu logo', 'success');
+                            } else {
+                              setCatalogAccentColor('');
+                              setCatalogHeaderBg('');
+                              showToast?.('Usando detección automática en vivo para tu logo', 'info');
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Detectar Color del Logo</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Live Mini Header & Card Button Preview matching Reference Design */}
+                    <div
+                      className="rounded-2xl overflow-hidden border shadow-xs"
+                      style={{
+                        backgroundColor: previewPalette.pageBg,
+                        borderColor: previewPalette.cardBorder,
+                      }}
+                    >
+                      <div
+                        className="px-4 py-3 flex items-center justify-between gap-3"
+                        style={{
+                          backgroundColor: previewPalette.headerBg,
+                          borderBottom: `3px solid ${previewPalette.headerBorder}`,
+                        }}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div
+                            className="w-11 h-11 rounded-full overflow-hidden shrink-0 flex items-center justify-center"
+                            style={{
+                              backgroundColor: previewPalette.logoBgColor,
+                              border: `2px solid ${previewPalette.logoRingColor}`,
+                            }}
+                          >
+                            {logoUrl ? (
+                              <img
+                                src={logoUrl}
+                                alt={storeName}
+                                className="w-full h-full object-cover rounded-full"
+                              />
+                            ) : (
+                              <Store
+                                className="w-5 h-5"
+                                style={{ color: previewPalette.headerTitleColor }}
+                              />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div
+                              className="font-black text-sm uppercase tracking-wide truncate"
+                              style={{ color: previewPalette.headerTitleColor }}
+                            >
+                              {storeName || 'MI TIENDA'}
+                            </div>
+                            <div
+                              className="text-[11px] font-medium truncate"
+                              style={{ color: previewPalette.headerSubtitleColor }}
+                            >
+                              Catálogo de productos
+                            </div>
+                          </div>
+                        </div>
+
+                        <span
+                          className="px-3 py-1 rounded-full text-[11px] font-extrabold shrink-0"
+                          style={{
+                            backgroundColor: previewPalette.accentColor,
+                            color: previewPalette.accentTextColor,
+                          }}
+                        >
+                          + Agregar
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Preset Swatches + Custom Color Picker */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      {CATALOG_THEME_PRESETS.map((preset) => {
+                        const isSelected =
+                          (catalogAccentColor || '#d5ab46').toLowerCase() ===
+                          preset.accentColor.toLowerCase();
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => {
+                              setCatalogAccentColor(preset.accentColor);
+                              setCatalogHeaderBg(preset.headerBg);
+                            }}
+                            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            <span
+                              className="w-3.5 h-3.5 rounded-full border border-black/20 shrink-0"
+                              style={{ backgroundColor: preset.accentColor }}
+                            />
+                            <span>{preset.label}</span>
+                          </button>
+                        );
+                      })}
+
+                      <label className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="color"
+                          value={catalogAccentColor || '#d5ab46'}
+                          onChange={(e) => {
+                            setCatalogAccentColor(e.target.value);
+                            setCatalogHeaderBg('');
+                          }}
+                          className="w-4 h-4 rounded border-0 p-0 cursor-pointer bg-transparent"
+                        />
+                        <span>Otro color</span>
+                      </label>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Card: Aplicación Móvil PWA y Acceso con Icono de la Tienda */}

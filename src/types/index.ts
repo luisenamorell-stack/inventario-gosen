@@ -689,6 +689,8 @@ export interface StoreSettings {
   showLocationsInCatalog?: boolean;
   storeLocations?: StoreBranchLocation[];
   bankAccounts?: StoreBankAccount[];
+  catalogAccentColor?: string;
+  catalogHeaderBg?: string;
   allowedModules?: ActiveTab[];
   enableDeliveryDvolada?: boolean;
   enableOnlineSales?: boolean;

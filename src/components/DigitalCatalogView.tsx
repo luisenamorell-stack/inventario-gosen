@@ -23,6 +23,11 @@ import {
 import { WhatsAppIcon } from './SalesView';
 import { StoreLocationsEditor } from './StoreLocationsEditor';
 import { StoreBankAccountsEditor, mergeBankAccountsWithPendingDraft } from './StoreBankAccountsEditor';
+import {
+  CATALOG_THEME_PRESETS,
+  buildPaletteFromBrandColors,
+  extractPaletteFromLogoSource,
+} from '../utils/catalogThemeEngine';
 
 interface DigitalCatalogViewProps {
   storeSettings: StoreSettings;
@@ -60,6 +65,12 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
     Array.isArray(storeSettings.bankAccounts) ? storeSettings.bankAccounts : []
   );
   const [pendingBankDraft, setPendingBankDraft] = useState<StoreBankAccount | null>(null);
+  const [catalogAccentColor, setCatalogAccentColor] = useState<string>(
+    storeSettings.catalogAccentColor || ''
+  );
+  const [catalogHeaderBg, setCatalogHeaderBg] = useState<string>(
+    storeSettings.catalogHeaderBg || ''
+  );
 
   useEffect(() => {
     setWhatsappPhone(storeSettings.whatsappOrderPhone || storeSettings.phone || '');
@@ -70,6 +81,8 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
     setShowLocationsInCatalog(storeSettings.showLocationsInCatalog !== false);
     setStoreLocations(Array.isArray(storeSettings.storeLocations) ? storeSettings.storeLocations : []);
     setBankAccounts(Array.isArray(storeSettings.bankAccounts) ? storeSettings.bankAccounts : []);
+    setCatalogAccentColor(storeSettings.catalogAccentColor || '');
+    setCatalogHeaderBg(storeSettings.catalogHeaderBg || '');
   }, [storeSettings]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -159,6 +172,8 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
         showLocationsInCatalog,
         storeLocations,
         bankAccounts: effectiveBanks,
+        catalogAccentColor: catalogAccentColor.trim(),
+        catalogHeaderBg: catalogHeaderBg.trim(),
       });
       if (showToast) showToast('¡Ajustes, cuentas bancarias y ubicaciones del Catálogo Digital guardados exitosamente!', 'success');
     } catch (err: any) {
@@ -338,6 +353,156 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium text-slate-800 text-xs"
                 />
               </div>
+
+              {/* Catalog Brand Theme Preview & Color Selector */}
+              {(() => {
+                const effectiveLogo =
+                  storeSettings.logoUrl || (isGosen ? '/store-logo.jpg' : '');
+                const previewPalette = buildPaletteFromBrandColors(
+                  catalogAccentColor || '#d5ab46',
+                  catalogHeaderBg || undefined
+                );
+                return (
+                  <div className="pt-3 border-t border-slate-100 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <label className="block font-bold text-slate-800 text-xs">
+                          Diseño y Colores del Catálogo (Según el Logo de la Tienda)
+                        </label>
+                        <p className="text-[11px] text-slate-500">
+                          Encabezado con emblema circular, categorías y botones adaptados al estilo de tu marca.
+                        </p>
+                      </div>
+                      {effectiveLogo && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const res = await extractPaletteFromLogoSource(effectiveLogo);
+                            if (res) {
+                              setCatalogAccentColor(res.accentColor);
+                              setCatalogHeaderBg(res.headerBg);
+                              showToast?.('Colores extraídos automáticamente de tu logo', 'success');
+                            } else {
+                              setCatalogAccentColor('');
+                              setCatalogHeaderBg('');
+                              showToast?.('Usando detección automática en vivo para tu logo', 'info');
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Extraer Color de mi Logo</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div
+                      className="rounded-2xl overflow-hidden border shadow-xs"
+                      style={{
+                        backgroundColor: previewPalette.pageBg,
+                        borderColor: previewPalette.cardBorder,
+                      }}
+                    >
+                      <div
+                        className="px-4 py-3 flex items-center justify-between gap-3"
+                        style={{
+                          backgroundColor: previewPalette.headerBg,
+                          borderBottom: `3px solid ${previewPalette.headerBorder}`,
+                        }}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div
+                            className="w-11 h-11 rounded-full overflow-hidden shrink-0 flex items-center justify-center"
+                            style={{
+                              backgroundColor: previewPalette.logoBgColor,
+                              border: `2px solid ${previewPalette.logoRingColor}`,
+                            }}
+                          >
+                            {effectiveLogo ? (
+                              <img
+                                src={effectiveLogo}
+                                alt={storeSettings.storeName}
+                                className="w-full h-full object-cover rounded-full"
+                              />
+                            ) : (
+                              <Store
+                                className="w-5 h-5"
+                                style={{ color: previewPalette.headerTitleColor }}
+                              />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div
+                              className="font-black text-sm uppercase tracking-wide truncate"
+                              style={{ color: previewPalette.headerTitleColor }}
+                            >
+                              {storeSettings.storeName || 'MI TIENDA'}
+                            </div>
+                            <div
+                              className="text-[11px] font-medium truncate"
+                              style={{ color: previewPalette.headerSubtitleColor }}
+                            >
+                              Catálogo de productos
+                            </div>
+                          </div>
+                        </div>
+
+                        <span
+                          className="px-3 py-1 rounded-full text-[11px] font-extrabold shrink-0"
+                          style={{
+                            backgroundColor: previewPalette.accentColor,
+                            color: previewPalette.accentTextColor,
+                          }}
+                        >
+                          + Agregar
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {CATALOG_THEME_PRESETS.map((preset) => {
+                        const isSelected =
+                          (catalogAccentColor || '#d5ab46').toLowerCase() ===
+                          preset.accentColor.toLowerCase();
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => {
+                              setCatalogAccentColor(preset.accentColor);
+                              setCatalogHeaderBg(preset.headerBg);
+                            }}
+                            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            <span
+                              className="w-3.5 h-3.5 rounded-full border border-black/20 shrink-0"
+                              style={{ backgroundColor: preset.accentColor }}
+                            />
+                            <span>{preset.label}</span>
+                          </button>
+                        );
+                      })}
+
+                      <label className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="color"
+                          value={catalogAccentColor || '#d5ab46'}
+                          onChange={(e) => {
+                            setCatalogAccentColor(e.target.value);
+                            setCatalogHeaderBg('');
+                          }}
+                          className="w-4 h-4 rounded border-0 p-0 cursor-pointer bg-transparent"
+                        />
+                        <span>Otro color</span>
+                      </label>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="flex justify-end pt-2">
                 <button

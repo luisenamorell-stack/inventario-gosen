@@ -2792,6 +2792,8 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
         showLocationsInCatalog: data.showLocationsInCatalog !== undefined ? Boolean(data.showLocationsInCatalog) : true,
         storeLocations: parsedLocations,
         bankAccounts: parsedBanks,
+        catalogAccentColor: data.catalogAccentColor || newestLocalOrHub?.catalogAccentColor || '',
+        catalogHeaderBg: data.catalogHeaderBg || newestLocalOrHub?.catalogHeaderBg || '',
         allowedModules: effectiveAllowedModules,
         enableDeliveryDvolada:
           data.enableDeliveryDvolada !== undefined
@@ -2847,6 +2849,8 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           showLocationsInCatalog: true,
           storeLocations: sanitizeStoreLocationsList(cData.storeLocations),
           bankAccounts: sanitizeStoreBankAccountsList(cData.bankAccounts),
+          catalogAccentColor: cData.catalogAccentColor || '',
+          catalogHeaderBg: cData.catalogHeaderBg || '',
           allowedModules: effectiveAllowedModules,
           enableDeliveryDvolada: Boolean(cData.enableDeliveryDvolada === true),
           enableOnlineSales: isOnlineSalesEnabled,
@@ -2937,6 +2941,8 @@ export function subscribeToStoreSettings(
           showLocationsInCatalog: data.showLocationsInCatalog !== undefined ? Boolean(data.showLocationsInCatalog) : true,
           storeLocations: parsedLocations,
           bankAccounts: parsedBanks,
+          catalogAccentColor: data.catalogAccentColor || currentCached?.catalogAccentColor || '',
+          catalogHeaderBg: data.catalogHeaderBg || currentCached?.catalogHeaderBg || '',
           allowedModules: effectiveAllowedModules,
           enableDeliveryDvolada:
             data.enableDeliveryDvolada !== undefined
@@ -2987,6 +2993,8 @@ export async function saveStoreSettingsToFirestore(
     showLocationsInCatalog: settings.showLocationsInCatalog !== false,
     storeLocations: sanitizedLocations,
     bankAccounts: sanitizedBankAccounts,
+    catalogAccentColor: settings.catalogAccentColor?.trim() || '',
+    catalogHeaderBg: settings.catalogHeaderBg?.trim() || '',
     updatedAt: Date.now(),
   };
 

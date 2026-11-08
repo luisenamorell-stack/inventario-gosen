@@ -14,6 +14,7 @@ interface AdaptiveImageProps {
   enableZoom?: boolean;
   hoverScale?: boolean;
   darkSurface?: boolean;
+  coverMode?: boolean;
 }
 
 /**
@@ -34,6 +35,7 @@ export const AdaptiveImage: React.FC<AdaptiveImageProps> = ({
   enableZoom = false,
   hoverScale = false,
   darkSurface = false,
+  coverMode = false,
 }) => {
   const [hasError, setHasError] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -126,7 +128,11 @@ export const AdaptiveImage: React.FC<AdaptiveImageProps> = ({
           onLoad={handleImageLoad}
           onError={() => setHasError(true)}
           className={`relative z-10 max-w-full max-h-full w-full h-full ${
-            isNearSquare ? 'object-contain p-0.5' : 'object-contain p-1'
+            coverMode
+              ? 'object-cover'
+              : isNearSquare
+              ? 'object-contain p-0.5'
+              : 'object-contain p-1'
           } drop-shadow-2xs transition-transform duration-300 ${
             hoverScale ? 'group-hover:scale-105' : ''
           } ${imgClassName}`}

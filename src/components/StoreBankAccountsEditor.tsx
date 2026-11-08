@@ -673,6 +673,11 @@ interface CatalogBankAccountCardProps {
   onSelect?: () => void;
   onCopyFeedback?: (msg: string) => void;
   compact?: boolean;
+  accentColor?: string;
+  accentTextColor?: string;
+  stockBadgeBg?: string;
+  stockBadgeText?: string;
+  cardBorder?: string;
 }
 
 export const CatalogBankAccountCard: React.FC<CatalogBankAccountCardProps> = ({
@@ -681,6 +686,11 @@ export const CatalogBankAccountCard: React.FC<CatalogBankAccountCardProps> = ({
   onSelect,
   onCopyFeedback,
   compact = false,
+  accentColor,
+  accentTextColor,
+  stockBadgeBg,
+  stockBadgeText,
+  cardBorder,
 }) => {
   const [copiedField, setCopiedField] = useState<'number' | 'digits' | 'holder' | 'rtn' | 'all' | null>(null);
 
@@ -715,10 +725,21 @@ export const CatalogBankAccountCard: React.FC<CatalogBankAccountCardProps> = ({
       className={`rounded-2xl border transition-all p-3.5 sm:p-4 bg-white ${
         onSelect ? 'cursor-pointer' : ''
       } ${
-        isSelected
-          ? 'border-emerald-500 ring-2 ring-emerald-500/20 shadow-sm bg-emerald-50/20'
-          : 'border-slate-200 hover:border-slate-300 shadow-2xs'
+        !accentColor
+          ? isSelected
+            ? 'border-emerald-500 ring-2 ring-emerald-500/20 shadow-sm bg-emerald-50/20'
+            : 'border-slate-200 hover:border-slate-300 shadow-2xs'
+          : 'shadow-2xs'
       }`}
+      style={
+        accentColor
+          ? {
+              borderColor: isSelected ? accentColor : cardBorder || '#e5e7eb',
+              borderWidth: isSelected ? '2px' : '1.5px',
+              backgroundColor: isSelected && stockBadgeBg ? `${stockBadgeBg}55` : '#ffffff',
+            }
+          : undefined
+      }
     >
       {/* Top Row: Bank Logo + Bank Name + Account Type */}
       <div className="flex items-start justify-between gap-3">
@@ -731,17 +752,28 @@ export const CatalogBankAccountCard: React.FC<CatalogBankAccountCardProps> = ({
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h4 className="font-black text-slate-900 text-sm sm:text-base leading-tight">
+              <h4 className="font-black text-stone-900 text-sm sm:text-base leading-tight">
                 {account.bankName}
               </h4>
               {isSelected && (
-                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full"
+                  style={
+                    accentColor
+                      ? {
+                          backgroundColor: stockBadgeBg || '#f9f0cf',
+                          color: stockBadgeText || '#5c410b',
+                          border: `1px solid ${accentColor}`,
+                        }
+                      : undefined
+                  }
+                >
+                  <CheckCircle2 className="w-3 h-3" />
                   <span>Seleccionado</span>
                 </span>
               )}
             </div>
-            <p className="text-[11px] font-semibold text-slate-500 mt-0.5">
+            <p className="text-[11px] font-semibold text-stone-500 mt-0.5">
               Cuenta de {account.accountType || 'Ahorro'} · {currencyLabel}
             </p>
           </div>
@@ -757,17 +789,17 @@ export const CatalogBankAccountCard: React.FC<CatalogBankAccountCardProps> = ({
             }`;
             triggerCopy(summary, 'all', 'Datos completos de la cuenta');
           }}
-          className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+          className="px-2.5 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold text-[11px] inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0"
           title="Copiar todos los datos de esta cuenta"
         >
           {copiedField === 'all' ? (
             <>
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="text-emerald-700">¡Todo Copiado!</span>
+              <Check className="w-3.5 h-3.5" style={{ color: stockBadgeText || '#059669' }} />
+              <span style={{ color: stockBadgeText || '#047857' }}>¡Todo Copiado!</span>
             </>
           ) : (
             <>
-              <Copy className="w-3 h-3 text-slate-500" />
+              <Copy className="w-3 h-3 text-stone-500" />
               <span>Copiar todo</span>
             </>
           )}
@@ -775,12 +807,15 @@ export const CatalogBankAccountCard: React.FC<CatalogBankAccountCardProps> = ({
       </div>
 
       {/* Account Number Highlight Box with One-Click Copy */}
-      <div className="mt-3 p-2.5 sm:p-3 rounded-xl bg-slate-50 border border-slate-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <div
+        className="mt-3 p-2.5 sm:p-3 rounded-xl bg-stone-50 border flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+        style={{ borderColor: cardBorder || '#e5e7eb' }}
+      >
         <div className="min-w-0">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 block">
             Número de Cuenta
           </span>
-          <span className="font-mono tabular-nums font-black text-slate-900 text-base sm:text-lg tracking-wide select-all break-all">
+          <span className="font-mono tabular-nums font-black text-stone-900 text-base sm:text-lg tracking-wide select-all break-all">
             {account.accountNumber}
           </span>
         </div>
@@ -792,11 +827,21 @@ export const CatalogBankAccountCard: React.FC<CatalogBankAccountCardProps> = ({
               e.stopPropagation();
               triggerCopy(cleanDigitsOnly, 'number', 'Número de cuenta');
             }}
-            className={`px-3.5 py-2 rounded-xl font-extrabold text-xs inline-flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs ${
-              copiedField === 'number'
-                ? 'bg-emerald-600 text-white'
-                : 'bg-slate-900 hover:bg-slate-800 text-white'
+            className={`px-3.5 py-2 rounded-full font-extrabold text-xs inline-flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs ${
+              !accentColor
+                ? copiedField === 'number'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-900 hover:bg-slate-800 text-white'
+                : ''
             }`}
+            style={
+              accentColor
+                ? {
+                    backgroundColor: accentColor,
+                    color: accentTextColor || '#1f1709',
+                  }
+                : undefined
+            }
           >
             {copiedField === 'number' ? (
               <>
@@ -818,11 +863,12 @@ export const CatalogBankAccountCard: React.FC<CatalogBankAccountCardProps> = ({
                 e.stopPropagation();
                 triggerCopy(account.accountNumber.trim(), 'digits', 'Número con guiones');
               }}
-              className="px-2.5 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-2 rounded-full bg-white hover:bg-stone-100 text-stone-700 border font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+              style={{ borderColor: cardBorder || '#e5e7eb' }}
               title="Copiar con formato original"
             >
               {copiedField === 'digits' ? (
-                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                <Check className="w-3.5 h-3.5" style={{ color: stockBadgeText || '#059669' }} />
               ) : (
                 <span>Con guiones</span>
               )}
