@@ -12,6 +12,9 @@ import {
   PrinterPaperFormat,
   StoreWarehousesData,
   WarehouseLocation,
+  LoyaltyCustomerProfile,
+  LoyaltyProgramConfig,
+  LoyaltyTransactionLog,
 } from '../types';
 import {
   getProductStockInWarehouse,
@@ -84,6 +87,9 @@ import {
   Edit2,
   Lock,
   Boxes,
+  Award,
+  Gift,
+  Star,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -107,7 +113,13 @@ export const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-
   </svg>
 );
 
-export type SalesSubTab = 'pos' | 'cash-register' | 'credits' | 'expenses' | 'history';
+export type SalesSubTab =
+  | 'pos'
+  | 'cash-register'
+  | 'credits'
+  | 'expenses'
+  | 'loyalty'
+  | 'history';
 
 interface SalesViewProps {
   inventory: Product[];
@@ -627,6 +639,68 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setCart((prev) => prev.filter((item) => item.code !== code));
   };
 
+  // Loyalty Program State in POS
+  const [selectedLoyaltyCustomerId, setSelectedLoyaltyCustomerId] = useState<string>('');
+  const [redeemLoyaltyPoints, setRedeemLoyaltyPoints] = useState<boolean>(false);
+  const [showCustomerFieldsPos, setShowCustomerFieldsPos] = useState<boolean>(false);
+
+  const loyaltyConfig: LoyaltyProgramConfig = useMemo(
+    () => ({
+      enabled: posFinanceData?.loyaltyConfig?.enabled !== false,
+      amountPerPoint: Math.max(1, Number(posFinanceData?.loyaltyConfig?.amountPerPoint) || 100),
+      pointsEarnedPerStep: Math.max(
+        1,
+        Number(posFinanceData?.loyaltyConfig?.pointsEarnedPerStep) || 1
+      ),
+      lempirasPerPointRedeem: Math.max(
+        0.1,
+        Number(posFinanceData?.loyaltyConfig?.lempirasPerPointRedeem) || 5
+      ),
+      minPointsToRedeem: Math.max(
+        1,
+        Number(posFinanceData?.loyaltyConfig?.minPointsToRedeem) || 5
+      ),
+      welcomeBonusPoints: Math.max(
+        0,
+        Number(posFinanceData?.loyaltyConfig?.welcomeBonusPoints) || 0
+      ),
+    }),
+    [posFinanceData?.loyaltyConfig]
+  );
+
+  const loyaltyCustomers: LoyaltyCustomerProfile[] = useMemo(
+    () => posFinanceData?.loyaltyCustomers || [],
+    [posFinanceData?.loyaltyCustomers]
+  );
+
+  // Auto-match customer by selected ID, phone number, or exact name
+  const matchedLoyaltyCustomer = useMemo(() => {
+    if (!loyaltyConfig.enabled) return null;
+    if (selectedLoyaltyCustomerId) {
+      const byId = loyaltyCustomers.find((c) => c.id === selectedLoyaltyCustomerId);
+      if (byId) return byId;
+    }
+    const cleanDigits = customerPhone.replace(/\D/g, '');
+    if (cleanDigits.length >= 7) {
+      const byPhone = loyaltyCustomers.find(
+        (c) => c.phone.replace(/\D/g, '') === cleanDigits
+      );
+      if (byPhone) return byPhone;
+    }
+    const cleanName = customerName.trim().toLowerCase();
+    if (cleanName && cleanName !== 'consumidor final') {
+      const byName = loyaltyCustomers.find((c) => c.name.trim().toLowerCase() === cleanName);
+      if (byName) return byName;
+    }
+    return null;
+  }, [
+    loyaltyConfig.enabled,
+    selectedLoyaltyCustomerId,
+    customerPhone,
+    customerName,
+    loyaltyCustomers,
+  ]);
+
   // Clear entire cart
   const clearCart = () => {
     setCart([]);
@@ -638,6 +712,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setCustomerRtn('');
     setCustomerPhone('');
     setSaleNotes('');
+    setSelectedLoyaltyCustomerId('');
+    setRedeemLoyaltyPoints(false);
     setMobilePosTab('catalog');
   };
 
@@ -658,7 +734,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return cart.reduce((sum, it) => sum + it.subtotal, 0);
   }, [cart]);
 
-  const discountAmount = useMemo(() => {
+  const manualDiscountAmount = useMemo(() => {
     const rawVal = Math.max(0, parseFloat(discountValue) || 0);
     if (rawVal <= 0 || cartSubtotal <= 0) return 0;
     if (discountType === 'percent') {
@@ -667,6 +743,40 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
     return Math.min(cartSubtotal, rawVal);
   }, [cartSubtotal, discountValue, discountType]);
+
+  // Loyalty points redemption calculation
+  const loyaltyRedemptionCalc = useMemo(() => {
+    if (
+      !loyaltyConfig.enabled ||
+      !matchedLoyaltyCustomer ||
+      !redeemLoyaltyPoints ||
+      matchedLoyaltyCustomer.currentPoints < loyaltyConfig.minPointsToRedeem
+    ) {
+      return { pointsRedeemed: 0, discountLps: 0 };
+    }
+    const remainingAfterManual = Math.max(0, cartSubtotal - manualDiscountAmount);
+    if (remainingAfterManual <= 0) return { pointsRedeemed: 0, discountLps: 0 };
+
+    const maxPointsNeeded = Math.ceil(
+      remainingAfterManual / loyaltyConfig.lempirasPerPointRedeem
+    );
+    const pointsToUse = Math.min(matchedLoyaltyCustomer.currentPoints, maxPointsNeeded);
+    const discountLps = Math.min(
+      remainingAfterManual,
+      pointsToUse * loyaltyConfig.lempirasPerPointRedeem
+    );
+    return { pointsRedeemed: pointsToUse, discountLps };
+  }, [
+    loyaltyConfig,
+    matchedLoyaltyCustomer,
+    redeemLoyaltyPoints,
+    cartSubtotal,
+    manualDiscountAmount,
+  ]);
+
+  const discountAmount = useMemo(() => {
+    return Math.min(cartSubtotal, manualDiscountAmount + loyaltyRedemptionCalc.discountLps);
+  }, [cartSubtotal, manualDiscountAmount, loyaltyRedemptionCalc.discountLps]);
 
   const subtotalAfterDiscount = useMemo(() => {
     return Math.max(0, cartSubtotal - discountAmount);
@@ -679,6 +789,20 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const cartTotal = useMemo(() => {
     return subtotalAfterDiscount + taxAmount;
   }, [subtotalAfterDiscount, taxAmount]);
+
+  // Points that will be earned on this sale
+  const pointsEarnedOnCurrentCart = useMemo(() => {
+    if (!loyaltyConfig.enabled || cartTotal <= 0) return 0;
+    const hasRealCustomer =
+      Boolean(matchedLoyaltyCustomer) ||
+      (customerName.trim() !== '' &&
+        customerName.trim().toLowerCase() !== 'consumidor final') ||
+      customerPhone.replace(/\D/g, '').length >= 7;
+    if (!hasRealCustomer) return 0;
+    return (
+      Math.floor(cartTotal / loyaltyConfig.amountPerPoint) * loyaltyConfig.pointsEarnedPerStep
+    );
+  }, [loyaltyConfig, cartTotal, matchedLoyaltyCustomer, customerName, customerPhone]);
 
   const totalCartItemsCount = useMemo(() => {
     return cart.reduce((sum, it) => sum + it.quantity, 0);
@@ -770,6 +894,33 @@ export const SalesView: React.FC<SalesViewProps> = ({
             ]
           : [];
 
+      // Compute loyalty points update if applicable
+      const cleanCustName = customerName.trim() || matchedLoyaltyCustomer?.name || 'Consumidor Final';
+      const cleanCustPhone = customerPhone.trim() || matchedLoyaltyCustomer?.phone || '';
+      const cleanCustRtn = customerRtn.trim() || matchedLoyaltyCustomer?.rtn || '';
+
+      const isLoyaltyEligible =
+        loyaltyConfig.enabled &&
+        (Boolean(matchedLoyaltyCustomer) ||
+          (cleanCustName.toLowerCase() !== 'consumidor final' && cleanCustPhone.replace(/\D/g, '').length >= 7));
+
+      const ptsRedeemed = isLoyaltyEligible ? loyaltyRedemptionCalc.pointsRedeemed : 0;
+      const ptsDiscountLps = isLoyaltyEligible ? loyaltyRedemptionCalc.discountLps : 0;
+      const ptsEarned = isLoyaltyEligible
+        ? Math.floor(cartTotal / loyaltyConfig.amountPerPoint) * loyaltyConfig.pointsEarnedPerStep
+        : 0;
+
+      const prevPtsBalance = matchedLoyaltyCustomer
+        ? Number(matchedLoyaltyCustomer.currentPoints) || 0
+        : loyaltyConfig.welcomeBonusPoints || 0;
+      const nextPtsBalance = isLoyaltyEligible
+        ? Math.max(0, prevPtsBalance - ptsRedeemed + ptsEarned)
+        : undefined;
+
+      const targetLoyaltyId =
+        matchedLoyaltyCustomer?.id ||
+        (isLoyaltyEligible ? `vip_${Date.now()}` : undefined);
+
       const saleData: Omit<SaleRecord, 'id'> = {
         saleNumber,
         timestamp: Date.now(),
@@ -792,23 +943,130 @@ export const SalesView: React.FC<SalesViewProps> = ({
         creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
         creditDueDate: isCredit && creditDueDate ? creditDueDate : undefined,
         creditPayments: initialPaymentsList,
-        customerName: customerName.trim() || 'Consumidor Final',
-        customerRtn: customerRtn.trim() || undefined,
-        customerPhone: customerPhone.trim() || undefined,
+        customerName: cleanCustName,
+        customerRtn: cleanCustRtn || undefined,
+        customerPhone: cleanCustPhone || undefined,
         notes: saleNotes.trim() || undefined,
         status: 'completed',
         warehouseId: selectedWarehouse.id,
         warehouseName: selectedWarehouse.name,
         cashier: userSession?.userName || 'Administrador',
         cashierRole: userSession?.role || 'admin',
+        loyaltyCustomerId: targetLoyaltyId,
+        loyaltyPointsEarned: ptsEarned > 0 ? ptsEarned : undefined,
+        loyaltyPointsRedeemed: ptsRedeemed > 0 ? ptsRedeemed : undefined,
+        loyaltyDiscountAmount: ptsDiscountLps > 0 ? ptsDiscountLps : undefined,
+        loyaltyPointsBalanceAfter: nextPtsBalance,
       };
 
       const result = await onRecordSale(saleData);
-      
+
       const recorded: SaleRecord = (result as SaleRecord) || {
         id: Date.now().toString(),
         ...saleData,
       };
+
+      // Update or auto-enroll Frequent Customer profile in POSFinanceStoreData
+      if (isLoyaltyEligible && onSavePOSFinanceData && posFinanceData) {
+        const nowMs = Date.now();
+        const newLogs: LoyaltyTransactionLog[] = [];
+        let runningBal = matchedLoyaltyCustomer
+          ? Number(matchedLoyaltyCustomer.currentPoints) || 0
+          : 0;
+
+        if (!matchedLoyaltyCustomer && loyaltyConfig.welcomeBonusPoints > 0) {
+          runningBal += loyaltyConfig.welcomeBonusPoints;
+          newLogs.push({
+            id: `log_wel_${nowMs}`,
+            timestamp: nowMs,
+            dateFormatted,
+            type: 'bonus',
+            points: loyaltyConfig.welcomeBonusPoints,
+            balanceAfter: runningBal,
+            notes: 'Bono de bienvenida al inscribirse en caja',
+            registeredBy: userSession?.userName || 'Administrador',
+          });
+        }
+
+        if (ptsRedeemed > 0) {
+          runningBal = Math.max(0, runningBal - ptsRedeemed);
+          newLogs.push({
+            id: `log_red_${nowMs}`,
+            timestamp: nowMs,
+            dateFormatted,
+            type: 'redeem',
+            points: -ptsRedeemed,
+            balanceAfter: runningBal,
+            saleNumber,
+            saleTotal: cartTotal,
+            discountApplied: ptsDiscountLps,
+            notes: `Canje de ${ptsRedeemed} pts (-L. ${ptsDiscountLps.toFixed(2)}) en ${saleNumber}`,
+            registeredBy: userSession?.userName || 'Administrador',
+          });
+        }
+
+        if (ptsEarned > 0) {
+          runningBal += ptsEarned;
+          newLogs.push({
+            id: `log_earn_${nowMs}`,
+            timestamp: nowMs + 1,
+            dateFormatted,
+            type: 'earn',
+            points: ptsEarned,
+            balanceAfter: runningBal,
+            saleNumber,
+            saleTotal: cartTotal,
+            notes: `Puntos ganados en compra ${saleNumber} (L. ${cartTotal.toFixed(2)})`,
+            registeredBy: userSession?.userName || 'Administrador',
+          });
+        }
+
+        let updatedCustomersList: LoyaltyCustomerProfile[];
+        if (matchedLoyaltyCustomer) {
+          updatedCustomersList = loyaltyCustomers.map((c) =>
+            c.id === matchedLoyaltyCustomer.id
+              ? {
+                  ...c,
+                  name: cleanCustName || c.name,
+                  phone: cleanCustPhone || c.phone,
+                  rtn: cleanCustRtn || c.rtn,
+                  currentPoints: runningBal,
+                  totalPointsEarned: (c.totalPointsEarned || 0) + ptsEarned,
+                  totalPointsRedeemed: (c.totalPointsRedeemed || 0) + ptsRedeemed,
+                  totalPurchasesAmount: (c.totalPurchasesAmount || 0) + cartTotal,
+                  purchasesCount: (c.purchasesCount || 0) + 1,
+                  history: [...newLogs.reverse(), ...(c.history || [])].slice(0, 80),
+                  updatedAt: nowMs,
+                }
+              : c
+          );
+        } else {
+          const nextCode = `VIP-${1001 + loyaltyCustomers.length}`;
+          const newProfile: LoyaltyCustomerProfile = {
+            id: targetLoyaltyId || `vip_${nowMs}`,
+            code: nextCode,
+            name: cleanCustName,
+            phone: cleanCustPhone,
+            rtn: cleanCustRtn || undefined,
+            currentPoints: runningBal,
+            totalPointsEarned:
+              (loyaltyConfig.welcomeBonusPoints || 0) + ptsEarned,
+            totalPointsRedeemed: ptsRedeemed,
+            totalPurchasesAmount: cartTotal,
+            purchasesCount: 1,
+            history: newLogs.reverse(),
+            createdAt: nowMs,
+            updatedAt: nowMs,
+          };
+          updatedCustomersList = [newProfile, ...loyaltyCustomers];
+        }
+
+        await onSavePOSFinanceData({
+          ...posFinanceData,
+          loyaltyCustomers: updatedCustomersList,
+          updatedAt: nowMs,
+        });
+      }
 
       setCompletedSale(recorded);
       setShowReceiptModal(true);
@@ -816,6 +1074,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
       showToast(
         isCredit
           ? `¡Venta al Crédito ${saleNumber} registrada desde ${selectedWarehouse.name}! Saldo pendiente: L. ${computedBalanceDue.toFixed(2)}`
+          : ptsEarned > 0 || ptsRedeemed > 0
+          ? `¡Venta ${saleNumber} completada! ${
+              ptsRedeemed > 0 ? `Canjeó ${ptsRedeemed} pts (-L. ${ptsDiscountLps.toFixed(2)}) • ` : ''
+            }Cliente sumó +${ptsEarned} pts (Saldo: ${nextPtsBalance ?? 0} pts)`
           : `¡Venta ${saleNumber} registrada con éxito desde ${selectedWarehouse.name}!`,
         'success'
       );
@@ -996,6 +1258,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
     if (sale.notes) {
       text += `*Nota:* ${sale.notes}\n`;
+    }
+
+    if (
+      (sale.loyaltyPointsEarned && sale.loyaltyPointsEarned > 0) ||
+      (sale.loyaltyPointsRedeemed && sale.loyaltyPointsRedeemed > 0) ||
+      sale.loyaltyPointsBalanceAfter !== undefined
+    ) {
+      text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+      text += `🏆 *PROGRAMA CLIENTE FRECUENTE:*\n`;
+      if (sale.loyaltyPointsRedeemed && sale.loyaltyPointsRedeemed > 0) {
+        text += `🎁 *Puntos Canjeados hoy:* -${sale.loyaltyPointsRedeemed} pts (-L. ${(
+          sale.loyaltyDiscountAmount || 0
+        ).toFixed(2)})\n`;
+      }
+      if (sale.loyaltyPointsEarned && sale.loyaltyPointsEarned > 0) {
+        text += `⭐ *Puntos Ganados en esta compra:* +${sale.loyaltyPointsEarned} pts\n`;
+      }
+      if (sale.loyaltyPointsBalanceAfter !== undefined) {
+        text += `💎 *Nuevo Saldo Acumulado:* *${sale.loyaltyPointsBalanceAfter} Puntos* _(Equivalente a L. ${(
+          sale.loyaltyPointsBalanceAfter * loyaltyConfig.lempirasPerPointRedeem
+        ).toFixed(2)})_\n`;
+      }
     }
 
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -1527,29 +1811,24 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-slate-50 overflow-hidden">
-      {/* Top Bar / Navigation Tabs */}
-      <div className="bg-white border-b border-slate-200 px-3 sm:px-5 py-2.5 flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-2.5 shrink-0 shadow-xs">
-        <div className="flex items-center justify-between min-w-0">
-          <div className="min-w-0">
-            <h1 className="text-base sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2 truncate">
-              <ShoppingCart className="w-5 h-5 text-emerald-600 shrink-0" />
-              <span className="truncate">Panel de Ventas &amp; Facturación</span>
-            </h1>
-            <p className="hidden 2xl:block text-xs text-slate-500 mt-0.5 truncate">
-              Punto de Venta (POS) en tiempo real con descuento automático de inventario e historial auditado.
-            </p>
-          </div>
+      {/* Top Bar / Navigation Tabs — Compact height with generous spacing between buttons */}
+      <div className="bg-white border-b border-slate-200 px-3 sm:px-5 py-2 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 shrink-0 shadow-2xs">
+        <div className="flex items-center justify-between min-w-0 shrink-0">
+          <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2 truncate">
+            <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
+            <span className="truncate">Ventas &amp; Facturación</span>
+          </h1>
         </div>
 
-        {/* View Switcher Tabs — Optimized touch targets, zero clipping, smooth horizontal scroll */}
-        <div className="flex items-center sm:flex-wrap gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200/90 overflow-x-auto max-w-full scrollbar-none">
+        {/* View Switcher Tabs — Well-spaced buttons */}
+        <div className="flex items-center gap-2 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80 overflow-x-auto max-w-full scrollbar-none">
           <button
             type="button"
             onClick={() => setActiveSubTab('pos')}
-            className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
               activeSubTab === 'pos'
                 ? 'bg-emerald-600 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
             }`}
           >
             <ShoppingCart className="w-4 h-4 shrink-0" />
@@ -1564,33 +1843,48 @@ export const SalesView: React.FC<SalesViewProps> = ({
           <button
             type="button"
             onClick={() => setActiveSubTab('cash-register')}
-            className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
               activeSubTab === 'cash-register'
                 ? 'bg-emerald-600 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
             }`}
           >
             <Wallet className="w-4 h-4 shrink-0" />
             <span>Caja / Arqueo</span>
             {(posFinanceData?.shifts || []).some((s) => s.status === 'open') && (
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0 ring-2 ring-emerald-300" title="Caja Abierta" />
+              <span
+                className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0 ring-2 ring-emerald-300"
+                title="Caja Abierta"
+              />
             )}
           </button>
 
           <button
             type="button"
             onClick={() => setActiveSubTab('credits')}
-            className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
               activeSubTab === 'credits'
                 ? 'bg-amber-600 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
             }`}
           >
             <Users className="w-4 h-4 shrink-0" />
             <span>Cuentas por Cobrar</span>
-            {sales.filter((s) => s.status === 'completed' && (s.balanceDue ?? (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01).length > 0 && (
+            {sales.filter(
+              (s) =>
+                s.status === 'completed' &&
+                (s.balanceDue ??
+                  (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01
+            ).length > 0 && (
               <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-                {sales.filter((s) => s.status === 'completed' && (s.balanceDue ?? (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01).length}
+                {
+                  sales.filter(
+                    (s) =>
+                      s.status === 'completed' &&
+                      (s.balanceDue ??
+                        (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01
+                  ).length
+                }
               </span>
             )}
           </button>
@@ -1599,10 +1893,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
             <button
               type="button"
               onClick={() => setActiveSubTab('expenses')}
-              className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
                 activeSubTab === 'expenses'
                   ? 'bg-rose-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
               }`}
             >
               <TrendingUp className="w-4 h-4 shrink-0" />
@@ -1612,11 +1906,29 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
           <button
             type="button"
+            onClick={() => setActiveSubTab('loyalty')}
+            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+              activeSubTab === 'loyalty'
+                ? 'bg-amber-500 text-slate-950 shadow-xs'
+                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+            }`}
+          >
+            <Award className="w-4 h-4 shrink-0" />
+            <span>Clientes VIP / Puntos</span>
+            {loyaltyCustomers.length > 0 && (
+              <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                {loyaltyCustomers.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveSubTab('history')}
-            className={`min-h-[42px] sm:min-h-[38px] flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
               activeSubTab === 'history'
                 ? 'bg-emerald-600 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
             }`}
           >
             <History className="w-4 h-4 shrink-0" />
@@ -1629,7 +1941,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
       </div>
 
       {/* Main Content Area */}
-      {activeSubTab === 'cash-register' || activeSubTab === 'credits' || activeSubTab === 'expenses' ? (
+      {activeSubTab === 'cash-register' ||
+      activeSubTab === 'credits' ||
+      activeSubTab === 'expenses' ||
+      activeSubTab === 'loyalty' ? (
         <POSFinanceTabs
           mode={activeSubTab}
           inventory={inventory}
@@ -1660,32 +1975,32 @@ export const SalesView: React.FC<SalesViewProps> = ({
       ) : activeSubTab === 'pos' ? (
         /* ==================== POS TERMINAL VIEW ==================== */
         <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden relative">
-          {/* Mobile & Tablet Segmented POS Switcher (< lg) */}
-          <div className="lg:hidden w-full md:hidden p-2 sm:p-2.5 bg-white border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 shadow-2xs">
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl w-full">
+          {/* Mobile Segmented POS Switcher (< md) */}
+          <div className="md:hidden w-full p-2 bg-white border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 shadow-2xs">
+            <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl w-full">
               <button
                 type="button"
                 onClick={() => setMobilePosTab('catalog')}
-                className={`flex-1 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer active:scale-95 ${
+                className={`flex-1 min-h-[40px] flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer active:scale-95 ${
                   mobilePosTab === 'catalog' || mobilePosTab === 'split'
                     ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 <Tag className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Catálogo ({filteredCatalog.length})</span>
+                <span>Inventario ({filteredCatalog.length})</span>
               </button>
               <button
                 type="button"
                 onClick={() => setMobilePosTab('cart')}
-                className={`flex-1 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer active:scale-95 ${
+                className={`flex-1 min-h-[40px] flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer active:scale-95 ${
                   mobilePosTab === 'cart'
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 <ShoppingCart className="w-4 h-4 shrink-0" />
-                <span>Ticket / Cobrar</span>
+                <span>Zona de Ticket</span>
                 {cart.length > 0 && (
                   <span
                     className={`text-[11px] px-2 py-0.5 rounded-full font-black ${
@@ -1701,84 +2016,30 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
           </div>
 
-          {/* Left Column: Product Catalog & Search (Side-by-side on Tablet md+ and Desktop lg+) */}
+          {/* Left Column: Product Catalog & Search — Maximum Viewport Space for Inventory */}
           <div
             className={`flex-1 min-h-0 flex flex-col border-r border-slate-200 bg-slate-50/70 overflow-hidden relative ${
               mobilePosTab === 'cart' ? 'hidden md:flex' : 'flex'
             }`}
           >
-            {/* Search, Warehouse Selector and Category Filter Toolbar */}
-            <div className="p-2.5 sm:p-4 bg-white border-b border-slate-200 space-y-2 sm:space-y-2.5 shrink-0">
-              {/* Selector de Bodega de Venta / Despacho */}
-              <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-teal-50/80 border border-teal-200/90">
-                <div className="flex items-center gap-1.5 text-xs font-extrabold text-teal-900">
-                  <Boxes className="w-4 h-4 text-teal-600 shrink-0" />
-                  <span>Bodega de Venta:</span>
-                </div>
-                <div className="flex items-center gap-1.5 flex-wrap flex-1 sm:flex-initial justify-end">
-                  {activeWarehouses.length <= 4 ? (
-                    <div className="flex items-center gap-1 flex-wrap justify-end">
-                      {activeWarehouses.map((wh) => {
-                        const isSelected = wh.id === selectedWarehouse.id;
-                        return (
-                          <button
-                            key={wh.id}
-                            type="button"
-                            onClick={() => handleSelectPosWarehouse(wh.id)}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer flex items-center gap-1 ${
-                              isSelected
-                                ? 'bg-teal-700 text-white shadow-2xs ring-2 ring-teal-500/30'
-                                : 'bg-white text-slate-700 border border-teal-200 hover:bg-teal-100/60'
-                            }`}
-                            title={`Vender y descontar existencias de: ${wh.name}`}
-                          >
-                            <span>{wh.name}</span>
-                            {wh.isMainSalesFloor && (
-                              <span
-                                className={`text-[9px] px-1 py-0.2 rounded font-black uppercase ${
-                                  isSelected
-                                    ? 'bg-teal-900/60 text-teal-100'
-                                    : 'bg-emerald-100 text-emerald-800'
-                                }`}
-                              >
-                                POS
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <select
-                      value={selectedWarehouse.id}
-                      onChange={(e) => handleSelectPosWarehouse(e.target.value)}
-                      className="px-2.5 py-1 rounded-lg bg-white border border-teal-300 text-xs font-extrabold text-teal-950 focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer"
-                    >
-                      {activeWarehouses.map((wh) => (
-                        <option key={wh.id} value={wh.id}>
-                          {wh.name} ({wh.code})
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="relative">
+            {/* Ultra-Compact Search + Warehouse + Categories Header */}
+            <div className="px-3 py-2 sm:px-4 sm:py-2.5 bg-white border-b border-slate-200 space-y-2 shrink-0">
+              {/* Row 1: Search Input + Compact Warehouse Selector on the same row */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <div className="relative flex-1">
                   <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Buscar artículo, código o barra..."
+                    placeholder="Buscar artículo por nombre, código o escanear barra..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onKeyDown={handleSearchKeyDown}
-                    className="w-full pl-10 pr-20 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all font-medium"
+                    className="w-full pl-10 pr-16 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all font-medium"
                   />
                   {searchQuery && (
                     <button
                       onClick={() => setSearchQuery('')}
-                      className="absolute right-14 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+                      className="absolute right-12 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
                       title="Limpiar búsqueda"
                     >
                       <X className="w-4 h-4" />
@@ -1789,31 +2050,34 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </span>
                 </div>
 
-                {/* Helper chips for search capabilities */}
-                <div className="hidden sm:flex items-center gap-2 text-[10px] text-slate-400 font-medium px-1">
-                  <span>Búsqueda activa por:</span>
-                  <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-semibold flex items-center gap-1">
-                    <Tag className="w-2.5 h-2.5 text-emerald-600" />
-                    Nombre
+                {/* Compact Warehouse Selector Pill */}
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-teal-50/90 border border-teal-200 shrink-0">
+                  <Boxes className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                  <span className="text-[11px] font-bold text-teal-900 whitespace-nowrap">
+                    Bodega:
                   </span>
-                  <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-semibold flex items-center gap-1">
-                    <Barcode className="w-2.5 h-2.5 text-indigo-600" />
-                    Código / SKU
-                  </span>
-                  <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-semibold flex items-center gap-1">
-                    <Sparkles className="w-2.5 h-2.5 text-amber-500" />
-                    Código de Barra
-                  </span>
+                  <select
+                    value={selectedWarehouse.id}
+                    onChange={(e) => handleSelectPosWarehouse(e.target.value)}
+                    className="bg-white border border-teal-300 rounded-lg px-2 py-0.5 text-xs font-extrabold text-teal-950 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer max-w-[180px] truncate"
+                    title="Seleccionar bodega de donde descontar el inventario"
+                  >
+                    {activeWarehouses.map((wh) => (
+                      <option key={wh.id} value={wh.id}>
+                        {wh.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
-              {/* Category Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+              {/* Row 2: Well-spaced Category Filter Buttons */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-0.5 text-xs scrollbar-none">
                 <button
                   onClick={() => setSelectedCategory('all')}
-                  className={`px-3 py-1 rounded-lg font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                  className={`px-3.5 py-1.5 rounded-xl font-bold whitespace-nowrap transition-all cursor-pointer ${
                     selectedCategory === 'all'
-                      ? 'bg-slate-900 text-white'
+                      ? 'bg-slate-900 text-white shadow-2xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
@@ -1823,9 +2087,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   <button
                     key={cat}
                     onClick={() => setSelectedCategory(cat)}
-                    className={`px-3 py-1 rounded-lg font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                    className={`px-3.5 py-1.5 rounded-xl font-bold whitespace-nowrap transition-all cursor-pointer ${
                       selectedCategory === cat
-                        ? 'bg-slate-900 text-white'
+                        ? 'bg-slate-900 text-white shadow-2xs'
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
@@ -1835,21 +2099,23 @@ export const SalesView: React.FC<SalesViewProps> = ({
               </div>
             </div>
 
-            {/* Product Catalog Grid */}
-            <div className="flex-1 min-h-0 p-2.5 sm:p-4 overflow-y-auto scroll-container pb-28 lg:pb-6">
+            {/* Product Catalog Grid — Spacious & High Visibility */}
+            <div className="flex-1 min-h-0 p-3 sm:p-4 overflow-y-auto scroll-container pb-28 md:pb-6">
               {isLoading ? (
                 <PosProductGridSkeleton count={8} />
               ) : filteredCatalog.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400">
                   <Package className="w-12 h-12 mb-3 text-slate-300 stroke-1" />
-                  <p className="font-semibold text-slate-600 text-base">No se encontraron productos</p>
+                  <p className="font-semibold text-slate-600 text-base">
+                    No se encontraron productos
+                  </p>
                   <p className="text-xs text-slate-400 mt-1 max-w-xs">
                     Verifica el código de barra o la búsqueda ingresada.
                   </p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
                     {displayedCatalog.map((product) => {
                       const stock = getPosWarehouseStock(product);
                       const totalGlobalStock = Math.max(0, Number(product.stock) || 0);
@@ -1905,14 +2171,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 </span>
                               )}
                               {qtyInCart > 0 && (
-                                <span className="text-[10px] font-bold bg-emerald-600 text-white px-1.5 py-0.5 rounded-full shadow-sm animate-pulse">
-                                  {qtyInCart} en carrito
+                                <span className="text-[10px] font-bold bg-emerald-600 text-white px-1.5 py-0.5 rounded-full shadow-sm">
+                                  {qtyInCart} en ticket
                                 </span>
                               )}
                             </div>
                           </div>
 
-                          {/* Product Image / Icon (Smart Adaptive Container) */}
+                          {/* Product Image / Icon */}
                           <div className="w-full h-28 sm:h-32 mb-2 bg-slate-50 rounded-xl flex items-center justify-center overflow-hidden border border-slate-100">
                             <AdaptiveImage
                               src={product.img}
@@ -1959,7 +2225,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                   </span>
                                 </div>
                               ) : (
-                                <span className="font-bold text-slate-900 text-sm sm:text-base text-emerald-700">
+                                <span className="font-bold text-sm sm:text-base text-emerald-700">
                                   L. {basePrice.toFixed(2)}
                                 </span>
                               )}
@@ -1968,12 +2234,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             <button
                               type="button"
                               disabled={isOutOfStock}
-                              className={`p-1.5 rounded-lg transition-colors ${
+                              className={`p-2 rounded-xl transition-colors ${
                                 isOutOfStock
                                   ? 'bg-slate-200 text-slate-400'
                                   : 'bg-emerald-50 text-emerald-700 group-hover:bg-emerald-600 group-hover:text-white'
                               }`}
-                              title={isOutOfStock ? 'Agotado' : 'Agregar al carrito'}
+                              title={isOutOfStock ? 'Agotado' : 'Agregar al ticket'}
                             >
                               <Plus className="w-4 h-4" />
                             </button>
@@ -1983,7 +2249,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     })}
                   </div>
 
-                  {/* Load more products button for smooth initial browse */}
+                  {/* Load more products button */}
                   {!searchQuery.trim() && filteredCatalog.length > posDisplayLimit && (
                     <div className="text-center pt-2 pb-1">
                       <button
@@ -2017,7 +2283,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 text-xs bg-white text-emerald-800 px-3.5 py-1.5 rounded-xl font-black shadow-xs shrink-0">
-                    <span>Cobrar</span>
+                    <span>Ver Ticket</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </div>
                 </button>
@@ -2025,9 +2291,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
             )}
           </div>
 
-          {/* Right Column: Checkout Ticket & Cart Summary (Side-by-side on Tablet md+ & Desktop lg+, full height on Mobile) */}
+          {/* Right Column: Dedicated Ticket Zone — Prioritizes Cart Items visibility while keeping payment & customer controls compact */}
           <div
-            className={`flex-1 min-h-0 w-full md:flex-initial md:w-[330px] lg:w-[400px] xl:w-[450px] flex flex-col bg-white md:border-l border-slate-200 shadow-xl overflow-hidden ${
+            className={`flex-1 min-h-0 w-full md:flex-initial md:w-[360px] lg:w-[420px] xl:w-[460px] flex flex-col bg-white md:border-l border-slate-200 shadow-xl overflow-hidden ${
               mobilePosTab === 'catalog' ? 'hidden md:flex' : 'flex'
             }`}
           >
@@ -2046,399 +2312,400 @@ export const SalesView: React.FC<SalesViewProps> = ({
               </span>
             </div>
 
-            {/* Cart Header */}
-            <div className="px-3.5 py-2.5 sm:p-3.5 border-b border-slate-200 bg-slate-50/80 space-y-2 shrink-0">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
-                  <h2 className="font-bold text-slate-900 text-sm sm:text-base">Ticket de Venta</h2>
-                  <span className="text-[11px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
-                    {totalCartItemsCount} {totalCartItemsCount === 1 ? 'artículo' : 'artículos'}
-                  </span>
-                </div>
+            {/* Single-Row Slim Ticket Header */}
+            <div className="px-3.5 py-2.5 border-b border-slate-200 bg-slate-900 text-white flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Receipt className="w-4 h-4 text-emerald-400 shrink-0" />
+                <h2 className="font-extrabold text-sm truncate">Zona de Ticket</h2>
+                <span className="text-[11px] bg-emerald-500 text-slate-950 font-black px-2 py-0.5 rounded-full shrink-0">
+                  {totalCartItemsCount} {totalCartItemsCount === 1 ? 'art.' : 'arts.'}
+                </span>
+              </div>
 
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[10px] font-bold bg-white/10 text-teal-200 px-2 py-1 rounded-lg border border-white/10 truncate max-w-[130px]">
+                  {selectedWarehouse.name}
+                </span>
                 {cart.length > 0 && (
                   <button
                     type="button"
                     onClick={clearCart}
-                    className="text-xs text-rose-600 hover:text-rose-800 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                    title="Vaciar carrito"
+                    className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                    title="Vaciar ticket"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     <span>Vaciar</span>
                   </button>
                 )}
               </div>
-
-              {/* Compact Warehouse Selector inside the Ticket panel */}
-              <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-teal-50/90 border border-teal-200 text-xs">
-                <span className="font-bold text-teal-900 flex items-center gap-1 shrink-0">
-                  <Boxes className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                  <span>Descontar de:</span>
-                </span>
-                <select
-                  value={selectedWarehouse.id}
-                  onChange={(e) => handleSelectPosWarehouse(e.target.value)}
-                  className="bg-white border border-teal-300 rounded-md px-2 py-0.5 text-[11px] font-extrabold text-teal-950 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer truncate max-w-[220px]"
-                  title="Seleccionar de qué bodega se descontará esta venta"
-                >
-                  {activeWarehouses.map((wh) => (
-                    <option key={wh.id} value={wh.id}>
-                      {wh.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
             </div>
 
-            {/* Unified Scrollable Ticket Body: Items + Customer + Payment + Totals */}
-            <div className="flex-1 min-h-0 overflow-y-auto scroll-container divide-y divide-slate-200">
-              {/* Cart Items List */}
-              <div className="p-3 space-y-2">
-                {cart.length === 0 ? (
-                  <div className="py-8 flex flex-col items-center justify-center text-center px-4 text-slate-400">
-                    <Receipt className="w-10 h-10 text-slate-300 mb-2 stroke-1" />
-                    <p className="font-semibold text-slate-700 text-sm">El ticket está vacío</p>
-                    <p className="text-xs text-slate-400 mt-1 max-w-[240px]">
-                      Selecciona productos del catálogo o escanea un código de barra para agregar al ticket.
-                    </p>
-                  </div>
-                ) : (
-                  cart.map((item) => {
-                    const productInStore = inventory.find((p) => p.code === item.code);
-                    const maxStock = getPosWarehouseStock(productInStore);
-                    const basePrice =
-                      item.originalPrice !== undefined
-                        ? Number(item.originalPrice)
-                        : Number(item.price) || 0;
-                    const unitDisc = Number(item.unitDiscount) || 0;
+            {/* 1. DEDICATED TICKET ITEMS ZONE (Takes maximum available vertical space!) */}
+            <div className="flex-1 min-h-[180px] overflow-y-auto scroll-container p-2.5 sm:p-3 space-y-2 bg-slate-50/50">
+              {cart.length === 0 ? (
+                <div className="h-full min-h-[180px] flex flex-col items-center justify-center text-center px-4 text-slate-400">
+                  <Receipt className="w-10 h-10 text-slate-300 mb-2 stroke-1" />
+                  <p className="font-bold text-slate-700 text-sm">El ticket está vacío</p>
+                  <p className="text-xs text-slate-400 mt-0.5 max-w-[240px]">
+                    Toca cualquier producto del inventario a la izquierda o escanea su código para
+                    agregarlo aquí.
+                  </p>
+                </div>
+              ) : (
+                cart.map((item) => {
+                  const productInStore = inventory.find((p) => p.code === item.code);
+                  const maxStock = getPosWarehouseStock(productInStore);
+                  const basePrice =
+                    item.originalPrice !== undefined
+                      ? Number(item.originalPrice)
+                      : Number(item.price) || 0;
+                  const unitDisc = Number(item.unitDiscount) || 0;
 
-                    return (
-                      <div
-                        key={item.code}
-                        className="p-2.5 sm:p-3 bg-slate-50 border border-slate-200/90 rounded-xl space-y-2 transition-all hover:bg-slate-100/60"
-                      >
-                        {/* Top Row: Full Product Name & Subtotal */}
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="font-bold text-slate-900 text-xs sm:text-sm leading-snug break-words flex-1">
+                  return (
+                    <div
+                      key={item.code}
+                      className="p-2.5 bg-white border border-slate-200/90 rounded-xl shadow-2xs space-y-1.5 hover:border-emerald-400/70 transition-all"
+                    >
+                      {/* Row 1: Product Name, SKU & Subtotal */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-bold text-slate-900 text-xs sm:text-sm leading-snug break-words">
                             {item.name}
                           </div>
-                          <div className="text-right shrink-0">
-                            {unitDisc > 0 && (
-                              <span className="text-[10px] text-slate-400 line-through font-mono block">
-                                L. {(basePrice * item.quantity).toFixed(2)}
-                              </span>
-                            )}
-                            <span className="font-extrabold text-xs sm:text-sm text-emerald-700 block">
-                              L. {item.subtotal.toFixed(2)}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Bottom Row: SKU / Unit Price / Size + Quantity Stepper & Delete */}
-                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-200/60">
-                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
-                            <span className="font-mono bg-white border border-slate-200 px-1.5 py-0.2 rounded text-[10px] text-slate-700">
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 mt-0.5">
+                            <span className="font-mono bg-slate-100 px-1.5 py-0.2 rounded text-[10px] text-slate-700">
                               {item.code}
                             </span>
-                            {unitDisc > 0 ? (
-                              <span className="inline-flex items-center gap-1">
-                                <span className="text-[10px] text-slate-400 line-through">
-                                  L. {basePrice.toFixed(2)}
-                                </span>
-                                <span className="font-bold text-emerald-700">
-                                  L. {item.price.toFixed(2)} c/u
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="font-semibold text-slate-700">
-                                L. {item.price.toFixed(2)} c/u
-                              </span>
-                            )}
+                            <span>L. {item.price.toFixed(2)} c/u</span>
                             {item.size && (
-                              <span className="bg-slate-200/80 px-1.5 py-0.2 rounded text-[10px] font-semibold text-slate-700">
-                                Talla: {item.size}
+                              <span className="bg-slate-100 px-1.5 py-0.2 rounded text-[10px] font-semibold text-slate-700">
+                                {item.size}
                               </span>
                             )}
-                          </div>
-
-                          <div className="flex items-center gap-1.5 ml-auto">
-                            {/* Touch-friendly Quantity stepper for Mobile & Tablet */}
-                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl p-0.5 shadow-2xs">
-                              <button
-                                type="button"
-                                onClick={() => updateCartQuantity(item.code, item.quantity - 1)}
-                                className="w-8 h-8 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:bg-slate-200 rounded-lg cursor-pointer"
-                                title="Disminuir cantidad"
-                              >
-                                <Minus className="w-3.5 h-3.5" />
-                              </button>
-                              <input
-                                type="number"
-                                min="1"
-                                max={maxStock}
-                                value={item.quantity}
-                                onChange={(e) =>
-                                  updateCartQuantity(item.code, parseInt(e.target.value) || 1)
-                                }
-                                className="w-10 text-center text-xs sm:text-sm font-extrabold text-slate-900 focus:outline-none tabular-nums"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => updateCartQuantity(item.code, item.quantity + 1)}
-                                className="w-8 h-8 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:bg-slate-200 rounded-lg cursor-pointer disabled:opacity-40"
-                                disabled={item.quantity >= maxStock}
-                                title="Aumentar cantidad"
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={() => removeFromCart(item.code)}
-                              className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                              title="Quitar artículo del ticket"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
                           </div>
                         </div>
 
-                        {/* Per-article Discount Row inside Cart */}
-                        <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-dashed border-slate-200/80 text-[11px]">
-                          <span className="text-slate-500 flex items-center gap-1 font-medium">
-                            <Tag className="w-3 h-3 text-rose-500 shrink-0" />
-                            <span>Desc. por unidad (L.):</span>
+                        <div className="text-right shrink-0">
+                          {unitDisc > 0 && (
+                            <span className="text-[10px] text-slate-400 line-through font-mono block">
+                              L. {(basePrice * item.quantity).toFixed(2)}
+                            </span>
+                          )}
+                          <span className="font-extrabold text-sm text-emerald-700 tabular-nums block">
+                            L. {item.subtotal.toFixed(2)}
                           </span>
-                          <div className="flex items-center gap-1.5">
-                            <div className="relative w-24">
-                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
-                                L.
-                              </span>
-                              <input
-                                type="number"
-                                min="0"
-                                max={basePrice}
-                                step="any"
-                                value={unitDisc > 0 ? unitDisc : ''}
-                                placeholder="0.00"
-                                onChange={(e) =>
-                                  updateCartItemDiscount(
-                                    item.code,
-                                    parseFloat(e.target.value) || 0
-                                  )
-                                }
-                                className="w-full pl-5 pr-2 py-0.5 bg-white border border-slate-200 rounded-md text-[11px] font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right"
-                              />
-                            </div>
-                            {unitDisc > 0 && (
-                              <span className="text-[10px] font-bold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">
-                                -L. {(unitDisc * item.quantity).toFixed(2)}
-                              </span>
-                            )}
-                          </div>
                         </div>
                       </div>
-                    );
-                  })
+
+                      {/* Row 2: Compact Unit Discount + Well-Spaced Quantity Buttons & Remove */}
+                      <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
+                        <div className="flex items-center gap-1 text-[11px]">
+                          <Tag className="w-3 h-3 text-rose-500 shrink-0" />
+                          <span className="text-slate-500 font-medium">Desc. L:</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max={basePrice}
+                            step="any"
+                            value={unitDisc > 0 ? unitDisc : ''}
+                            placeholder="0"
+                            onChange={(e) =>
+                              updateCartItemDiscount(item.code, parseFloat(e.target.value) || 0)
+                            }
+                            className="w-16 px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-[11px] font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right"
+                            title="Descuento por unidad en Lempiras"
+                          />
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-xl p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => updateCartQuantity(item.code, item.quantity - 1)}
+                              className="w-7 h-7 flex items-center justify-center bg-white text-slate-700 hover:bg-slate-200 rounded-lg cursor-pointer shadow-2xs"
+                              title="Restar 1"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <input
+                              type="number"
+                              min="1"
+                              max={maxStock}
+                              value={item.quantity}
+                              onChange={(e) =>
+                                updateCartQuantity(item.code, parseInt(e.target.value) || 1)
+                              }
+                              className="w-9 text-center text-xs font-extrabold text-slate-900 bg-transparent focus:outline-none tabular-nums"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateCartQuantity(item.code, item.quantity + 1)}
+                              disabled={item.quantity >= maxStock}
+                              className="w-7 h-7 flex items-center justify-center bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 rounded-lg cursor-pointer shadow-2xs"
+                              title="Sumar 1"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => removeFromCart(item.code)}
+                            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Quitar artículo"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* 2. COMPACT CHECKOUT CONTROLS FOOTER (Does not eat up the Ticket Items space) */}
+            <div className="border-t border-slate-200 bg-white p-3 space-y-2.5 shrink-0 max-h-[52vh] overflow-y-auto scroll-container">
+              {/* Compact Customer & VIP Selector Bar (1 line by default, expandable on click) */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomerFieldsPos((prev) => !prev)}
+                    className={`flex-1 min-w-0 px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-1.5 cursor-pointer transition-all ${
+                      showCustomerFieldsPos ||
+                      paymentMethod === 'credit' ||
+                      (customerName.trim().toLowerCase() !== 'consumidor final' &&
+                        customerName.trim() !== '')
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                        : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5 truncate">
+                      <User className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span className="truncate">
+                        {customerName.trim() || 'Consumidor Final'}
+                        {customerPhone ? ` • ${customerPhone}` : ''}
+                      </span>
+                    </span>
+                    <span className="text-[10px] font-extrabold text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">
+                      {showCustomerFieldsPos || paymentMethod === 'credit' ? 'Ocultar' : 'Editar'}
+                    </span>
+                  </button>
+
+                  {loyaltyConfig.enabled && loyaltyCustomers.length > 0 && (
+                    <select
+                      value={matchedLoyaltyCustomer?.id || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSelectedLoyaltyCustomerId(val);
+                        setRedeemLoyaltyPoints(false);
+                        const found = loyaltyCustomers.find((c) => c.id === val);
+                        if (found) {
+                          setCustomerName(found.name);
+                          setCustomerPhone(found.phone || '');
+                          setCustomerRtn(found.rtn || '');
+                        }
+                      }}
+                      className="max-w-[155px] px-2 py-1.5 rounded-xl bg-amber-50 border border-amber-300 text-[11px] font-extrabold text-amber-950 focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer truncate shrink-0"
+                      title="Seleccionar Cliente Frecuente VIP"
+                    >
+                      <option value="">🏆 Cliente VIP ({loyaltyCustomers.length})</option>
+                      {loyaltyCustomers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.currentPoints} pts)
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Expandable Customer Inputs */}
+                {(showCustomerFieldsPos || paymentMethod === 'credit') && (
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <input
+                        type="text"
+                        placeholder="Nombre del Cliente"
+                        value={customerName}
+                        onChange={(e) => {
+                          setCustomerName(e.target.value);
+                          if (selectedLoyaltyCustomerId) setSelectedLoyaltyCustomerId('');
+                        }}
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs"
+                      />
+                      <input
+                        type="text"
+                        placeholder="RTN / DNI (Opcional)"
+                        value={customerRtn}
+                        onChange={(e) => setCustomerRtn(e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono text-xs"
+                      />
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="tel"
+                        placeholder="WhatsApp / Teléfono para ticket y puntos VIP"
+                        value={customerPhone}
+                        onChange={(e) => {
+                          setCustomerPhone(e.target.value);
+                          if (selectedLoyaltyCustomerId) setSelectedLoyaltyCustomerId('');
+                        }}
+                        className="w-full pl-7 pr-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs text-slate-800"
+                      />
+                      <WhatsAppIcon className="w-3.5 h-3.5 text-emerald-600 absolute left-2 top-2" />
+                    </div>
+                  </div>
+                )}
+
+                {/* Compact 1-Line VIP Loyalty Bar when matched */}
+                {loyaltyConfig.enabled && matchedLoyaltyCustomer && (
+                  <div className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Award className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span className="font-bold text-amber-300 truncate">
+                        {matchedLoyaltyCustomer.currentPoints} pts disp.
+                      </span>
+                      <span className="text-emerald-300 font-semibold">
+                        (+{pointsEarnedOnCurrentCart} hoy)
+                      </span>
+                    </div>
+
+                    {matchedLoyaltyCustomer.currentPoints >= loyaltyConfig.minPointsToRedeem &&
+                      cartSubtotal > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setRedeemLoyaltyPoints(!redeemLoyaltyPoints)}
+                          className={`px-2.5 py-1 rounded-lg font-black text-[10px] flex items-center gap-1 cursor-pointer transition-all ${
+                            redeemLoyaltyPoints
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                          }`}
+                        >
+                          <Gift className="w-3 h-3 shrink-0" />
+                          <span>
+                            {redeemLoyaltyPoints
+                              ? `✓ -L. ${loyaltyRedemptionCalc.discountLps.toFixed(2)}`
+                              : `Canjear (-L. ${Math.min(
+                                  cartSubtotal,
+                                  matchedLoyaltyCustomer.currentPoints *
+                                    loyaltyConfig.lempirasPerPointRedeem
+                                ).toFixed(2)})`}
+                          </span>
+                        </button>
+                      )}
+                  </div>
                 )}
               </div>
 
-              {/* Customer Info, Payment Method & Financial Summary */}
-              <div className="p-3 sm:p-4 bg-slate-50/90 space-y-3">
-                {/* Customer details */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
-                    <span className="flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Datos del Cliente (Opcional)</span>
+              {/* Well-spaced Payment Method Buttons */}
+              <div className="grid grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('cash')}
+                  className={`py-2 px-2 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
+                    paymentMethod === 'cash'
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <DollarSign className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Efectivo</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('card')}
+                  className={`py-2 px-2 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
+                    paymentMethod === 'card'
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <CreditCard className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Tarjeta</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('transfer')}
+                  className={`py-2 px-2 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
+                    paymentMethod === 'transfer'
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <Building className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Transf.</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentMethod('credit');
+                    setShowCustomerFieldsPos(true);
+                    if (customerName.trim().toLowerCase() === 'consumidor final') {
+                      setCustomerName('');
+                    }
+                  }}
+                  className={`py-2 px-2 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
+                    paymentMethod === 'credit'
+                      ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                      : 'bg-amber-50/70 text-amber-900 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Fiado</span>
+                </button>
+              </div>
+
+              {/* Compact Credit / Fiado Box */}
+              {paymentMethod === 'credit' && cart.length > 0 && (
+                <div className="p-2 bg-amber-50 border border-amber-300 rounded-xl space-y-1.5 text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
+                        Prima / Abono Hoy (L.)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max={cartTotal}
+                        placeholder="0.00"
+                        value={creditInitialDeposit}
+                        onChange={(e) => setCreditInitialDeposit(e.target.value)}
+                        className="w-full px-2 py-1 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
+                        Fecha Promesa Pago
+                      </label>
+                      <input
+                        type="date"
+                        value={creditDueDate}
+                        onChange={(e) => setCreditDueDate(e.target.value)}
+                        className="w-full px-2 py-1 bg-white border border-amber-300 rounded-lg text-xs text-slate-900"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] font-bold text-amber-950">
+                    <span>Saldo Pendiente:</span>
+                    <span className="font-black text-amber-800">
+                      L. {Math.max(0, cartTotal - (parseFloat(creditInitialDeposit) || 0)).toFixed(2)}
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs">
-                    <input
-                      type="text"
-                      placeholder="Nombre (ej. Consumidor Final)"
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs"
-                    />
-                    <input
-                      type="text"
-                      placeholder="RTN / DNI (Opcional)"
-                      value={customerRtn}
-                      onChange={(e) => setCustomerRtn(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono text-xs"
-                    />
-                  </div>
-                  <div className="relative">
-                    <input
-                      type="tel"
-                      placeholder="WhatsApp / Teléfono para enviar ticket (ej. 9876-5432)"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="w-full pl-7 pr-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs text-slate-800 placeholder-slate-400"
-                    />
-                    <WhatsAppIcon className="w-3.5 h-3.5 text-emerald-600 absolute left-2 top-2" />
-                  </div>
                 </div>
+              )}
 
-                {/* Payment Method Selector */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Método de Pago
-                  </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMethod('cash')}
-                      className={`min-h-[44px] py-2.5 px-2.5 rounded-xl text-xs sm:text-sm font-bold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
-                        paymentMethod === 'cash'
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      <DollarSign className="w-4 h-4 shrink-0" />
-                      <span className="truncate">Efectivo</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMethod('card')}
-                      className={`min-h-[44px] py-2.5 px-2.5 rounded-xl text-xs sm:text-sm font-bold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
-                        paymentMethod === 'card'
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      <CreditCard className="w-4 h-4 shrink-0" />
-                      <span className="truncate">Tarjeta</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMethod('transfer')}
-                      className={`min-h-[44px] py-2.5 px-2.5 rounded-xl text-xs sm:text-sm font-bold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
-                        paymentMethod === 'transfer'
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      <Building className="w-4 h-4 shrink-0" />
-                      <span className="truncate">Transf.</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentMethod('credit');
-                        if (customerName.trim().toLowerCase() === 'consumidor final') {
-                          setCustomerName('');
-                        }
-                      }}
-                      className={`min-h-[44px] py-2.5 px-2.5 rounded-xl text-xs sm:text-sm font-bold border flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
-                        paymentMethod === 'credit'
-                          ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                          : 'bg-white text-amber-800 border-amber-200 hover:bg-amber-50'
-                      }`}
-                      title="Venta al Crédito / Fiado (Cuentas por Cobrar)"
-                    >
-                      <Users className="w-4 h-4 shrink-0" />
-                      <span className="truncate">Fiado</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Credit / Fiado configuration box */}
-                {paymentMethod === 'credit' && cart.length > 0 && (
-                  <div className="p-2.5 bg-amber-50/90 border border-amber-300 rounded-xl space-y-2 text-xs">
-                    <div className="flex items-center justify-between font-bold text-amber-950">
-                      <span>Venta al Crédito ("Fiado")</span>
-                      <span className="bg-amber-200 text-amber-900 px-2 py-0.5 rounded text-[10px]">
-                        Cartera de Clientes
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-amber-800">
-                      Asegúrate de escribir el <strong>Nombre y WhatsApp del Cliente</strong> arriba.
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
-                          Prima / Abono Hoy (L.)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          max={cartTotal}
-                          placeholder="0.00"
-                          value={creditInitialDeposit}
-                          onChange={(e) => setCreditInitialDeposit(e.target.value)}
-                          className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-900"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
-                          Fecha Promesa Pago
-                        </label>
-                        <input
-                          type="date"
-                          value={creditDueDate}
-                          onChange={(e) => setCreditDueDate(e.target.value)}
-                          className="w-full px-2 py-1.5 bg-white border border-amber-300 rounded-lg text-xs text-slate-900"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between pt-1 border-t border-amber-200/80 font-bold text-amber-950">
-                      <span>Saldo Pendiente por Cobrar:</span>
-                      <span className="text-sm font-black text-amber-800">
-                        L. {Math.max(0, cartTotal - (parseFloat(creditInitialDeposit) || 0)).toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Cash calculation input if cash is selected */}
-                {paymentMethod === 'cash' && cart.length > 0 && (
-                  <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
-                      <span className="font-semibold text-emerald-950">Efectivo Recibido:</span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setCashGiven(cartTotal.toFixed(2))}
-                          className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-900 font-bold px-2 py-0.5 rounded cursor-pointer"
-                        >
-                          Exacto
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCashGiven(
-                              (Math.ceil(cartTotal / 100) * 100 || 100).toFixed(2)
-                            )
-                          }
-                          className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-900 font-bold px-2 py-0.5 rounded cursor-pointer"
-                        >
-                          +100
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCashGiven(
-                              (Math.ceil(cartTotal / 500) * 500 || 500).toFixed(2)
-                            )
-                          }
-                          className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-900 font-bold px-2 py-0.5 rounded cursor-pointer"
-                        >
-                          +500
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">
-                        L.
+              {/* Compact Cash Received & Change Row */}
+              {paymentMethod === 'cash' && cart.length > 0 && (
+                <div className="p-2 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <div className="relative flex-1">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">
+                        Efectivo L.
                       </span>
                       <input
                         type="number"
@@ -2446,147 +2713,115 @@ export const SalesView: React.FC<SalesViewProps> = ({
                         placeholder="0.00"
                         value={cashGiven}
                         onChange={(e) => setCashGiven(e.target.value)}
-                        className="w-full pl-8 pr-3 py-1.5 bg-white border border-emerald-300 rounded-lg text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        className="w-full pl-20 pr-2.5 py-1 bg-white border border-emerald-300 rounded-lg text-xs sm:text-sm font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       />
                     </div>
-
-                    {/* Change display */}
-                    <div className="flex items-center justify-between text-xs pt-1 border-t border-emerald-200/60">
-                      <span className="font-medium text-slate-700">Cambio / Vuelto:</span>
-                      <span
-                        className={`font-bold text-sm ${
-                          isCashInsufficient ? 'text-rose-600' : 'text-emerald-800'
-                        }`}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setCashGiven(cartTotal.toFixed(2))}
+                        className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-950 font-extrabold px-2 py-1 rounded-lg cursor-pointer"
                       >
-                        {isCashInsufficient
-                          ? `Faltan L. ${(cartTotal - numericCashGiven).toFixed(2)}`
-                          : `L. ${cashChange.toFixed(2)}`}
-                      </span>
+                        Exacto
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCashGiven((Math.ceil(cartTotal / 100) * 100 || 100).toFixed(2))
+                        }
+                        className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-950 font-extrabold px-2 py-1 rounded-lg cursor-pointer"
+                      >
+                        +100
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCashGiven((Math.ceil(cartTotal / 500) * 500 || 500).toFixed(2))
+                        }
+                        className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-950 font-extrabold px-2 py-1 rounded-lg cursor-pointer"
+                      >
+                        +500
+                      </button>
                     </div>
                   </div>
-                )}
-
-                {/* Discounts & Taxes */}
-                <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-200">
-                  {cartItemsDiscountTotal > 0 && (
-                    <>
-                      <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <span>Precio regular artículos:</span>
-                        <span className="line-through font-mono">
-                          L. {cartGrossSubtotal.toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] text-rose-600 font-semibold">
-                        <span>Descuento en artículos:</span>
-                        <span>- L. {cartItemsDiscountTotal.toFixed(2)}</span>
-                      </div>
-                    </>
-                  )}
-                  <div className="flex items-center justify-between">
-                    <span>Subtotal:</span>
-                    <span className="font-semibold text-slate-800">
-                      L. {cartSubtotal.toFixed(2)}
-                    </span>
-                  </div>
-
-                  {/* Manual Discount Input (Lempiras L. or Percentage %) */}
-                  <div className="flex items-center justify-between gap-2 py-0.5">
-                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                      <span className="shrink-0 font-medium text-slate-700">Descuento:</span>
-                      <div className="flex items-center bg-slate-200/80 p-0.5 rounded-lg border border-slate-300/70 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setDiscountType('amount')}
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
-                            discountType === 'amount'
-                              ? 'bg-slate-800 text-white shadow-2xs'
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                          title="Descuento manual en Lempiras (L.)"
-                        >
-                          L.
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDiscountType('percent')}
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
-                            discountType === 'percent'
-                              ? 'bg-slate-800 text-white shadow-2xs'
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                          title="Descuento manual en Porcentaje (%)"
-                        >
-                          %
-                        </button>
-                      </div>
-
-                      <div className="relative flex-1 max-w-[130px]">
-                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
-                          {discountType === 'amount' ? 'L.' : '%'}
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          max={discountType === 'percent' ? 100 : cartSubtotal || undefined}
-                          step="any"
-                          placeholder="0.00"
-                          value={discountValue}
-                          onChange={(e) => setDiscountValue(e.target.value)}
-                          className="w-full pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                        />
-                        {discountValue && (
-                          <button
-                            type="button"
-                            onClick={() => setDiscountValue('')}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-rose-600 cursor-pointer"
-                            title="Quitar descuento"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
+                  <div className="flex items-center justify-between text-xs px-0.5">
+                    <span className="font-semibold text-slate-700">Cambio / Vuelto:</span>
                     <span
-                      className={`font-bold shrink-0 ${
-                        discountAmount > 0 ? 'text-rose-600' : 'text-slate-400'
+                      className={`font-black text-xs sm:text-sm ${
+                        isCashInsufficient ? 'text-rose-600' : 'text-emerald-800'
                       }`}
                     >
-                      - L. {discountAmount.toFixed(2)}
-                    </span>
-                  </div>
-
-                  {/* Optional ISV 15% checkbox */}
-                  <div className="flex items-center justify-between pt-0.5">
-                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={applyTax}
-                        onChange={(e) => setApplyTax(e.target.checked)}
-                        className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                      />
-                      <span>Incluir 15% ISV</span>
-                    </label>
-                    {applyTax && (
-                      <span className="font-semibold text-slate-800">
-                        L. {taxAmount.toFixed(2)}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Big Total Banner */}
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-300 text-slate-900">
-                    <span className="text-sm font-bold">TOTAL A PAGAR:</span>
-                    <span className="text-lg sm:text-xl font-extrabold text-emerald-700">
-                      L. {cartTotal.toFixed(2)}
+                      {isCashInsufficient
+                        ? `Faltan L. ${(cartTotal - numericCashGiven).toFixed(2)}`
+                        : `L. ${cashChange.toFixed(2)}`}
                     </span>
                   </div>
                 </div>
-              </div>
-            </div>
+              )}
 
-            {/* Sticky Checkout Action Button Footer */}
-            <div className="p-3 sm:p-4 bg-white border-t border-slate-200 shrink-0 shadow-md">
+              {/* Compact Discount + ISV + Subtotal Row */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 pt-1 border-t border-slate-100">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-slate-700">Desc:</span>
+                  <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setDiscountType('amount')}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                        discountType === 'amount'
+                          ? 'bg-slate-800 text-white'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      L.
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDiscountType('percent')}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                        discountType === 'percent'
+                          ? 'bg-slate-800 text-white'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      %
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    max={discountType === 'percent' ? 100 : cartSubtotal || undefined}
+                    step="any"
+                    placeholder="0"
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(e.target.value)}
+                    className="w-16 px-2 py-0.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <label className="flex items-center gap-1.5 cursor-pointer select-none font-semibold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={applyTax}
+                    onChange={(e) => setApplyTax(e.target.checked)}
+                    className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <span>+15% ISV</span>
+                </label>
+
+                <div className="text-right ml-auto">
+                  {discountAmount > 0 && (
+                    <span className="text-[11px] font-bold text-rose-600 mr-2">
+                      -L. {discountAmount.toFixed(2)}
+                    </span>
+                  )}
+                  <span className="text-xs font-bold text-slate-700">
+                    Sub: L. {cartSubtotal.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Prominent Checkout Button with Total */}
               <button
                 type="button"
                 onClick={handleCheckout}
@@ -2595,23 +2830,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   isSubmittingSale ||
                   (paymentMethod === 'cash' && isCashInsufficient)
                 }
-                className={`w-full min-h-[52px] py-3.5 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-center gap-2.5 transition-all shadow-md cursor-pointer ${
+                className={`w-full min-h-[48px] py-3 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-between gap-2 transition-all shadow-md cursor-pointer ${
                   cart.length === 0 ||
                   isSubmittingSale ||
                   (paymentMethod === 'cash' && isCashInsufficient)
                     ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
-                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 active:scale-[0.98]'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/25 active:scale-[0.99]'
                 }`}
               >
                 {isSubmittingSale ? (
-                  <>
+                  <div className="w-full flex items-center justify-center gap-2">
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
-                    <span className="truncate">Registrando venta...</span>
-                  </>
+                    <span>Registrando venta...</span>
+                  </div>
                 ) : (
                   <>
-                    <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" />
-                    <span className="truncate">Cobrar y Registrar Venta (L. {cartTotal.toFixed(2)})</span>
+                    <span className="flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 shrink-0" />
+                      <span>Cobrar y Facturar</span>
+                    </span>
+                    <span className="text-base sm:text-lg font-black bg-black/20 px-3 py-0.5 rounded-xl tabular-nums">
+                      L. {cartTotal.toFixed(2)}
+                    </span>
                   </>
                 )}
               </button>

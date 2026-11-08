@@ -462,6 +462,53 @@ export interface SaleRecord {
   cashierRole?: UserRole;
   lastEditedBy?: string;
   lastEditedAt?: string;
+  loyaltyCustomerId?: string;
+  loyaltyPointsEarned?: number;
+  loyaltyPointsRedeemed?: number;
+  loyaltyDiscountAmount?: number;
+  loyaltyPointsBalanceAfter?: number;
+}
+
+export interface LoyaltyTransactionLog {
+  id: string;
+  timestamp: number;
+  dateFormatted: string;
+  type: 'earn' | 'redeem' | 'bonus' | 'adjust';
+  points: number; // positive for earn/bonus, negative for redeem
+  balanceAfter: number;
+  saleNumber?: string;
+  saleTotal?: number;
+  discountApplied?: number;
+  notes?: string;
+  registeredBy?: string;
+}
+
+export interface LoyaltyCustomerProfile {
+  id: string;
+  code: string; // e.g. VIP-1042
+  name: string;
+  phone: string;
+  rtn?: string;
+  email?: string;
+  birthday?: string;
+  currentPoints: number;
+  totalPointsEarned: number;
+  totalPointsRedeemed: number;
+  totalPurchasesAmount: number;
+  purchasesCount: number;
+  notes?: string;
+  history?: LoyaltyTransactionLog[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LoyaltyProgramConfig {
+  enabled: boolean;
+  amountPerPoint: number; // e.g. L. 100 = 1 point
+  pointsEarnedPerStep: number; // e.g. 1 point per step
+  lempirasPerPointRedeem: number; // e.g. 1 point = L. 5.00 or L. 1.00 discount
+  minPointsToRedeem: number; // e.g. 10 points minimum to redeem
+  welcomeBonusPoints: number; // e.g. 5 points when registering a new frequent customer
 }
 
 export interface CashOutMovement {
@@ -558,6 +605,8 @@ export interface POSFinanceStoreData {
   expenses: StoreExpenseRecord[];
   creditAccountControls?: Record<string, CreditAccountControlMeta>;
   onlineCustomers?: OnlineCustomerProfile[];
+  loyaltyConfig?: LoyaltyProgramConfig;
+  loyaltyCustomers?: LoyaltyCustomerProfile[];
   updatedAt: number;
 }
 

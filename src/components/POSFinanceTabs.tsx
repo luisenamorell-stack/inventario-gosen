@@ -12,6 +12,9 @@ import {
   POSFinanceStoreData,
   CreditAccountControlMeta,
   CreditCollectionNoticeLog,
+  LoyaltyCustomerProfile,
+  LoyaltyProgramConfig,
+  LoyaltyTransactionLog,
 } from '../types';
 import {
   Wallet,
@@ -41,6 +44,12 @@ import {
   Bell,
   Pencil,
   MessageSquare,
+  Award,
+  Gift,
+  Star,
+  Sparkles,
+  Settings,
+  History,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { PrintFormatModal } from './PrintFormatModal';
@@ -67,7 +76,7 @@ const EXPENSE_CATEGORIES: ExpenseCategory[] = [
 ];
 
 interface POSFinanceTabsProps {
-  mode: 'cash-register' | 'credits' | 'expenses';
+  mode: 'cash-register' | 'credits' | 'expenses' | 'loyalty';
   inventory: Product[];
   sales: SaleRecord[];
   storeSettings: StoreSettings;
@@ -1016,6 +1025,1413 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     });
     showToast('Registro de gasto eliminado', 'info');
   };
+
+  // ==================== 4. LOYALTY PROGRAM / CLIENTES FRECUENTES STATE ====================
+  const loyaltyConfig: LoyaltyProgramConfig = useMemo(
+    () => ({
+      enabled: posFinanceData.loyaltyConfig?.enabled !== false,
+      amountPerPoint: Math.max(1, Number(posFinanceData.loyaltyConfig?.amountPerPoint) || 100),
+      pointsEarnedPerStep: Math.max(
+        1,
+        Number(posFinanceData.loyaltyConfig?.pointsEarnedPerStep) || 1
+      ),
+      lempirasPerPointRedeem: Math.max(
+        0.1,
+        Number(posFinanceData.loyaltyConfig?.lempirasPerPointRedeem) || 5
+      ),
+      minPointsToRedeem: Math.max(1, Number(posFinanceData.loyaltyConfig?.minPointsToRedeem) || 5),
+      welcomeBonusPoints: Math.max(
+        0,
+        Number(posFinanceData.loyaltyConfig?.welcomeBonusPoints) || 0
+      ),
+    }),
+    [posFinanceData.loyaltyConfig]
+  );
+
+  const loyaltyCustomers: LoyaltyCustomerProfile[] = useMemo(
+    () =>
+      (posFinanceData.loyaltyCustomers || []).slice().sort((a, b) => {
+        if (b.currentPoints !== a.currentPoints) return b.currentPoints - a.currentPoints;
+        return (b.totalPurchasesAmount || 0) - (a.totalPurchasesAmount || 0);
+      }),
+    [posFinanceData.loyaltyCustomers]
+  );
+
+  const [loyaltySearch, setLoyaltySearch] = useState<string>('');
+  const [loyaltyTierFilter, setLoyaltyTierFilter] = useState<
+    'all' | 'redeemable' | 'diamond' | 'gold' | 'silver' | 'bronze'
+  >('all');
+  const [showLoyaltyConfigModal, setShowLoyaltyConfigModal] = useState<boolean>(false);
+  const [cfgEnabled, setCfgEnabled] = useState<boolean>(loyaltyConfig.enabled);
+  const [cfgAmountPerPoint, setCfgAmountPerPoint] = useState<string>(
+    String(loyaltyConfig.amountPerPoint)
+  );
+  const [cfgPointsPerStep, setCfgPointsPerStep] = useState<string>(
+    String(loyaltyConfig.pointsEarnedPerStep)
+  );
+  const [cfgLempirasPerPoint, setCfgLempirasPerPoint] = useState<string>(
+    String(loyaltyConfig.lempirasPerPointRedeem)
+  );
+  const [cfgMinRedeem, setCfgMinRedeem] = useState<string>(String(loyaltyConfig.minPointsToRedeem));
+  const [cfgWelcomeBonus, setCfgWelcomeBonus] = useState<string>(
+    String(loyaltyConfig.welcomeBonusPoints)
+  );
+
+  // Customer Create/Edit Modal State
+  const [isLoyaltyCustomerModalOpen, setIsLoyaltyCustomerModalOpen] = useState<boolean>(false);
+  const [editingLoyaltyCustomer, setEditingLoyaltyCustomer] =
+    useState<LoyaltyCustomerProfile | null>(null);
+  const [custFormName, setCustFormName] = useState<string>('');
+  const [custFormPhone, setCustFormPhone] = useState<string>('');
+  const [custFormRtn, setCustFormRtn] = useState<string>('');
+  const [custFormBirthday, setCustFormBirthday] = useState<string>('');
+  const [custFormNotes, setCustFormNotes] = useState<string>('');
+  const [custFormInitialPoints, setCustFormInitialPoints] = useState<string>('');
+
+  // Manual Points Adjustment Modal State
+  const [customerForPointsAdjust, setCustomerForPointsAdjust] =
+    useState<LoyaltyCustomerProfile | null>(null);
+  const [adjustMode, setAdjustMode] = useState<'bonus' | 'redeem'>('bonus');
+  const [adjustPointsInput, setAdjustPointsInput] = useState<string>('');
+  const [adjustReasonInput, setAdjustReasonInput] = useState<string>('');
+
+  // Customer History Modal State
+  const [customerForHistoryModal, setCustomerForHistoryModal] =
+    useState<LoyaltyCustomerProfile | null>(null);
+
+  const getCustomerVipTier = (totalSpent: number) => {
+    if (totalSpent >= 15000) {
+      return {
+        id: 'diamond' as const,
+        label: 'Diamante VIP',
+        badgeClass: 'bg-indigo-100 text-indigo-900 border-indigo-300',
+        cardGradient: 'from-indigo-900 via-purple-900 to-slate-900',
+        nextTierLabel: 'Nivel Máximo Alcanzado',
+        amountToNext: 0,
+      };
+    }
+    if (totalSpent >= 7500) {
+      return {
+        id: 'gold' as const,
+        label: 'Oro VIP',
+        badgeClass: 'bg-amber-100 text-amber-900 border-amber-300',
+        cardGradient: 'from-amber-700 via-yellow-800 to-slate-900',
+        nextTierLabel: 'Diamante VIP',
+        amountToNext: Math.max(0, 15000 - totalSpent),
+      };
+    }
+    if (totalSpent >= 2500) {
+      return {
+        id: 'silver' as const,
+        label: 'Plata',
+        badgeClass: 'bg-slate-200 text-slate-800 border-slate-300',
+        cardGradient: 'from-slate-700 via-slate-800 to-slate-950',
+        nextTierLabel: 'Oro VIP',
+        amountToNext: Math.max(0, 7500 - totalSpent),
+      };
+    }
+    return {
+      id: 'bronze' as const,
+      label: 'Bronce',
+      badgeClass: 'bg-orange-100 text-orange-900 border-orange-300',
+      cardGradient: 'from-emerald-800 via-teal-900 to-slate-950',
+      nextTierLabel: 'Plata',
+      amountToNext: Math.max(0, 2500 - totalSpent),
+    };
+  };
+
+  const filteredLoyaltyCustomers = useMemo(() => {
+    const q = loyaltySearch.trim().toLowerCase();
+    return loyaltyCustomers.filter((c) => {
+      const tier = getCustomerVipTier(c.totalPurchasesAmount || 0);
+      if (loyaltyTierFilter === 'redeemable' && c.currentPoints < loyaltyConfig.minPointsToRedeem) {
+        return false;
+      }
+      if (
+        loyaltyTierFilter !== 'all' &&
+        loyaltyTierFilter !== 'redeemable' &&
+        tier.id !== loyaltyTierFilter
+      ) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        c.name.toLowerCase().includes(q) ||
+        (c.phone || '').toLowerCase().includes(q) ||
+        (c.code || '').toLowerCase().includes(q) ||
+        (c.rtn || '').toLowerCase().includes(q)
+      );
+    });
+  }, [loyaltyCustomers, loyaltySearch, loyaltyTierFilter, loyaltyConfig.minPointsToRedeem]);
+
+  const loyaltyStats = useMemo(() => {
+    let totalActivePoints = 0;
+    let totalRedeemedPoints = 0;
+    let totalPurchasesVip = 0;
+    let redeemableCustomersCount = 0;
+
+    loyaltyCustomers.forEach((c) => {
+      totalActivePoints += Number(c.currentPoints) || 0;
+      totalRedeemedPoints += Number(c.totalPointsRedeemed) || 0;
+      totalPurchasesVip += Number(c.totalPurchasesAmount) || 0;
+      if ((Number(c.currentPoints) || 0) >= loyaltyConfig.minPointsToRedeem) {
+        redeemableCustomersCount += 1;
+      }
+    });
+
+    return {
+      totalCustomers: loyaltyCustomers.length,
+      totalActivePoints,
+      totalActiveLempirasValue: totalActivePoints * loyaltyConfig.lempirasPerPointRedeem,
+      totalRedeemedPoints,
+      totalRedeemedLempirasValue: totalRedeemedPoints * loyaltyConfig.lempirasPerPointRedeem,
+      totalPurchasesVip,
+      redeemableCustomersCount,
+    };
+  }, [loyaltyCustomers, loyaltyConfig]);
+
+  const handleSaveLoyaltyConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const updatedCfg: LoyaltyProgramConfig = {
+      enabled: cfgEnabled,
+      amountPerPoint: Math.max(1, parseFloat(cfgAmountPerPoint) || 100),
+      pointsEarnedPerStep: Math.max(1, Math.round(parseFloat(cfgPointsPerStep) || 1)),
+      lempirasPerPointRedeem: Math.max(0.1, parseFloat(cfgLempirasPerPoint) || 5),
+      minPointsToRedeem: Math.max(1, Math.round(parseFloat(cfgMinRedeem) || 5)),
+      welcomeBonusPoints: Math.max(0, Math.round(parseFloat(cfgWelcomeBonus) || 0)),
+    };
+
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      loyaltyConfig: updatedCfg,
+      updatedAt: Date.now(),
+    });
+    setShowLoyaltyConfigModal(false);
+    showToast('Configuración del Programa de Puntos guardada correctamente', 'success');
+  };
+
+  const openNewLoyaltyCustomerModal = () => {
+    setEditingLoyaltyCustomer(null);
+    setCustFormName('');
+    setCustFormPhone('');
+    setCustFormRtn('');
+    setCustFormBirthday('');
+    setCustFormNotes('');
+    setCustFormInitialPoints(
+      loyaltyConfig.welcomeBonusPoints > 0 ? String(loyaltyConfig.welcomeBonusPoints) : ''
+    );
+    setIsLoyaltyCustomerModalOpen(true);
+  };
+
+  const openEditLoyaltyCustomerModal = (cust: LoyaltyCustomerProfile) => {
+    setEditingLoyaltyCustomer(cust);
+    setCustFormName(cust.name);
+    setCustFormPhone(cust.phone);
+    setCustFormRtn(cust.rtn || '');
+    setCustFormBirthday(cust.birthday || '');
+    setCustFormNotes(cust.notes || '');
+    setCustFormInitialPoints(String(cust.currentPoints || 0));
+    setIsLoyaltyCustomerModalOpen(true);
+  };
+
+  const handleSaveLoyaltyCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = custFormName.trim();
+    const cleanPhone = custFormPhone.trim();
+    if (!cleanName) {
+      showToast('Ingresa el nombre completo del cliente frecuente', 'warning');
+      return;
+    }
+    if (!cleanPhone) {
+      showToast('Ingresa el número de teléfono / WhatsApp para identificar sus puntos', 'warning');
+      return;
+    }
+
+    const normalizedDigits = cleanPhone.replace(/\D/g, '');
+    const duplicate = loyaltyCustomers.find(
+      (c) =>
+        c.id !== editingLoyaltyCustomer?.id &&
+        normalizedDigits.length >= 7 &&
+        c.phone.replace(/\D/g, '') === normalizedDigits
+    );
+    if (duplicate) {
+      showToast(
+        `Ya existe un cliente registrado con ese número (${duplicate.name} - ${duplicate.code})`,
+        'warning'
+      );
+      return;
+    }
+
+    const now = Date.now();
+    const dateFormatted = new Date(now).toLocaleString('es-HN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    if (editingLoyaltyCustomer) {
+      const updatedList = loyaltyCustomers.map((c) =>
+        c.id === editingLoyaltyCustomer.id
+          ? {
+              ...c,
+              name: cleanName,
+              phone: cleanPhone,
+              rtn: custFormRtn.trim() || undefined,
+              birthday: custFormBirthday.trim() || undefined,
+              notes: custFormNotes.trim() || undefined,
+              updatedAt: now,
+            }
+          : c
+      );
+      await onSavePOSFinanceData({
+        ...posFinanceData,
+        loyaltyCustomers: updatedList,
+        updatedAt: now,
+      });
+      showToast(`Datos de ${cleanName} actualizados`, 'success');
+    } else {
+      const initialPts = Math.max(0, Math.round(parseFloat(custFormInitialPoints) || 0));
+      const nextCodeNum = 1001 + loyaltyCustomers.length;
+      const newCust: LoyaltyCustomerProfile = {
+        id: `vip_${now}_${Math.random().toString(36).slice(2, 6)}`,
+        code: `VIP-${nextCodeNum}`,
+        name: cleanName,
+        phone: cleanPhone,
+        rtn: custFormRtn.trim() || undefined,
+        birthday: custFormBirthday.trim() || undefined,
+        notes: custFormNotes.trim() || undefined,
+        currentPoints: initialPts,
+        totalPointsEarned: initialPts,
+        totalPointsRedeemed: 0,
+        totalPurchasesAmount: 0,
+        purchasesCount: 0,
+        history:
+          initialPts > 0
+            ? [
+                {
+                  id: `log_${now}`,
+                  timestamp: now,
+                  dateFormatted,
+                  type: 'bonus',
+                  points: initialPts,
+                  balanceAfter: initialPts,
+                  notes: 'Bono de bienvenida al inscribirse al Club de Clientes Frecuentes',
+                  registeredBy: currentUserName,
+                },
+              ]
+            : [],
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await onSavePOSFinanceData({
+        ...posFinanceData,
+        loyaltyCustomers: [newCust, ...loyaltyCustomers],
+        updatedAt: now,
+      });
+      showToast(
+        `¡Tarjeta ${newCust.code} creada para ${cleanName}${
+          initialPts > 0 ? ` con +${initialPts} pts de bienvenida` : ''
+        }!`,
+        'success'
+      );
+    }
+
+    setIsLoyaltyCustomerModalOpen(false);
+  };
+
+  const handleDeleteLoyaltyCustomer = async (cust: LoyaltyCustomerProfile) => {
+    const updatedList = loyaltyCustomers.filter((c) => c.id !== cust.id);
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      loyaltyCustomers: updatedList,
+      updatedAt: Date.now(),
+    });
+    showToast(`Cliente ${cust.name} eliminado del programa de puntos`, 'info');
+  };
+
+  const handleAdjustCustomerPoints = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customerForPointsAdjust) return;
+    const pts = Math.max(0, Math.round(parseFloat(adjustPointsInput) || 0));
+    if (pts <= 0) {
+      showToast('Ingresa una cantidad de puntos mayor a 0', 'warning');
+      return;
+    }
+    if (adjustMode === 'redeem' && pts > customerForPointsAdjust.currentPoints) {
+      showToast(
+        `El cliente solo tiene ${customerForPointsAdjust.currentPoints} puntos disponibles`,
+        'warning'
+      );
+      return;
+    }
+
+    const now = Date.now();
+    const dateFormatted = new Date(now).toLocaleString('es-HN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const delta = adjustMode === 'bonus' ? pts : -pts;
+    const newBalance = Math.max(0, (customerForPointsAdjust.currentPoints || 0) + delta);
+    const logEntry: LoyaltyTransactionLog = {
+      id: `log_${now}`,
+      timestamp: now,
+      dateFormatted,
+      type: adjustMode === 'bonus' ? 'bonus' : 'redeem',
+      points: delta,
+      balanceAfter: newBalance,
+      discountApplied:
+        adjustMode === 'redeem' ? pts * loyaltyConfig.lempirasPerPointRedeem : undefined,
+      notes:
+        adjustReasonInput.trim() ||
+        (adjustMode === 'bonus'
+          ? 'Bono de puntos otorgado manualmente'
+          : 'Canje manual de puntos en tienda'),
+      registeredBy: currentUserName,
+    };
+
+    const updatedCustomers = loyaltyCustomers.map((c) =>
+      c.id === customerForPointsAdjust.id
+        ? {
+            ...c,
+            currentPoints: newBalance,
+            totalPointsEarned:
+              adjustMode === 'bonus' ? (c.totalPointsEarned || 0) + pts : c.totalPointsEarned || 0,
+            totalPointsRedeemed:
+              adjustMode === 'redeem'
+                ? (c.totalPointsRedeemed || 0) + pts
+                : c.totalPointsRedeemed || 0,
+            history: [logEntry, ...(c.history || [])].slice(0, 80),
+            updatedAt: now,
+          }
+        : c
+    );
+
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      loyaltyCustomers: updatedCustomers,
+      updatedAt: now,
+    });
+
+    showToast(
+      adjustMode === 'bonus'
+        ? `¡+${pts} puntos acreditados a ${customerForPointsAdjust.name}! Nuevo saldo: ${newBalance} pts`
+        : `¡${pts} puntos canjeados (-L. ${(pts * loyaltyConfig.lempirasPerPointRedeem).toFixed(2)}) para ${customerForPointsAdjust.name}!`,
+      'success'
+    );
+    setCustomerForPointsAdjust(null);
+    setAdjustPointsInput('');
+    setAdjustReasonInput('');
+  };
+
+  // Sync past sales customers into Loyalty Directory with 1 click
+  const handleSyncCustomersFromSalesHistory = async () => {
+    const existingByPhone = new Set(
+      loyaltyCustomers.map((c) => c.phone.replace(/\D/g, '')).filter((d) => d.length >= 7)
+    );
+    const existingByName = new Set(loyaltyCustomers.map((c) => c.name.trim().toLowerCase()));
+
+    const grouped = new Map<
+      string,
+      {
+        name: string;
+        phone: string;
+        rtn?: string;
+        totalSpent: number;
+        count: number;
+      }
+    >();
+
+    sales.forEach((s) => {
+      if (s.status !== 'completed') return;
+      const rawName = (s.customerName || '').trim();
+      const rawPhone = (s.customerPhone || '').trim();
+      if (!rawName || rawName.toLowerCase() === 'consumidor final') return;
+
+      const digits = rawPhone.replace(/\D/g, '');
+      const key = digits.length >= 7 ? `tel_${digits}` : `name_${rawName.toLowerCase()}`;
+      const prev = grouped.get(key);
+      if (prev) {
+        prev.totalSpent += Number(s.total) || 0;
+        prev.count += 1;
+        if (!prev.phone && rawPhone) prev.phone = rawPhone;
+        if (!prev.rtn && s.customerRtn) prev.rtn = s.customerRtn;
+      } else {
+        grouped.set(key, {
+          name: rawName,
+          phone: rawPhone,
+          rtn: s.customerRtn,
+          totalSpent: Number(s.total) || 0,
+          count: 1,
+        });
+      }
+    });
+
+    const newProfiles: LoyaltyCustomerProfile[] = [];
+    const now = Date.now();
+    const dateFormatted = new Date(now).toLocaleString('es-HN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+
+    let seq = 1001 + loyaltyCustomers.length;
+    grouped.forEach((item) => {
+      const digits = item.phone.replace(/\D/g, '');
+      if (digits.length >= 7 && existingByPhone.has(digits)) return;
+      if (existingByName.has(item.name.toLowerCase())) return;
+
+      const earnedPts =
+        Math.floor(item.totalSpent / loyaltyConfig.amountPerPoint) *
+        loyaltyConfig.pointsEarnedPerStep;
+
+      newProfiles.push({
+        id: `vip_${now}_${seq}`,
+        code: `VIP-${seq}`,
+        name: item.name,
+        phone: item.phone || 'Sin teléfono',
+        rtn: item.rtn,
+        currentPoints: earnedPts,
+        totalPointsEarned: earnedPts,
+        totalPointsRedeemed: 0,
+        totalPurchasesAmount: item.totalSpent,
+        purchasesCount: item.count,
+        history:
+          earnedPts > 0
+            ? [
+                {
+                  id: `log_sync_${seq}`,
+                  timestamp: now,
+                  dateFormatted,
+                  type: 'earn',
+                  points: earnedPts,
+                  balanceAfter: earnedPts,
+                  notes: `Puntos calculados de ${item.count} compra(s) en historial (L. ${item.totalSpent.toFixed(2)})`,
+                  registeredBy: currentUserName,
+                },
+              ]
+            : [],
+        createdAt: now,
+        updatedAt: now,
+      });
+      seq += 1;
+    });
+
+    if (newProfiles.length === 0) {
+      showToast('Todos los clientes con nombre en tu historial de ventas ya están inscritos.', 'info');
+      return;
+    }
+
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      loyaltyCustomers: [...newProfiles, ...loyaltyCustomers],
+      updatedAt: now,
+    });
+    showToast(
+      `¡Se importaron ${newProfiles.length} clientes frecuentes desde el historial de ventas con sus puntos acumulados!`,
+      'success'
+    );
+  };
+
+  const handleSendLoyaltyCardWhatsApp = (cust: LoyaltyCustomerProfile) => {
+    const storeTitle = (storeSettings.storeName || 'NUESTRA TIENDA').toUpperCase();
+    const tier = getCustomerVipTier(cust.totalPurchasesAmount || 0);
+    const lempirasValue = (cust.currentPoints || 0) * loyaltyConfig.lempirasPerPointRedeem;
+    const canRedeemNow = (cust.currentPoints || 0) >= loyaltyConfig.minPointsToRedeem;
+
+    let msg = `🏆 *TARJETA DIGITAL DE CLIENTE FRECUENTE*\n`;
+    msg += `✨ *${storeTitle}*\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `👤 *Titular:* ${cust.name}\n`;
+    msg += `🪪 *Código VIP:* ${cust.code}\n`;
+    msg += `⭐ *Nivel Actual:* ${tier.label}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `🎁 *SALDO DE PUNTOS ACUMULADOS:*\n`;
+    msg += `👉 *${cust.currentPoints} Puntos Disponibles*\n`;
+    msg += `💵 *Equivalente en Descuento:* *L. ${lempirasValue.toFixed(2)}*\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    if (canRedeemNow) {
+      msg += `✅ *¡Tus puntos ya están listos para canjear!* Puedes usarlos como descuento directo en tu próxima compra.\n`;
+    } else {
+      const missingPts = Math.max(0, loyaltyConfig.minPointsToRedeem - (cust.currentPoints || 0));
+      msg += `🎯 Te faltan solo *${missingPts} puntos* para poder canjear tu descuento en caja (Mínimo: ${loyaltyConfig.minPointsToRedeem} pts).\n`;
+    }
+    msg += `\n💡 *¿Cómo ganas más puntos?*\n`;
+    msg += `Por cada *L. ${loyaltyConfig.amountPerPoint.toFixed(0)}* de compra acumulas *+${loyaltyConfig.pointsEarnedPerStep} punto(s)* automáticamente con tu número de teléfono.\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `¡Gracias por ser parte de nuestros clientes preferenciales! 🙌`;
+
+    const cleanDigits = (cust.phone || '').replace(/\D/g, '');
+    const finalPhone = cleanDigits.length === 8 ? `504${cleanDigits}` : cleanDigits;
+    const url =
+      finalPhone.length >= 8
+        ? `https://wa.me/${finalPhone}?text=${encodeURIComponent(msg)}`
+        : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    showToast(`Enviando Tarjeta Digital VIP a ${cust.name} por WhatsApp...`, 'success');
+  };
+
+  // ==================== RENDER MODE 4: LOYALTY / CLIENTES FRECUENTES ====================
+  if (mode === 'loyalty') {
+    return (
+      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-5 pb-32">
+        {/* Top Hero Banner */}
+        <div className="p-4 sm:p-6 rounded-2xl bg-gradient-to-r from-amber-950 via-slate-900 to-indigo-950 text-white border border-amber-500/30 shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-amber-400/20 border border-amber-400/40 flex items-center justify-center text-amber-300 shrink-0 shadow-inner">
+              <Award className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-400 text-slate-950">
+                  Fidelización VIP
+                </span>
+                <span
+                  className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
+                    loyaltyConfig.enabled
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                  }`}
+                >
+                  {loyaltyConfig.enabled ? '● Programa Activo en Caja POS' : '○ Programa Pausado'}
+                </span>
+              </div>
+              <h2 className="text-lg sm:text-xl font-black mt-1">
+                Tarjeta de Cliente Frecuente y Puntos Acumulados
+              </h2>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Regla actual: Cada{' '}
+                <strong className="text-amber-300">
+                  L. {loyaltyConfig.amountPerPoint.toFixed(0)}
+                </strong>{' '}
+                de compra suma{' '}
+                <strong className="text-amber-300">
+                  +{loyaltyConfig.pointsEarnedPerStep} punto(s)
+                </strong>{' '}
+                • Cada punto equivale a{' '}
+                <strong className="text-emerald-300">
+                  L. {loyaltyConfig.lempirasPerPointRedeem.toFixed(2)}
+                </strong>{' '}
+                de descuento al canjear.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setCfgEnabled(loyaltyConfig.enabled);
+                setCfgAmountPerPoint(String(loyaltyConfig.amountPerPoint));
+                setCfgPointsPerStep(String(loyaltyConfig.pointsEarnedPerStep));
+                setCfgLempirasPerPoint(String(loyaltyConfig.lempirasPerPointRedeem));
+                setCfgMinRedeem(String(loyaltyConfig.minPointsToRedeem));
+                setCfgWelcomeBonus(String(loyaltyConfig.welcomeBonusPoints));
+                setShowLoyaltyConfigModal(true);
+              }}
+              className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/15 flex items-center gap-1.5 cursor-pointer transition-all"
+            >
+              <Settings className="w-4 h-4 text-amber-300" />
+              <span>Configurar Reglas de Puntos</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSyncCustomersFromSalesHistory}
+              className="px-3.5 py-2.5 rounded-xl bg-indigo-600/80 hover:bg-indigo-600 text-white font-bold text-xs border border-indigo-400/30 flex items-center gap-1.5 cursor-pointer transition-all"
+              title="Importar automáticamente clientes de ventas pasadas"
+            >
+              <Sparkles className="w-4 h-4 text-amber-200" />
+              <span>Importar de Historial Ventas</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={openNewLoyaltyCustomerModal}
+              className="px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Inscribir Cliente VIP</span>
+            </button>
+          </div>
+        </div>
+
+        {/* KPI Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+            <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+              <span>CLIENTES FRECUENTES</span>
+              <Users className="w-4 h-4 text-indigo-600" />
+            </div>
+            <p className="text-2xl font-black text-slate-900 mt-1">
+              {loyaltyStats.totalCustomers}
+            </p>
+            <p className="text-[11px] text-emerald-700 font-semibold mt-0.5">
+              {loyaltyStats.redeemableCustomersCount} cliente(s) listos para canjear hoy
+            </p>
+          </div>
+
+          <div className="bg-amber-50/90 p-4 rounded-2xl border border-amber-200 shadow-xs">
+            <div className="flex items-center justify-between text-xs font-bold text-amber-900">
+              <span>PUNTOS ACTIVOS DISPONIBLES</span>
+              <Star className="w-4 h-4 text-amber-600 fill-amber-400" />
+            </div>
+            <p className="text-2xl font-black text-amber-950 mt-1">
+              {loyaltyStats.totalActivePoints.toLocaleString()} pts
+            </p>
+            <p className="text-[11px] text-amber-800 font-bold mt-0.5">
+              Equivalen a L. {loyaltyStats.totalActiveLempirasValue.toFixed(2)} en descuentos
+            </p>
+          </div>
+
+          <div className="bg-emerald-50/90 p-4 rounded-2xl border border-emerald-200 shadow-xs">
+            <div className="flex items-center justify-between text-xs font-bold text-emerald-900">
+              <span>PUNTOS YA CANJEADOS</span>
+              <Gift className="w-4 h-4 text-emerald-600" />
+            </div>
+            <p className="text-2xl font-black text-emerald-950 mt-1">
+              {loyaltyStats.totalRedeemedPoints.toLocaleString()} pts
+            </p>
+            <p className="text-[11px] text-emerald-800 font-bold mt-0.5">
+              L. {loyaltyStats.totalRedeemedLempirasValue.toFixed(2)} premiados a clientes
+            </p>
+          </div>
+
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+            <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+              <span>COMPRAS ACUMULADAS VIP</span>
+              <TrendingUp className="w-4 h-4 text-emerald-600" />
+            </div>
+            <p className="text-2xl font-black text-slate-900 mt-1">
+              L. {loyaltyStats.totalPurchasesVip.toFixed(2)}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Mínimo para canjear: {loyaltyConfig.minPointsToRedeem} pts (L.{' '}
+              {(loyaltyConfig.minPointsToRedeem * loyaltyConfig.lempirasPerPointRedeem).toFixed(2)})
+            </p>
+          </div>
+        </div>
+
+        {/* Search & Filter Bar */}
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Buscar cliente por teléfono, nombre, código VIP o RTN..."
+              value={loyaltySearch}
+              onChange={(e) => setLoyaltySearch(e.target.value)}
+              className="w-full pl-10 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+            {loyaltySearch && (
+              <button
+                type="button"
+                onClick={() => setLoyaltySearch('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+            {[
+              { id: 'all', label: 'Todos' },
+              { id: 'redeemable', label: '🎁 Listos para Canjear' },
+              { id: 'diamond', label: '💎 Diamante' },
+              { id: 'gold', label: '🥇 Oro' },
+              { id: 'silver', label: '🥈 Plata' },
+              { id: 'bronze', label: '🥉 Bronce' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setLoyaltyTierFilter(tab.id as any)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap cursor-pointer transition-all ${
+                  loyaltyTierFilter === tab.id
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Frequent Customers Cards Grid */}
+        {filteredLoyaltyCustomers.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center space-y-3">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+              <Award className="w-7 h-7" />
+            </div>
+            <h3 className="text-base font-black text-slate-900">
+              {loyaltyCustomers.length === 0
+                ? 'Aún no hay Clientes Frecuentes inscritos'
+                : 'No se encontraron clientes con ese filtro'}
+            </h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Inscribe a tus clientes con su nombre y número de teléfono o importa tus clientes del
+              historial de ventas. En cada compra desde el Punto de Venta (POS) acumularán puntos
+              automáticamente.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={openNewLoyaltyCustomerModal}
+                className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Inscribir Primer Cliente Frecuente</span>
+              </button>
+              {sales.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleSyncCustomersFromSalesHistory}
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <span>Importar Clientes de Ventas Realizadas</span>
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filteredLoyaltyCustomers.map((cust) => {
+              const tier = getCustomerVipTier(cust.totalPurchasesAmount || 0);
+              const redeemValueLps =
+                (Number(cust.currentPoints) || 0) * loyaltyConfig.lempirasPerPointRedeem;
+              const isRedeemable =
+                (Number(cust.currentPoints) || 0) >= loyaltyConfig.minPointsToRedeem;
+
+              return (
+                <div
+                  key={cust.id}
+                  className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden flex flex-col justify-between hover:shadow-md transition-all"
+                >
+                  {/* Top Digital VIP Card Header */}
+                  <div
+                    className={`p-4 bg-gradient-to-br ${tier.cardGradient} text-white relative overflow-hidden`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[10px] font-black tracking-wider bg-white/15 px-2 py-0.5 rounded-md border border-white/20">
+                            {cust.code}
+                          </span>
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider bg-amber-400 text-slate-950 px-2 py-0.5 rounded-md">
+                            {tier.label}
+                          </span>
+                        </div>
+                        <h3 className="font-black text-base text-white mt-1.5 truncate">
+                          {cust.name}
+                        </h3>
+                        <p className="text-xs text-slate-200 flex items-center gap-1.5 mt-0.5">
+                          <Phone className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                          <span>{cust.phone || 'Sin teléfono'}</span>
+                        </p>
+                      </div>
+
+                      <div className="text-right shrink-0 bg-black/25 backdrop-blur-xs px-3 py-2 rounded-xl border border-white/15">
+                        <span className="text-[10px] uppercase tracking-wider text-amber-200 font-bold block">
+                          Saldo Puntos
+                        </span>
+                        <span className="text-xl font-black text-amber-300 tabular-nums">
+                          {cust.currentPoints}
+                        </span>
+                        <span className="text-[10px] text-emerald-300 font-bold block">
+                          = L. {redeemValueLps.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Body Metrics */}
+                  <div className="p-4 space-y-3 flex-1 flex flex-col justify-between">
+                    <div className="space-y-2.5">
+                      <div className="grid grid-cols-3 gap-2 text-center bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                        <div>
+                          <span className="text-[10px] text-slate-400 font-bold block">
+                            Compras
+                          </span>
+                          <span className="text-xs font-black text-slate-800">
+                            {cust.purchasesCount || 0}
+                          </span>
+                        </div>
+                        <div className="border-x border-slate-200/80 px-1">
+                          <span className="text-[10px] text-slate-400 font-bold block">
+                            Total Comprado
+                          </span>
+                          <span className="text-xs font-black text-slate-800">
+                            L. {(cust.totalPurchasesAmount || 0).toFixed(0)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 font-bold block">
+                            Canjeados
+                          </span>
+                          <span className="text-xs font-black text-emerald-700">
+                            {cust.totalPointsRedeemed || 0} pts
+                          </span>
+                        </div>
+                      </div>
+
+                      {isRedeemable ? (
+                        <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between text-xs">
+                          <span className="font-bold text-emerald-900 flex items-center gap-1.5">
+                            <Gift className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>Descuento disponible en caja:</span>
+                          </span>
+                          <span className="font-black text-emerald-700">
+                            - L. {redeemValueLps.toFixed(2)}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-[11px] text-slate-500">
+                          <span>
+                            Faltan{' '}
+                            <strong>
+                              {Math.max(0, loyaltyConfig.minPointsToRedeem - cust.currentPoints)}{' '}
+                              pts
+                            </strong>{' '}
+                            para poder canjear
+                          </span>
+                          <span>Mín: {loyaltyConfig.minPointsToRedeem} pts</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action Buttons Footer */}
+                    <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleSendLoyaltyCardWhatsApp(cust)}
+                        className="flex-1 py-2 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                        title="Enviar Tarjeta Digital con saldo de puntos por WhatsApp"
+                      >
+                        <WhatsAppIcon className="w-3.5 h-3.5 shrink-0" />
+                        <span>Enviar Tarjeta</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomerForPointsAdjust(cust);
+                          setAdjustMode('bonus');
+                          setAdjustPointsInput('');
+                          setAdjustReasonInput('');
+                        }}
+                        className="py-2 px-2.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-950 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-all"
+                        title="Sumar bono de puntos o canjear puntos manualmente"
+                      >
+                        <Gift className="w-3.5 h-3.5 text-amber-700" />
+                        <span>+Pts / Canjear</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setCustomerForHistoryModal(cust)}
+                        className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                        title="Ver historial de puntos del cliente"
+                      >
+                        <History className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => openEditLoyaltyCustomerModal(cust)}
+                        className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                        title="Editar datos del cliente"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLoyaltyCustomer(cust)}
+                        className="p-2 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 cursor-pointer"
+                        title="Eliminar cliente"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* MODAL 1: CONFIGURAR REGLAS DEL PROGRAMA DE PUNTOS */}
+        {showLoyaltyConfigModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden">
+              <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Award className="w-5 h-5 text-amber-400" />
+                  <h3 className="font-black text-sm">Configurar Programa de Puntos VIP</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLoyaltyConfigModal(false)}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveLoyaltyConfig} className="p-5 space-y-4 text-xs">
+                <label className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+                  <div>
+                    <span className="font-black text-slate-900 block">
+                      Activar Programa de Puntos en Caja
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Permite acumular y canjear puntos al facturar en el POS
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={cfgEnabled}
+                    onChange={(e) => setCfgEnabled(e.target.checked)}
+                    className="w-5 h-5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                  />
+                </label>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Por cada compra de (L.):
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="any"
+                      value={cfgAmountPerPoint}
+                      onChange={(e) => setCfgAmountPerPoint(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-black text-slate-900"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      Ej. Cada L. 100 de compra
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      El cliente gana (Puntos):
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={cfgPointsPerStep}
+                      onChange={(e) => setCfgPointsPerStep(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-black text-amber-700"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      Ej. Gana 1 punto
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Valor de 1 Punto al canjear (L.):
+                    </label>
+                    <input
+                      type="number"
+                      min="0.1"
+                      step="any"
+                      value={cfgLempirasPerPoint}
+                      onChange={(e) => setCfgLempirasPerPoint(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-black text-emerald-700"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      Ej. 1 Punto = L. 5.00 de descuento
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Mínimo para canjear (Pts):
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={cfgMinRedeem}
+                      onChange={(e) => setCfgMinRedeem(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-black text-slate-900"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      Ej. A partir de 5 puntos
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Bono de Bienvenida al inscribir nuevo cliente (Pts):
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={cfgWelcomeBonus}
+                    onChange={(e) => setCfgWelcomeBonus(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-black text-slate-900"
+                  />
+                </div>
+
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 text-[11px]">
+                  <strong>Resumen de equivalencia:</strong> Si un cliente compra{' '}
+                  <strong>L. {(parseFloat(cfgAmountPerPoint) || 100) * 5}</strong>, ganará{' '}
+                  <strong>{(parseInt(cfgPointsPerStep, 10) || 1) * 5} puntos</strong>, equivalentes a{' '}
+                  <strong>
+                    L.{' '}
+                    {(
+                      (parseInt(cfgPointsPerStep, 10) || 1) *
+                      5 *
+                      (parseFloat(cfgLempirasPerPoint) || 5)
+                    ).toFixed(2)}
+                  </strong>{' '}
+                  de descuento para su próxima compra.
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowLoyaltyConfigModal(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black cursor-pointer"
+                  >
+                    Guardar Reglas
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 2: CREAR / EDITAR CLIENTE FRECUENTE */}
+        {isLoyaltyCustomerModalOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden">
+              <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <User className="w-5 h-5 text-amber-400" />
+                  <h3 className="font-black text-sm">
+                    {editingLoyaltyCustomer
+                      ? `Editar Cliente (${editingLoyaltyCustomer.code})`
+                      : 'Inscribir Nuevo Cliente Frecuente'}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsLoyaltyCustomerModalOpen(false)}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveLoyaltyCustomer} className="p-5 space-y-3.5 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Nombre Completo del Cliente *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej. María Fernanda López"
+                    value={custFormName}
+                    onChange={(e) => setCustFormName(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-semibold text-slate-900"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Teléfono / WhatsApp *
+                    </label>
+                    <input
+                      type="tel"
+                      required
+                      placeholder="Ej. 9876-5432"
+                      value={custFormPhone}
+                      onChange={(e) => setCustFormPhone(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-bold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      RTN / Identidad (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="0801-..."
+                      value={custFormRtn}
+                      onChange={(e) => setCustFormRtn(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-mono text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                {!editingLoyaltyCustomer && (
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Puntos Iniciales de Bienvenida
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                      value={custFormInitialPoints}
+                      onChange={(e) => setCustFormInitialPoints(e.target.value)}
+                      className="w-full px-3 py-2 bg-amber-50 border border-amber-300 rounded-xl font-black text-amber-900"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Notas / Preferencias de Talla o Estilo (Opcional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ej. Talla M, prefiere pago por transferencia..."
+                    value={custFormNotes}
+                    onChange={(e) => setCustFormNotes(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-slate-900"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsLoyaltyCustomerModalOpen(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black cursor-pointer"
+                  >
+                    {editingLoyaltyCustomer ? 'Guardar Cambios' : 'Crear Tarjeta VIP'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 3: SUMAR BONO O CANJEAR PUNTOS MANUALMENTE */}
+        {customerForPointsAdjust && (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden">
+              <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Gift className="w-5 h-5 text-amber-400" />
+                  <h3 className="font-black text-sm">
+                    Gestionar Puntos — {customerForPointsAdjust.name}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCustomerForPointsAdjust(null)}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAdjustCustomerPoints} className="p-5 space-y-4 text-xs">
+                <div className="p-3 rounded-xl bg-slate-100 flex items-center justify-between">
+                  <span className="font-bold text-slate-700">Saldo Actual del Cliente:</span>
+                  <span className="font-black text-base text-amber-700">
+                    {customerForPointsAdjust.currentPoints} pts (L.{' '}
+                    {(
+                      customerForPointsAdjust.currentPoints * loyaltyConfig.lempirasPerPointRedeem
+                    ).toFixed(2)}
+                    )
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdjustMode('bonus')}
+                    className={`py-2.5 px-3 rounded-xl font-black border cursor-pointer transition-all ${
+                      adjustMode === 'bonus'
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    + Acreditar Bono de Puntos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdjustMode('redeem')}
+                    className={`py-2.5 px-3 rounded-xl font-black border cursor-pointer transition-all ${
+                      adjustMode === 'redeem'
+                        ? 'bg-amber-600 text-white border-amber-600'
+                        : 'bg-white text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    - Canjear / Descontar Puntos
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Cantidad de Puntos a {adjustMode === 'bonus' ? 'Sumar' : 'Canjear'}:
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={
+                      adjustMode === 'redeem' ? customerForPointsAdjust.currentPoints : undefined
+                    }
+                    required
+                    placeholder="Ej. 10"
+                    value={adjustPointsInput}
+                    onChange={(e) => setAdjustPointsInput(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-black text-base text-slate-900"
+                  />
+                  {adjustPointsInput && (
+                    <span className="text-[11px] font-bold text-emerald-700 mt-1 block">
+                      Equivalente en Lempiras: L.{' '}
+                      {(
+                        (parseFloat(adjustPointsInput) || 0) * loyaltyConfig.lempirasPerPointRedeem
+                      ).toFixed(2)}
+                    </span>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Motivo / Concepto:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={
+                      adjustMode === 'bonus'
+                        ? 'Ej. Regalía de cumpleaños / Promoción especial'
+                        : 'Ej. Canje de descuento en tienda'
+                    }
+                    value={adjustReasonInput}
+                    onChange={(e) => setAdjustReasonInput(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-slate-900"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setCustomerForPointsAdjust(null)}
+                    className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black cursor-pointer"
+                  >
+                    Confirmar Ajuste
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 4: HISTORIAL DE PUNTOS DEL CLIENTE */}
+        {customerForHistoryModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-lg w-full max-h-[82vh] flex flex-col overflow-hidden">
+              <div className="p-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                <div>
+                  <h3 className="font-black text-sm">
+                    Historial de Puntos — {customerForHistoryModal.name}
+                  </h3>
+                  <p className="text-[11px] text-slate-300">
+                    Código {customerForHistoryModal.code} • Saldo actual:{' '}
+                    {customerForHistoryModal.currentPoints} pts
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCustomerForHistoryModal(null)}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-4 overflow-y-auto flex-1 space-y-2">
+                {!(customerForHistoryModal.history || []).length ? (
+                  <p className="text-center text-xs text-slate-400 py-8">
+                    Aún no hay movimientos de puntos registrados para este cliente.
+                  </p>
+                ) : (
+                  (customerForHistoryModal.history || []).map((log) => (
+                    <div
+                      key={log.id}
+                      className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`px-2 py-0.5 rounded font-black text-[10px] ${
+                              log.points >= 0
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-900'
+                            }`}
+                          >
+                            {log.points >= 0 ? `+${log.points} pts` : `${log.points} pts`}
+                          </span>
+                          <span className="font-bold text-slate-800">
+                            {log.notes ||
+                              (log.type === 'earn'
+                                ? `Compra ${log.saleNumber || ''}`
+                                : 'Canje de puntos')}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          {log.dateFormatted}{' '}
+                          {log.registeredBy ? `• Por: ${log.registeredBy}` : ''}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-[10px] text-slate-400 block">Saldo</span>
+                        <span className="font-black text-slate-900">{log.balanceAfter} pts</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // ==================== RENDER MODE 1: CASH REGISTER / ARQUEO ====================
   if (mode === 'cash-register') {

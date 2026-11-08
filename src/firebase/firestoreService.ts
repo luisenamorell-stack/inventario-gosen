@@ -3063,6 +3063,17 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
           : undefined,
       lastEditedBy: data.lastEditedBy ? String(data.lastEditedBy) : undefined,
       lastEditedAt: data.lastEditedAt ? String(data.lastEditedAt) : undefined,
+      loyaltyCustomerId: data.loyaltyCustomerId ? String(data.loyaltyCustomerId) : undefined,
+      loyaltyPointsEarned:
+        data.loyaltyPointsEarned !== undefined ? Number(data.loyaltyPointsEarned) : undefined,
+      loyaltyPointsRedeemed:
+        data.loyaltyPointsRedeemed !== undefined ? Number(data.loyaltyPointsRedeemed) : undefined,
+      loyaltyDiscountAmount:
+        data.loyaltyDiscountAmount !== undefined ? Number(data.loyaltyDiscountAmount) : undefined,
+      loyaltyPointsBalanceAfter:
+        data.loyaltyPointsBalanceAfter !== undefined
+          ? Number(data.loyaltyPointsBalanceAfter)
+          : undefined,
     });
   });
   records.sort((a, b) => b.timestamp - a.timestamp);
@@ -3193,6 +3204,21 @@ export async function recordSaleInFirestore(
         : (saleData.cashier || '').toLowerCase().includes('admin')
         ? 'admin'
         : 'collaborator',
+    loyaltyCustomerId: saleData.loyaltyCustomerId ? String(saleData.loyaltyCustomerId) : undefined,
+    loyaltyPointsEarned:
+      saleData.loyaltyPointsEarned !== undefined ? Number(saleData.loyaltyPointsEarned) : undefined,
+    loyaltyPointsRedeemed:
+      saleData.loyaltyPointsRedeemed !== undefined
+        ? Number(saleData.loyaltyPointsRedeemed)
+        : undefined,
+    loyaltyDiscountAmount:
+      saleData.loyaltyDiscountAmount !== undefined
+        ? Number(saleData.loyaltyDiscountAmount)
+        : undefined,
+    loyaltyPointsBalanceAfter:
+      saleData.loyaltyPointsBalanceAfter !== undefined
+        ? Number(saleData.loyaltyPointsBalanceAfter)
+        : undefined,
   };
 
   const createdRecord: SaleRecord = {
@@ -5315,12 +5341,38 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
 
   const onlineCustomers = Array.isArray(raw.onlineCustomers) ? raw.onlineCustomers : [];
 
+  const loyaltyConfig =
+    raw.loyaltyConfig && typeof raw.loyaltyConfig === 'object'
+      ? {
+          enabled: raw.loyaltyConfig.enabled !== false,
+          amountPerPoint: Math.max(1, Number(raw.loyaltyConfig.amountPerPoint) || 100),
+          pointsEarnedPerStep: Math.max(1, Number(raw.loyaltyConfig.pointsEarnedPerStep) || 1),
+          lempirasPerPointRedeem: Math.max(
+            0.1,
+            Number(raw.loyaltyConfig.lempirasPerPointRedeem) || 5
+          ),
+          minPointsToRedeem: Math.max(1, Number(raw.loyaltyConfig.minPointsToRedeem) || 5),
+          welcomeBonusPoints: Math.max(0, Number(raw.loyaltyConfig.welcomeBonusPoints) || 0),
+        }
+      : {
+          enabled: true,
+          amountPerPoint: 100,
+          pointsEarnedPerStep: 1,
+          lempirasPerPointRedeem: 5,
+          minPointsToRedeem: 5,
+          welcomeBonusPoints: 0,
+        };
+
+  const loyaltyCustomers = Array.isArray(raw.loyaltyCustomers) ? raw.loyaltyCustomers : [];
+
   return {
     companyId: slug,
     shifts: shifts.sort((a, b) => b.openedAt - a.openedAt),
     expenses: expenses.sort((a, b) => b.timestamp - a.timestamp),
     creditAccountControls,
     onlineCustomers,
+    loyaltyConfig,
+    loyaltyCustomers,
     updatedAt: Number(raw.updatedAt) || Date.now(),
   };
 }
@@ -5385,6 +5437,17 @@ export async function savePOSFinanceDataToFirestore(
         ? data.creditAccountControls
         : {},
     onlineCustomers: Array.isArray(data.onlineCustomers) ? data.onlineCustomers.slice(0, 1000) : [],
+    loyaltyConfig: data.loyaltyConfig || {
+      enabled: true,
+      amountPerPoint: 100,
+      pointsEarnedPerStep: 1,
+      lempirasPerPointRedeem: 5,
+      minPointsToRedeem: 5,
+      welcomeBonusPoints: 0,
+    },
+    loyaltyCustomers: Array.isArray(data.loyaltyCustomers)
+      ? data.loyaltyCustomers.slice(0, 2000)
+      : [],
     updatedAt: Date.now(),
   };
 
@@ -5400,6 +5463,8 @@ export async function savePOSFinanceDataToFirestore(
         expenses: normalized.expenses,
         creditAccountControls: normalized.creditAccountControls,
         onlineCustomers: normalized.onlineCustomers,
+        loyaltyConfig: normalized.loyaltyConfig,
+        loyaltyCustomers: normalized.loyaltyCustomers,
         updatedAt: normalized.updatedAt,
       }),
       { merge: true }
