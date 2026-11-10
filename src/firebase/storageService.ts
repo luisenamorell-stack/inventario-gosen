@@ -104,8 +104,17 @@ export async function uploadProductImage(
   productCode = 'PRODUCT',
   onProgress?: (percent: number) => void
 ): Promise<string> {
-  // 1. Compress image to optimize upload speed and mobile data
-  const compressedBlob = await compressImage(file);
+  // 1. Compress image to optimize upload speed and allow 2 photos per Firestore doc (<380KB each)
+  let compressedBlob = await compressImage(file, 960, 960, 0.84);
+
+  const getSafeFallbackDataUrl = async (): Promise<string> => {
+    let dataUrl = await fileToDataUrl(compressedBlob);
+    if (dataUrl.length > 380_000) {
+      const tighterBlob = await compressImage(file, 760, 760, 0.76);
+      dataUrl = await fileToDataUrl(tighterBlob);
+    }
+    return dataUrl;
+  };
 
   // 2. Build unique storage path
   const sanitizedCode = productCode.trim().replace(/[^a-zA-Z0-9_-]/g, '_') || 'PROD';
@@ -136,10 +145,8 @@ export async function uploadProductImage(
         },
         async (error) => {
           console.warn('Firebase Storage upload warning:', error);
-          // If storage bucket is restricted, provide fallback to compressed data URL so user is never blocked
           try {
-            console.log('Using optimized compressed data URL fallback...');
-            const fallbackUrl = await fileToDataUrl(compressedBlob);
+            const fallbackUrl = await getSafeFallbackDataUrl();
             resolve(fallbackUrl);
           } catch {
             reject(error);
@@ -150,9 +157,8 @@ export async function uploadProductImage(
             const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
             if (onProgress) onProgress(100);
             resolve(downloadUrl);
-          } catch (err) {
-            // Fallback to data URL
-            const fallbackUrl = await fileToDataUrl(compressedBlob);
+          } catch {
+            const fallbackUrl = await getSafeFallbackDataUrl();
             resolve(fallbackUrl);
           }
         }
@@ -160,7 +166,7 @@ export async function uploadProductImage(
     });
   } catch (err: any) {
     console.warn('Direct upload error, falling back to data URL:', err);
-    return await fileToDataUrl(compressedBlob);
+    return await getSafeFallbackDataUrl();
   }
 }
 

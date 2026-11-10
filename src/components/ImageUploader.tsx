@@ -16,6 +16,7 @@ interface ImageUploaderProps {
   value: string;
   onChange: (url: string) => void;
   productCode?: string;
+  label?: string;
   isUploading?: boolean;
   setIsUploading?: (val: boolean) => void;
   showToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -25,6 +26,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   value,
   onChange,
   productCode = 'PROD',
+  label = 'Foto del Artículo (Firebase Storage)',
   isUploading: externalIsUploading,
   setIsUploading: externalSetIsUploading,
   showToast,
@@ -139,7 +141,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       />
 
       <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">
-        Foto del Artículo (Firebase Storage)
+        {label}
       </label>
 
       {/* Preview Card or Upload Zone */}

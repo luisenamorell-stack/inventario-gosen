@@ -116,8 +116,11 @@ export function matchesProductSearch(item: Product, rawQuery?: string | null): b
   const itemCategory = normalizeSearchText(item.category);
   const itemSupplier = normalizeSearchText(item.supplier);
   const itemSize = normalizeSearchText(item.size);
+  const itemColor = normalizeSearchText(
+    [item.color || '', ...(Array.isArray(item.colors) ? item.colors : [])].join(' ')
+  );
 
-  const combinedStandard = `${itemCode} ${itemCodeClean} ${itemName} ${itemCategory} ${itemSupplier} ${itemSize}`;
+  const combinedStandard = `${itemCode} ${itemCodeClean} ${itemName} ${itemCategory} ${itemSupplier} ${itemSize} ${itemColor}`;
   if (combinedStandard.includes(query)) {
     return true;
   }

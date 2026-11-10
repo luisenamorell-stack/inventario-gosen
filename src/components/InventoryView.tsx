@@ -26,8 +26,16 @@ import {
   TrendingUp,
   Printer,
   Download,
-  Boxes
+  Boxes,
+  Palette,
+  Images,
+  ArrowLeftRight
 } from 'lucide-react';
+import {
+  PRESET_PRODUCT_COLORS,
+  getProductColors,
+  resolveColorSwatch,
+} from '../utils/productColorUtils';
 
 import { ConfirmDialog } from './ConfirmDialog';
 import { ImageUploader } from './ImageUploader';
@@ -127,6 +135,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [showInventoryPrintModal, setShowInventoryPrintModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [isUploadingImage2, setIsUploadingImage2] = useState(false);
+  const [customColorDraft, setCustomColorDraft] = useState('');
 
   // Deletion confirmation state
   const [itemToDelete, setItemToDelete] = useState<Product | null>(null);
@@ -161,6 +171,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     name: '',
     category: 'Ropa',
     size: '',
+    colors: [] as string[],
     stock: 0,
     targetWarehouseId: mainWarehouse?.id || 'principal',
     supplier: '',
@@ -169,6 +180,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     discountType: 'fixed' as 'fixed' | 'percent',
     discountValue: 0,
     img: '',
+    img2: '',
   });
   const [isCustomCategoryMode, setIsCustomCategoryMode] = useState<boolean>(false);
 
@@ -244,6 +256,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       name: '',
       category: defaultCategory,
       size: '',
+      colors: [],
       stock: 0,
       targetWarehouseId: mainWarehouse?.id || 'principal',
       supplier: availableSupplierNames.length > 0 ? availableSupplierNames[0] : '',
@@ -252,7 +265,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       discountType: 'fixed',
       discountValue: 0,
       img: '',
+      img2: '',
     });
+    setCustomColorDraft('');
     setModalStockInputText('0');
     setIsCustomCategoryMode(false);
     setIsModalOpen(true);
@@ -409,6 +424,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       name: product.name,
       category: cleanCategoryName(product.category || 'Otros') || 'Otros',
       size: product.size || '',
+      colors: getProductColors(product),
       stock: currentStock,
       targetWarehouseId: preferredWhId,
       supplier: (product.supplier || '').trim(),
@@ -417,7 +433,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       discountType: savedType,
       discountValue: savedVal,
       img: product.img || '',
+      img2: product.img2 || '',
     });
+    setCustomColorDraft('');
     setModalStockInputText(String(currentStock));
     setIsCustomCategoryMode(false);
     setIsModalOpen(true);
@@ -512,12 +530,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     );
     const finalTotalStock = enteredStock;
 
+    const cleanColors = (formData.colors || [])
+      .map((c) => String(c || '').trim())
+      .filter(Boolean);
+
     const savedItem: Product = {
       id: editingProduct ? editingProduct.id : Date.now().toString(),
       code: formData.code.trim(),
       name: formData.name.trim(),
       category: cleanCategoryName(formData.category) || 'General',
       size: formData.size.trim(),
+      color: cleanColors.join(', '),
+      colors: cleanColors,
       stock: finalTotalStock,
       warehouseStocks: nextWarehouseStocks,
       supplier: formData.supplier.trim(),
@@ -527,6 +551,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       discountType: formData.discountType,
       discountValue: Math.max(0, Number(formData.discountValue) || 0),
       img: formData.img.trim(),
+      img2: formData.img2.trim(),
     };
 
     onSaveProduct(savedItem, editingProduct?.code);
@@ -541,12 +566,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         code: nextCodeAfterSave,
         name: '',
         size: '',
+        colors: [],
         stock: 0,
         cost: 0,
         price: 0,
         discountValue: 0,
         img: '',
+        img2: '',
       }));
+      setCustomColorDraft('');
       setModalStockInputText('0');
       if (showToast) {
         showToast(
@@ -1127,9 +1155,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
                       <AdaptiveImage
                         src={item.img}
+                        secondarySrc={item.img2}
                         alt={item.name}
                         variant="product"
                         enableZoom
+                        compactGalleryControls
                         fallback={<Box className="w-6 h-6 text-slate-300" />}
                       />
                     </div>
@@ -1148,6 +1178,28 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         )}
                         <span className="text-slate-400">· {item.category}</span>
                       </div>
+                      {getProductColors(item).length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1 mt-1">
+                          {getProductColors(item).map((colName) => {
+                            const sw = resolveColorSwatch(colName);
+                            return (
+                              <span
+                                key={colName}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-700"
+                              >
+                                <span
+                                  className="w-2.5 h-2.5 rounded-full shrink-0 border"
+                                  style={{
+                                    background: sw.hex,
+                                    borderColor: sw.borderHex,
+                                  }}
+                                />
+                                <span>{colName}</span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
                       {item.supplier && (
                         <div className="text-[10px] text-slate-400 mt-0.5 truncate">
                           Proveedor: {item.supplier}
@@ -1442,9 +1494,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                           <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
                             <AdaptiveImage
                               src={item.img}
+                              secondarySrc={item.img2}
                               alt={item.name}
                               variant="product"
                               enableZoom
+                              compactGalleryControls
                               fallback={<Box className="w-5 h-5 text-slate-300" />}
                             />
                           </div>
@@ -1457,7 +1511,27 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                 </span>
                               )}
                             </p>
-                            <p className="text-xs text-slate-400 mt-0.5 font-medium">{item.category}</p>
+                            <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                              <span className="text-xs text-slate-400 font-medium">{item.category}</span>
+                              {getProductColors(item).map((colName) => {
+                                const sw = resolveColorSwatch(colName);
+                                return (
+                                  <span
+                                    key={colName}
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-700"
+                                  >
+                                    <span
+                                      className="w-2 h-2 rounded-full shrink-0 border"
+                                      style={{
+                                        background: sw.hex,
+                                        borderColor: sw.borderHex,
+                                      }}
+                                    />
+                                    <span>{colName}</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -1892,6 +1966,163 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             +
                           </button>
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Colores del Artículo (Selección rápida + Color personalizado) */}
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                          <Palette className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Colores Disponibles del Artículo</span>
+                        </label>
+                        {formData.colors.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, colors: [] })}
+                            className="text-[11px] font-semibold text-rose-600 hover:underline cursor-pointer"
+                          >
+                            Limpiar ({formData.colors.length})
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Colores seleccionados actualmente */}
+                      {formData.colors.length > 0 ? (
+                        <div className="flex flex-wrap items-center gap-1.5 p-2 rounded-lg bg-white border border-emerald-200">
+                          {formData.colors.map((colName) => {
+                            const sw = resolveColorSwatch(colName);
+                            return (
+                              <span
+                                key={colName}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-300 text-xs font-bold text-emerald-950 shadow-2xs"
+                              >
+                                <span
+                                  className="w-3 h-3 rounded-full shrink-0 border"
+                                  style={{
+                                    background: sw.hex,
+                                    borderColor: sw.borderHex,
+                                  }}
+                                />
+                                <span>{colName}</span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setFormData({
+                                      ...formData,
+                                      colors: formData.colors.filter((c) => c !== colName),
+                                    })
+                                  }
+                                  className="text-emerald-700 hover:text-rose-600 cursor-pointer ml-0.5"
+                                  title="Quitar este color"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-400">
+                          Toca uno o varios colores para asignarlos a este artículo (opcional):
+                        </p>
+                      )}
+
+                      {/* Paleta de colores rápidos con círculo de color real */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {PRESET_PRODUCT_COLORS.map((preset) => {
+                          const isSelected = formData.colors.some(
+                            (c) => c.toLowerCase() === preset.name.toLowerCase()
+                          );
+                          return (
+                            <button
+                              key={preset.name}
+                              type="button"
+                              onClick={() => {
+                                if (isSelected) {
+                                  setFormData({
+                                    ...formData,
+                                    colors: formData.colors.filter(
+                                      (c) => c.toLowerCase() !== preset.name.toLowerCase()
+                                    ),
+                                  });
+                                } else {
+                                  setFormData({
+                                    ...formData,
+                                    colors: [...formData.colors, preset.name],
+                                  });
+                                }
+                              }}
+                              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-bold border transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-slate-900 text-white border-slate-900 shadow-2xs scale-[1.03]'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span
+                                className="w-3 h-3 rounded-full shrink-0 border"
+                                style={{
+                                  background: preset.hex,
+                                  borderColor: preset.borderHex || '#94a3b8',
+                                }}
+                              />
+                              <span>{preset.name}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Campo para agregar otro color personalizado */}
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <input
+                          type="text"
+                          value={customColorDraft}
+                          onChange={(e) => setCustomColorDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const clean = customColorDraft.trim();
+                              if (clean) {
+                                const parts = clean
+                                  .split(',')
+                                  .map((p) => p.trim())
+                                  .filter(Boolean);
+                                const nextColors = [...formData.colors];
+                                parts.forEach((p) => {
+                                  if (!nextColors.some((c) => c.toLowerCase() === p.toLowerCase())) {
+                                    nextColors.push(p);
+                                  }
+                                });
+                                setFormData({ ...formData, colors: nextColors });
+                                setCustomColorDraft('');
+                              }
+                            }
+                          }}
+                          placeholder="Escribir otro color (ej. Verde Olivo, Negro/Rojo)..."
+                          className="flex-1 px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const clean = customColorDraft.trim();
+                            if (!clean) return;
+                            const parts = clean
+                              .split(',')
+                              .map((p) => p.trim())
+                              .filter(Boolean);
+                            const nextColors = [...formData.colors];
+                            parts.forEach((p) => {
+                              if (!nextColors.some((c) => c.toLowerCase() === p.toLowerCase())) {
+                                nextColors.push(p);
+                              }
+                            });
+                            setFormData({ ...formData, colors: nextColors });
+                            setCustomColorDraft('');
+                          }}
+                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold cursor-pointer shrink-0 transition-colors"
+                        >
+                          + Color
+                        </button>
                       </div>
                     </div>
 
@@ -2347,15 +2578,59 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       );
                     })()}
 
-                    <div>
-                      <ImageUploader
-                        value={formData.img}
-                        onChange={(url) => setFormData({ ...formData, img: url })}
-                        productCode={formData.code || 'PROD'}
-                        isUploading={isUploadingImage}
-                        setIsUploading={setIsUploadingImage}
-                        showToast={showToast}
-                      />
+                    {/* Sección de 2 Fotos del Artículo (Foto 1 Principal + Foto 2 Secundaria) */}
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <Images className="w-4 h-4 text-emerald-600" />
+                          <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                            Fotos del Artículo (Hasta 2 Imágenes)
+                          </span>
+                        </div>
+                        {(formData.img || formData.img2) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                img: prev.img2,
+                                img2: prev.img,
+                              }))
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-[11px] font-bold text-slate-700 cursor-pointer shadow-2xs transition-colors"
+                            title="Intercambiar Foto 1 (Principal) con Foto 2 (Secundaria)"
+                          >
+                            <ArrowLeftRight className="w-3 h-3 text-emerald-600" />
+                            <span>Intercambiar 1 y 2</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                          <ImageUploader
+                            label="📷 Foto 1 — Imagen Principal (Portada)"
+                            value={formData.img}
+                            onChange={(url) => setFormData((prev) => ({ ...prev, img: url }))}
+                            productCode={`${formData.code || 'PROD'}_1`}
+                            isUploading={isUploadingImage}
+                            setIsUploading={setIsUploadingImage}
+                            showToast={showToast}
+                          />
+                        </div>
+
+                        <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                          <ImageUploader
+                            label="📸 Foto 2 — Segunda Imagen (Otro ángulo o color)"
+                            value={formData.img2}
+                            onChange={(url) => setFormData((prev) => ({ ...prev, img2: url }))}
+                            productCode={`${formData.code || 'PROD'}_2`}
+                            isUploading={isUploadingImage2}
+                            setIsUploading={setIsUploadingImage2}
+                            showToast={showToast}
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2386,7 +2661,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     {!editingProduct && (
                       <button
                         type="button"
-                        disabled={isUploadingImage}
+                        disabled={isUploadingImage || isUploadingImage2}
                         onClick={() => saveFormProduct(true)}
                         className="px-4 py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold hover:bg-indigo-100 rounded-xl transition-colors text-xs sm:text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                         title="Guarda este artículo y abre automáticamente el siguiente código SKU corrido ascendente"
@@ -2397,10 +2672,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     )}
                     <button
                       type="submit"
-                      disabled={isUploadingImage}
+                      disabled={isUploadingImage || isUploadingImage2}
                       className="px-6 py-2.5 bg-emerald-600 text-white font-medium hover:bg-emerald-700 rounded-xl shadow-sm transition-colors text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
-                      <span>{isUploadingImage ? 'Subiendo Foto...' : 'Guardar Artículo'}</span>
+                      <span>
+                        {isUploadingImage || isUploadingImage2 ? 'Subiendo Foto...' : 'Guardar Artículo'}
+                      </span>
                     </button>
                   </div>
                 </div>

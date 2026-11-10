@@ -38,10 +38,12 @@ import {
 import { CatalogBankAccountCard } from './StoreBankAccountsEditor';
 import { getCachedStoreSettings } from '../firebase/firestoreService';
 import { useCatalogBrandPalette } from '../utils/catalogThemeEngine';
+import { getProductColors, resolveColorSwatch } from '../utils/productColorUtils';
 
 interface CartItem {
   product: Product;
   quantity: number;
+  selectedColor?: string;
 }
 
 interface PublicCatalogViewProps {
@@ -62,6 +64,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [selectedCardColors, setSelectedCardColors] = useState<Record<string, string>>({});
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
 
   const isGosen = (storeSettings.companyId || 'gosen') === 'gosen';
@@ -166,18 +169,25 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
     return baseInventory.filter((p) => {
       if (selectedCategory !== 'all' && p.category !== selectedCategory) return false;
       if (!q) return true;
+      const colorText = getProductColors(p).join(' ').toLowerCase();
       return (
         p.name.toLowerCase().includes(q) ||
         p.code.toLowerCase().includes(q) ||
-        (p.category && p.category.toLowerCase().includes(q))
+        (p.category && p.category.toLowerCase().includes(q)) ||
+        colorText.includes(q)
       );
     });
   }, [baseInventory, selectedCategory, searchQuery]);
 
   // Cart Helpers
-  const addToCart = (product: Product) => {
+  const addToCart = (product: Product, explicitColor?: string) => {
     const existing = cart.find((item) => item.product.code === product.code);
     const maxStock = Number(product.stock) || 0;
+    const availableColors = getProductColors(product);
+    const chosenColor =
+      explicitColor ||
+      selectedCardColors[product.code] ||
+      (availableColors.length > 0 ? availableColors[0] : undefined);
 
     if (maxStock <= 0) {
       showToast(`"${product.name}" no tiene stock registrado, pero se agregará a tu pedido como solicitud.`, 'info');
@@ -190,13 +200,26 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
       setCart(
         cart.map((item) =>
           item.product.code === product.code
-            ? { ...item, quantity: item.quantity + 1 }
+            ? {
+                ...item,
+                quantity: item.quantity + 1,
+                selectedColor: chosenColor || item.selectedColor,
+              }
             : item
         )
       );
     } else {
-      setCart([...cart, { product, quantity: 1 }]);
+      setCart([...cart, { product, quantity: 1, selectedColor: chosenColor }]);
     }
+  };
+
+  const updateCartItemColor = (code: string, colorName: string) => {
+    setSelectedCardColors((prev) => ({ ...prev, [code]: colorName }));
+    setCart((prev) =>
+      prev.map((item) =>
+        item.product.code === code ? { ...item, selectedColor: colorName } : item
+      )
+    );
   };
 
   const updateQuantity = (code: string, qty: number) => {
@@ -274,8 +297,12 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
 
     cart.forEach((item) => {
       const sizeStr = item.product.size ? ` (Talla: ${item.product.size})` : '';
+      const itemColors = getProductColors(item.product);
+      const chosenCol =
+        item.selectedColor || (itemColors.length > 0 ? itemColors[0] : '');
+      const colorStr = chosenCol ? ` [Color: ${chosenCol}]` : '';
       const itemSubtotal = (item.product.price * item.quantity).toFixed(2);
-      text += `• *${item.quantity}x* ${item.product.name}${sizeStr}\n`;
+      text += `• *${item.quantity}x* ${item.product.name}${sizeStr}${colorStr}\n`;
       text += `  ↳ Total: L. ${itemSubtotal}  _(L. ${item.product.price.toFixed(2)} c/u)_\n`;
     });
 
@@ -700,6 +727,11 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
               const stockNum = Number(product.stock) || 0;
               const cartItem = cart.find((it) => it.product.code === product.code);
               const qtyInCart = cartItem?.quantity || 0;
+              const productColors = getProductColors(product);
+              const activeCardColor =
+                cartItem?.selectedColor ||
+                selectedCardColors[product.code] ||
+                (productColors.length > 0 ? productColors[0] : '');
 
               return (
                 <div
@@ -707,10 +739,11 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                   className="bg-white rounded-[22px] p-2.5 sm:p-3 flex flex-col justify-between transition-all hover:shadow-md shadow-2xs group relative"
                   style={{ border: `1.5px solid ${palette.cardBorder}` }}
                 >
-                  {/* Rounded Product Image Frame */}
+                  {/* Rounded Product Image Frame (Supports 2 Photos) */}
                   <div className="aspect-[1/1.05] w-full rounded-[16px] bg-stone-100 overflow-hidden relative mb-2.5 flex items-center justify-center">
                     <AdaptiveImage
                       src={product.img}
+                      secondarySrc={product.img2}
                       alt={product.name}
                       variant="product"
                       coverMode
@@ -762,7 +795,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                     )}
                   </div>
 
-                  {/* Product Details (Code -> Uppercase Bold Name -> Categoría: X) */}
+                  {/* Product Details (Code -> Uppercase Bold Name -> Categoría: X -> Colores) */}
                   <div className="space-y-0.5 mb-2.5 flex-1 flex flex-col px-0.5">
                     <div className="flex items-center justify-between gap-1 text-[11px] text-stone-500">
                       <span className="font-semibold text-stone-500">{product.code}</span>
@@ -781,6 +814,48 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                       <span className="text-[11px] text-stone-400 font-medium block pt-0.5">
                         Categoría: {product.category.toUpperCase()}
                       </span>
+                    )}
+
+                    {/* Product Colors Selector / Swatches */}
+                    {productColors.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1 pt-1.5">
+                        {productColors.map((colName) => {
+                          const sw = resolveColorSwatch(colName);
+                          const isColActive =
+                            productColors.length > 1 && activeCardColor === colName;
+                          return (
+                            <button
+                              key={colName}
+                              type="button"
+                              onClick={() => updateCartItemColor(product.code, colName)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold transition-all cursor-pointer"
+                              style={
+                                isColActive
+                                  ? {
+                                      backgroundColor: palette.stockBadgeBg,
+                                      color: palette.stockBadgeText,
+                                      border: `1.5px solid ${palette.accentColor}`,
+                                    }
+                                  : {
+                                      backgroundColor: '#f5f5f4',
+                                      color: '#44403c',
+                                      border: '1px solid #e7e5e4',
+                                    }
+                              }
+                              title={`Seleccionar color: ${colName}`}
+                            >
+                              <span
+                                className="w-2.5 h-2.5 rounded-full shrink-0 border"
+                                style={{
+                                  background: sw.hex,
+                                  borderColor: sw.borderHex,
+                                }}
+                              />
+                              <span>{colName}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
 
@@ -1322,10 +1397,51 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                         <span className="font-black text-stone-900 uppercase block truncate">
                           {item.product.name}
                         </span>
-                        <div className="text-[10px] text-stone-500 flex items-center gap-2 mt-0.5 font-medium">
+                        <div className="text-[10px] text-stone-500 flex flex-wrap items-center gap-2 mt-0.5 font-medium">
                           <span>L. {item.product.price.toFixed(2)} c/u</span>
                           {item.product.size && <span>• Talla: {item.product.size}</span>}
                         </div>
+                        {getProductColors(item.product).length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 mt-1">
+                            <span className="text-[10px] font-bold text-stone-500">Color:</span>
+                            {getProductColors(item.product).map((colName) => {
+                              const sw = resolveColorSwatch(colName);
+                              const chosen =
+                                item.selectedColor || getProductColors(item.product)[0];
+                              const isSelected = chosen === colName;
+                              return (
+                                <button
+                                  key={colName}
+                                  type="button"
+                                  onClick={() => updateCartItemColor(item.product.code, colName)}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[10px] font-extrabold cursor-pointer transition-all"
+                                  style={
+                                    isSelected
+                                      ? {
+                                          backgroundColor: palette.stockBadgeBg,
+                                          color: palette.stockBadgeText,
+                                          border: `1.5px solid ${palette.accentColor}`,
+                                        }
+                                      : {
+                                          backgroundColor: '#f5f5f4',
+                                          color: '#57534e',
+                                          border: '1px solid #e7e5e4',
+                                        }
+                                  }
+                                >
+                                  <span
+                                    className="w-2 h-2 rounded-full shrink-0 border"
+                                    style={{
+                                      background: sw.hex,
+                                      borderColor: sw.borderHex,
+                                    }}
+                                  />
+                                  <span>{colName}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
 
                       {/* Quantity switcher */}

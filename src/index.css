@@ -254,7 +254,7 @@
     color: #000000 !important;
   }
 
-  body > *:not(#gosen-print-portal) {
+  body > *:not(#gosen-print-portal):not(#gosen-universal-ticket-portal) {
     display: none !important;
   }
 

@@ -5,6 +5,8 @@ export interface Product {
   name: string;
   category: string;
   size?: string;
+  color?: string;
+  colors?: string[];
   supplier?: string;
   cost: number;
   price: number;
@@ -14,6 +16,7 @@ export interface Product {
   stock: number;
   warehouseStocks?: Record<string, number>;
   img?: string;
+  img2?: string;
 }
 
 export interface Supplier {

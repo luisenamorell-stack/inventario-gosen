@@ -9,11 +9,14 @@
         "name": { "type": "string", "maxLength": 200 },
         "category": { "type": "string", "maxLength": 100 },
         "size": { "type": "string", "maxLength": 50 },
+        "color": { "type": "string", "maxLength": 150 },
+        "colors": { "type": "array" },
         "supplier": { "type": "string", "maxLength": 200 },
         "cost": { "type": "number" },
         "price": { "type": "number" },
         "stock": { "type": "integer" },
-        "img": { "type": "string", "maxLength": 500000 }
+        "img": { "type": "string", "maxLength": 500000 },
+        "img2": { "type": "string", "maxLength": 500000 }
       },
       "required": ["code", "name", "category", "price", "stock"]
     },

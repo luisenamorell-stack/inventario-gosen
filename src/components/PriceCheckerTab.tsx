@@ -6,6 +6,7 @@ import {
 } from '../firebase/firestoreService';
 import { playSound } from '../utils/audio';
 import { AdaptiveImage } from './AdaptiveImage';
+import { getProductColors, resolveColorSwatch } from '../utils/productColorUtils';
 import {
   Barcode,
   Camera,
@@ -443,8 +444,10 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                           <div className="w-11 h-11 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 border border-slate-200 shrink-0 overflow-hidden">
                             <AdaptiveImage
                               src={item.img}
+                              secondarySrc={item.img2}
                               alt={item.name}
                               variant="product"
+                              compactGalleryControls
                               fallback={<Box className="w-5 h-5" />}
                             />
                           </div>
@@ -530,6 +533,7 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                 <div className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-300 border border-slate-200 shadow-sm overflow-hidden">
                   <AdaptiveImage
                     src={selectedProduct.img}
+                    secondarySrc={selectedProduct.img2}
                     alt={selectedProduct.name}
                     variant="product"
                     enableZoom
@@ -544,10 +548,32 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
               <h2 className="text-2xl sm:text-3xl font-black text-slate-800 mb-1 leading-tight">
                 {selectedProduct.name}
               </h2>
-              <p className="text-slate-400 font-mono text-xs mb-5">
+              <p className="text-slate-400 font-mono text-xs mb-3">
                 Cód: {selectedProduct.code}
                 {selectedProduct.size ? ` · Talla: ${selectedProduct.size}` : ''}
               </p>
+              {getProductColors(selectedProduct).length > 0 && (
+                <div className="flex flex-wrap items-center justify-center gap-1.5 mb-5">
+                  {getProductColors(selectedProduct).map((colName) => {
+                    const sw = resolveColorSwatch(colName);
+                    return (
+                      <span
+                        key={colName}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700"
+                      >
+                        <span
+                          className="w-2.5 h-2.5 rounded-full shrink-0 border"
+                          style={{
+                            background: sw.hex,
+                            borderColor: sw.borderHex,
+                          }}
+                        />
+                        <span>{colName}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Price Box */}
               {(() => {

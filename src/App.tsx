@@ -3335,7 +3335,11 @@ export const App: React.FC = () => {
             </button>
 
             {/* 3. Center Raised Action: VENTAS POS (Sales) */}
-            <div className="flex flex-col items-center justify-center relative -mt-5 z-10">
+            <div
+              className={`flex flex-col items-center justify-center relative z-10 transition-all ${
+                activeTab === 'sales' ? 'mt-0' : '-mt-4'
+              }`}
+            >
               <button
                 type="button"
                 onClick={() => handleTabChange('sales')}
@@ -3345,13 +3349,13 @@ export const App: React.FC = () => {
               >
                 {/* Raised Emerald Circle with White Bezel */}
                 <div
-                  className={`w-12 h-12 rounded-full flex items-center justify-center border-[3.5px] border-white transition-all duration-200 group-active:scale-95 ${
+                  className={`rounded-full flex items-center justify-center border-white transition-all duration-200 group-active:scale-95 ${
                     activeTab === 'sales'
-                      ? 'bg-emerald-600 shadow-[0_4px_14px_rgba(5,150,105,0.45)] ring-2 ring-emerald-500/40'
-                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-[0_4px_12px_rgba(15,23,42,0.18)] ring-1 ring-slate-200'
+                      ? 'w-9 h-9 border-2 bg-emerald-600 shadow-[0_2px_10px_rgba(5,150,105,0.35)] ring-2 ring-emerald-500/40'
+                      : 'w-11 h-11 border-[3px] bg-emerald-600 hover:bg-emerald-700 shadow-[0_4px_12px_rgba(15,23,42,0.18)] ring-1 ring-slate-200'
                   }`}
                 >
-                  <ShoppingCart className="w-5 h-5 text-white stroke-[2.3] shrink-0" />
+                  <ShoppingCart className="w-4 h-4 text-white stroke-[2.3] shrink-0" />
                 </div>
 
                 {/* Stadium Pill Label */}

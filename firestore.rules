@@ -16,6 +16,8 @@ service cloud.firestore {
              data.name is string && data.name.size() <= 300 &&
              data.category is string && data.category.size() <= 150 &&
              (!('size' in data) || data.size == null || (data.size is string && data.size.size() <= 100)) &&
+             (!('color' in data) || data.color == null || (data.color is string && data.color.size() <= 200)) &&
+             (!('colors' in data) || data.colors == null || data.colors is list) &&
              (!('supplier' in data) || data.supplier == null || (data.supplier is string && data.supplier.size() <= 300)) &&
              (!('cost' in data) || data.cost == null || (data.cost is number || data.cost is int)) &&
              (data.price is number || data.price is int) &&
@@ -23,7 +25,8 @@ service cloud.firestore {
              (!('discountType' in data) || data.discountType == null || (data.discountType is string && data.discountType.size() <= 50)) &&
              (!('discountValue' in data) || data.discountValue == null || (data.discountValue is number || data.discountValue is int)) &&
              (data.stock is number || data.stock is int) &&
-             (!('img' in data) || data.img == null || (data.img is string && data.img.size() <= 1048576));
+             (!('img' in data) || data.img == null || (data.img is string && data.img.size() <= 1048576)) &&
+             (!('img2' in data) || data.img2 == null || (data.img2 is string && data.img2.size() <= 1048576));
     }
 
     function isValidSupplier(data) {

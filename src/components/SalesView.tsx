@@ -37,6 +37,7 @@ import {
 } from '../utils/universalPrintBridge';
 import { PrintFormatModal, PrinterConnectionManager } from './PrintFormatModal';
 import { AdaptiveImage } from './AdaptiveImage';
+import { getProductColors, resolveColorSwatch } from '../utils/productColorUtils';
 import {
   cleanCategoryName,
   matchesCategoryFilter,
@@ -1872,9 +1873,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-slate-50 overflow-hidden">
-      {/* Top Bar / Navigation Tabs — Compact height with generous spacing between buttons */}
-      <div className="bg-white border-b border-slate-200 px-3 sm:px-5 py-2 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 shrink-0 shadow-2xs">
-        <div className="flex items-center justify-between min-w-0 shrink-0">
+      {/* Top Bar / Navigation Tabs — Ultra-compact on Android mobile so POS gets maximum vertical height */}
+      <div className="bg-white border-b border-slate-200 px-2.5 sm:px-5 py-1.5 sm:py-2 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-1.5 sm:gap-2.5 shrink-0 shadow-2xs">
+        <div className="hidden sm:flex items-center justify-between min-w-0 shrink-0">
           <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2 truncate">
             <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
             <span className="truncate">Ventas &amp; Facturación</span>
@@ -1882,7 +1883,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
         </div>
 
         {/* View Switcher Tabs — Well-spaced buttons */}
-        <div className="flex items-center gap-2 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80 overflow-x-auto max-w-full scrollbar-none">
+        <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-100/90 p-1 sm:p-1.5 rounded-2xl border border-slate-200/80 overflow-x-auto max-w-full no-scrollbar">
           <button
             type="button"
             onClick={() => setActiveSubTab('pos')}
@@ -2255,6 +2256,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           <div className="w-full h-28 sm:h-32 mb-2 bg-slate-50 rounded-xl flex items-center justify-center overflow-hidden border border-slate-100">
                             <AdaptiveImage
                               src={product.img}
+                              secondarySrc={product.img2}
                               alt={product.name}
                               variant="product"
                               hoverScale
@@ -2280,6 +2282,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 </span>
                               )}
                             </div>
+                            {getProductColors(product).length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                                {getProductColors(product).map((colName) => {
+                                  const sw = resolveColorSwatch(colName);
+                                  return (
+                                    <span
+                                      key={colName}
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-slate-100 border border-slate-200 text-[9px] font-bold text-slate-700"
+                                    >
+                                      <span
+                                        className="w-2 h-2 rounded-full shrink-0 border"
+                                        style={{
+                                          background: sw.hex,
+                                          borderColor: sw.borderHex,
+                                        }}
+                                      />
+                                      <span>{colName}</span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
 
                             {/* Exact Warehouse Location Banner when item is not in selectedWarehouse */}
                             {isOutOfStock && otherLocations.length > 0 && (
@@ -2378,23 +2402,27 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
             {/* Floating Mobile Cart Pill Bar (< md phones) */}
             {cart.length > 0 && (
-              <div className="md:hidden sticky bottom-2 mx-3 my-2 z-20">
+              <div className="md:hidden sticky bottom-3 mx-3 my-2 z-20 pb-1">
                 <button
                   type="button"
                   onClick={() => setMobilePosTab('cart')}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-2xl shadow-xl flex items-center justify-between transition-all cursor-pointer font-bold text-sm border border-emerald-500/40"
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white p-3 rounded-2xl shadow-xl flex items-center justify-between transition-all cursor-pointer font-bold text-sm border-2 border-white/90"
                 >
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-7 h-7 rounded-lg bg-emerald-800 text-white flex items-center justify-center text-xs font-black shrink-0">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-8 h-8 rounded-xl bg-emerald-800 text-white flex items-center justify-center text-xs font-black shrink-0 shadow-inner">
                       {totalCartItemsCount}
                     </span>
-                    <div className="text-left">
-                      <div className="text-[10px] text-emerald-100 font-medium">Total a cobrar</div>
-                      <div className="text-sm font-black">L. {cartTotal.toFixed(2)}</div>
+                    <div className="text-left min-w-0">
+                      <div className="text-[10px] text-emerald-100 font-semibold leading-tight">
+                        Total a cobrar
+                      </div>
+                      <div className="text-sm sm:text-base font-black truncate tabular-nums">
+                        L. {cartTotal.toFixed(2)}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs bg-white text-emerald-800 px-3.5 py-1.5 rounded-xl font-black shadow-xs shrink-0">
-                    <span>Ver Ticket</span>
+                  <div className="flex items-center gap-1.5 text-xs bg-white text-emerald-900 px-3.5 py-2 rounded-xl font-black shadow-sm shrink-0">
+                    <span>Ir a Facturar</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </div>
                 </button>
@@ -2402,29 +2430,42 @@ export const SalesView: React.FC<SalesViewProps> = ({
             )}
           </div>
 
-          {/* Right Column: Dedicated Ticket Zone — Prioritizes Cart Items visibility while keeping payment & customer controls compact */}
+          {/* Right Column: Dedicated Ticket Zone — Unified smooth scroll on Android mobile (< md), split scroll on desktop (md:) */}
           <div
-            className={`flex-1 min-h-0 w-full md:flex-initial md:w-[360px] lg:w-[420px] xl:w-[460px] flex flex-col bg-white md:border-l border-slate-200 shadow-xl overflow-hidden ${
+            className={`flex-1 min-h-0 w-full md:flex-initial md:w-[360px] lg:w-[420px] xl:w-[460px] flex flex-col bg-white md:border-l border-slate-200 shadow-xl overflow-y-auto md:overflow-hidden scroll-container ${
               mobilePosTab === 'catalog' ? 'hidden md:flex' : 'flex'
             }`}
           >
-            {/* Mobile Back Button to Catalog (< md phones) */}
-            <div className="md:hidden px-3 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between shrink-0">
+            {/* Mobile Sticky Top Bar (< md phones): Back to Catalog + Quick Total */}
+            <div className="md:hidden sticky top-0 z-20 px-3 py-2 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 shadow-sm">
               <button
                 type="button"
                 onClick={() => setMobilePosTab('catalog')}
-                className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer py-1"
+                className="text-xs font-extrabold text-emerald-300 hover:text-emerald-200 bg-white/10 px-2.5 py-1.5 rounded-xl flex items-center gap-1 cursor-pointer active:scale-95"
               >
-                <ChevronLeft className="w-4 h-4" />
-                <span>Seguir agregando productos</span>
+                <ChevronLeft className="w-4 h-4 shrink-0" />
+                <span>+ Productos</span>
               </button>
-              <span className="text-xs font-extrabold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg font-mono">
-                Total: L. {cartTotal.toFixed(2)}
-              </span>
+
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[11px] bg-emerald-500 text-slate-950 font-black px-2 py-0.5 rounded-full shrink-0">
+                  {totalCartItemsCount} {totalCartItemsCount === 1 ? 'art.' : 'arts.'}
+                </span>
+                {cart.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearCart}
+                    className="p-1.5 rounded-lg bg-rose-500/25 text-rose-200 hover:bg-rose-500/40 text-xs font-bold flex items-center cursor-pointer"
+                    title="Vaciar ticket"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
 
-            {/* Single-Row Slim Ticket Header */}
-            <div className="px-3.5 py-2.5 border-b border-slate-200 bg-slate-900 text-white flex items-center justify-between gap-2 shrink-0">
+            {/* Single-Row Slim Ticket Header (Visible on Desktop/Tablet md+) */}
+            <div className="hidden md:flex px-3.5 py-2.5 border-b border-slate-200 bg-slate-900 text-white items-center justify-between gap-2 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <Receipt className="w-4 h-4 text-emerald-400 shrink-0" />
                 <h2 className="font-extrabold text-sm truncate">Zona de Ticket</h2>
@@ -2451,15 +2492,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
               </div>
             </div>
 
-            {/* 1. DEDICATED TICKET ITEMS ZONE (Takes maximum available vertical space!) */}
-            <div className="flex-1 min-h-[180px] overflow-y-auto scroll-container p-2.5 sm:p-3 space-y-2 bg-slate-50/50">
+            {/* 1. DEDICATED TICKET ITEMS ZONE (Flows naturally on Android mobile so virtual keyboard never crushes checkout; scrolls independently on md+) */}
+            <div className=" shrink-0 md:shrink md:flex-1 md:min-h-[160px] md:overflow-y-auto md:scroll-container p-2.5 sm:p-3 space-y-2 bg-slate-50/50">
               {cart.length === 0 ? (
-                <div className="h-full min-h-[180px] flex flex-col items-center justify-center text-center px-4 text-slate-400">
+                <div className="py-8 md:h-full md:min-h-[160px] flex flex-col items-center justify-center text-center px-4 text-slate-400">
                   <Receipt className="w-10 h-10 text-slate-300 mb-2 stroke-1" />
                   <p className="font-bold text-slate-700 text-sm">El ticket está vacío</p>
                   <p className="text-xs text-slate-400 mt-0.5 max-w-[240px]">
-                    Toca cualquier producto del inventario a la izquierda o escanea su código para
-                    agregarlo aquí.
+                    Toca cualquier producto del inventario o escanea su código para agregarlo aquí.
                   </p>
                 </div>
               ) : (
@@ -2515,6 +2555,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           <span className="text-slate-500 font-medium">Desc. L:</span>
                           <input
                             type="number"
+                            inputMode="decimal"
                             min="0"
                             max={basePrice}
                             step="any"
@@ -2523,36 +2564,37 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             onChange={(e) =>
                               updateCartItemDiscount(item.code, parseFloat(e.target.value) || 0)
                             }
-                            className="w-16 px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-[11px] font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right"
+                            className="w-20 px-2 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-xs font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right tabular-nums"
                             title="Descuento por unidad en Lempiras"
                           />
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 sm:gap-2">
                           <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-xl p-0.5">
                             <button
                               type="button"
                               onClick={() => updateCartQuantity(item.code, item.quantity - 1)}
-                              className="w-7 h-7 flex items-center justify-center bg-white text-slate-700 hover:bg-slate-200 rounded-lg cursor-pointer shadow-2xs"
+                              className="w-7 h-7 flex items-center justify-center bg-white text-slate-700 hover:bg-slate-200 rounded-lg cursor-pointer shadow-2xs active:scale-95"
                               title="Restar 1"
                             >
                               <Minus className="w-3.5 h-3.5" />
                             </button>
                             <input
                               type="number"
+                              inputMode="numeric"
                               min="1"
                               max={maxStock}
                               value={item.quantity}
                               onChange={(e) =>
                                 updateCartQuantity(item.code, parseInt(e.target.value) || 1)
                               }
-                              className="w-9 text-center text-xs font-extrabold text-slate-900 bg-transparent focus:outline-none tabular-nums"
+                              className="w-11 text-center text-xs font-extrabold text-slate-900 bg-transparent focus:outline-none tabular-nums"
                             />
                             <button
                               type="button"
                               onClick={() => updateCartQuantity(item.code, item.quantity + 1)}
                               disabled={item.quantity >= maxStock}
-                              className="w-7 h-7 flex items-center justify-center bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 rounded-lg cursor-pointer shadow-2xs"
+                              className="w-7 h-7 flex items-center justify-center bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 rounded-lg cursor-pointer shadow-2xs active:scale-95"
                               title="Sumar 1"
                             >
                               <Plus className="w-3.5 h-3.5" />
@@ -2575,8 +2617,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
               )}
             </div>
 
-            {/* 2. COMPACT CHECKOUT CONTROLS FOOTER (Does not eat up the Ticket Items space) */}
-            <div className="border-t border-slate-200 bg-white p-3 space-y-2.5 shrink-0 max-h-[52vh] overflow-y-auto scroll-container">
+            {/* 2. CHECKOUT CONTROLS FOOTER (Flows naturally on Android mobile with extra bottom clearance; compact scrollable footer on md+) */}
+            <div className="border-t border-slate-200 bg-white p-3 pb-6 md:pb-3 space-y-2.5 shrink-0 md:max-h-[54vh] md:overflow-y-auto md:scroll-container">
               {/* Compact Customer & VIP Selector Bar (1 line by default, expandable on click) */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-1.5">
@@ -2810,28 +2852,29 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </div>
               )}
 
-              {/* Compact Cash Received & Change Row */}
+              {/* Cash Received & Change Box — Ergonomic full-width input on Android mobile + 1-tap denomination buttons */}
               {paymentMethod === 'cash' && cart.length > 0 && (
-                <div className="p-2 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-1.5">
-                  <div className="flex items-center justify-between gap-1.5">
-                    <div className="relative flex-1">
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">
+                <div className="p-2.5 bg-emerald-50/90 border border-emerald-200 rounded-xl space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <div className="relative flex-1 min-w-0">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-800 font-extrabold text-xs pointer-events-none">
                         Efectivo L.
                       </span>
                       <input
                         type="number"
+                        inputMode="decimal"
                         step="0.01"
-                        placeholder="0.00"
+                        placeholder={cartTotal.toFixed(2)}
                         value={cashGiven}
                         onChange={(e) => setCashGiven(e.target.value)}
-                        className="w-full pl-20 pr-2.5 py-1 bg-white border border-emerald-300 rounded-lg text-xs sm:text-sm font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        className="w-full pl-22 pr-3 py-2 bg-white border border-emerald-300 rounded-xl text-sm font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 tabular-nums"
                       />
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="grid grid-cols-4 sm:flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
                         onClick={() => setCashGiven(cartTotal.toFixed(2))}
-                        className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-950 font-extrabold px-2 py-1 rounded-lg cursor-pointer"
+                        className="py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold rounded-lg cursor-pointer active:scale-95 text-center shadow-2xs"
                       >
                         Exacto
                       </button>
@@ -2840,25 +2883,34 @@ export const SalesView: React.FC<SalesViewProps> = ({
                         onClick={() =>
                           setCashGiven((Math.ceil(cartTotal / 100) * 100 || 100).toFixed(2))
                         }
-                        className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-950 font-extrabold px-2 py-1 rounded-lg cursor-pointer"
+                        className="py-1.5 px-2 bg-emerald-200/90 hover:bg-emerald-300 text-emerald-950 text-[11px] font-extrabold rounded-lg cursor-pointer active:scale-95 text-center"
                       >
-                        +100
+                        L.100
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCashGiven((Math.ceil(cartTotal / 200) * 200 || 200).toFixed(2))
+                        }
+                        className="py-1.5 px-2 bg-emerald-200/90 hover:bg-emerald-300 text-emerald-950 text-[11px] font-extrabold rounded-lg cursor-pointer active:scale-95 text-center"
+                      >
+                        L.200
                       </button>
                       <button
                         type="button"
                         onClick={() =>
                           setCashGiven((Math.ceil(cartTotal / 500) * 500 || 500).toFixed(2))
                         }
-                        className="text-[10px] bg-emerald-200 hover:bg-emerald-300 text-emerald-950 font-extrabold px-2 py-1 rounded-lg cursor-pointer"
+                        className="py-1.5 px-2 bg-emerald-200/90 hover:bg-emerald-300 text-emerald-950 text-[11px] font-extrabold rounded-lg cursor-pointer active:scale-95 text-center"
                       >
-                        +500
+                        L.500
                       </button>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between text-xs px-0.5">
-                    <span className="font-semibold text-slate-700">Cambio / Vuelto:</span>
+                  <div className="flex items-center justify-between text-xs px-1 pt-0.5 border-t border-emerald-200/60">
+                    <span className="font-bold text-slate-700">Cambio / Vuelto:</span>
                     <span
-                      className={`font-black text-xs sm:text-sm ${
+                      className={`font-black text-xs sm:text-sm tabular-nums ${
                         isCashInsufficient ? 'text-rose-600' : 'text-emerald-800'
                       }`}
                     >
@@ -2871,14 +2923,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
               )}
 
               {/* Compact Discount + ISV + Subtotal Row */}
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 pt-1 border-t border-slate-100">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 pt-1.5 border-t border-slate-100">
                 <div className="flex items-center gap-1.5">
                   <span className="font-semibold text-slate-700">Desc:</span>
                   <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                     <button
                       type="button"
                       onClick={() => setDiscountType('amount')}
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                      className={`px-2 py-0.5 rounded text-[11px] font-bold cursor-pointer ${
                         discountType === 'amount'
                           ? 'bg-slate-800 text-white'
                           : 'text-slate-600'
@@ -2889,7 +2941,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setDiscountType('percent')}
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                      className={`px-2 py-0.5 rounded text-[11px] font-bold cursor-pointer ${
                         discountType === 'percent'
                           ? 'bg-slate-800 text-white'
                           : 'text-slate-600'
@@ -2900,72 +2952,75 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </div>
                   <input
                     type="number"
+                    inputMode="decimal"
                     min="0"
                     max={discountType === 'percent' ? 100 : cartSubtotal || undefined}
                     step="any"
                     placeholder="0"
                     value={discountValue}
                     onChange={(e) => setDiscountValue(e.target.value)}
-                    className="w-16 px-2 py-0.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    className="w-20 px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 tabular-nums"
                   />
                 </div>
 
-                <label className="flex items-center gap-1.5 cursor-pointer select-none font-semibold text-slate-700">
+                <label className="flex items-center gap-1.5 cursor-pointer select-none font-semibold text-slate-700 py-1">
                   <input
                     type="checkbox"
                     checked={applyTax}
                     onChange={(e) => setApplyTax(e.target.checked)}
-                    className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                   />
                   <span>+15% ISV</span>
                 </label>
 
                 <div className="text-right ml-auto">
                   {discountAmount > 0 && (
-                    <span className="text-[11px] font-bold text-rose-600 mr-2">
+                    <span className="text-[11px] font-bold text-rose-600 mr-2 tabular-nums">
                       -L. {discountAmount.toFixed(2)}
                     </span>
                   )}
-                  <span className="text-xs font-bold text-slate-700">
+                  <span className="text-xs font-bold text-slate-700 tabular-nums">
                     Sub: L. {cartSubtotal.toFixed(2)}
                   </span>
                 </div>
               </div>
 
-              {/* Prominent Checkout Button with Total */}
-              <button
-                type="button"
-                onClick={handleCheckout}
-                disabled={
-                  cart.length === 0 ||
-                  isSubmittingSale ||
-                  (paymentMethod === 'cash' && isCashInsufficient)
-                }
-                className={`w-full min-h-[48px] py-3 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-between gap-2 transition-all shadow-md cursor-pointer ${
-                  cart.length === 0 ||
-                  isSubmittingSale ||
-                  (paymentMethod === 'cash' && isCashInsufficient)
-                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
-                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/25 active:scale-[0.99]'
-                }`}
-              >
-                {isSubmittingSale ? (
-                  <div className="w-full flex items-center justify-center gap-2">
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
-                    <span>Registrando venta...</span>
-                  </div>
-                ) : (
-                  <>
-                    <span className="flex items-center gap-2">
-                      <CheckCircle2 className="w-5 h-5 shrink-0" />
-                      <span>Cobrar y Facturar</span>
-                    </span>
-                    <span className="text-base sm:text-lg font-black bg-black/20 px-3 py-0.5 rounded-xl tabular-nums">
-                      L. {cartTotal.toFixed(2)}
-                    </span>
-                  </>
-                )}
-              </button>
+              {/* Sticky Bottom Checkout Action on Android Mobile so it is always reachable */}
+              <div className="sticky bottom-0 z-20 bg-white pt-1.5 pb-1 md:static md:p-0">
+                <button
+                  type="button"
+                  onClick={handleCheckout}
+                  disabled={
+                    cart.length === 0 ||
+                    isSubmittingSale ||
+                    (paymentMethod === 'cash' && isCashInsufficient)
+                  }
+                  className={`w-full min-h-[52px] py-3 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-between gap-2 transition-all shadow-lg cursor-pointer ${
+                    cart.length === 0 ||
+                    isSubmittingSale ||
+                    (paymentMethod === 'cash' && isCashInsufficient)
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/25 active:scale-[0.99]'
+                  }`}
+                >
+                  {isSubmittingSale ? (
+                    <div className="w-full flex items-center justify-center gap-2">
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                      <span>Registrando venta...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 shrink-0" />
+                        <span>Cobrar y Facturar</span>
+                      </span>
+                      <span className="text-base sm:text-lg font-black bg-black/20 px-3 py-1 rounded-xl tabular-nums">
+                        L. {cartTotal.toFixed(2)}
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -3835,10 +3890,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
       {/* ==================== TICKET / RECEIPT MODAL ==================== */}
       {showReceiptModal && completedSale && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col max-h-[88dvh] sm:max-h-[90vh]">
+        <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-[120] animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col max-h-[92dvh] sm:max-h-[90vh]">
             {/* Modal Header */}
-            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
+            <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0">
                   ✓
@@ -3859,7 +3914,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
 
             {/* Printable Receipt Body */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 space-y-3">
+            <div className="flex-1 min-h-0 overflow-y-auto scroll-container p-2.5 sm:p-5 space-y-3">
               <div
                 ref={receiptPrintRef}
                 className="p-3 sm:p-4 bg-white border border-dashed border-slate-300 rounded-xl font-mono text-xs text-slate-800 space-y-3 shadow-inner"
@@ -4130,12 +4185,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
               </div>
             </div>
 
-            {/* Modal Actions */}
-            <div className="p-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center gap-2 shrink-0">
+            {/* Modal Actions — Ergonomic 2x2 grid on Android mobile, row on desktop */}
+            <div className="p-2.5 sm:p-3 bg-slate-50 border-t border-slate-200 grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 shrink-0 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
               <button
                 type="button"
                 onClick={() => handleSendTicketWhatsApp()}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm transition-all"
+                className="sm:flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
                 title="Enviar comprobante de venta por WhatsApp"
               >
                 <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
@@ -4145,30 +4200,31 @@ export const SalesView: React.FC<SalesViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleDownloadSalePdf(receiptPrinterFormat)}
-                className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
+                className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs shrink-0"
                 title="Descargar factura o ticket como archivo .PDF directo"
               >
-                <Download className="w-4 h-4" />
-                <span>PDF</span>
+                <Download className="w-4 h-4 shrink-0" />
+                <span>Guardar PDF</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handlePrintReceipt(receiptPrinterFormat)}
-                className="py-2.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm shrink-0"
+                className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs shrink-0"
                 title="Imprimir en la impresora seleccionada"
               >
-                <Printer className="w-4 h-4 text-emerald-400" />
-                <span>
+                <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="truncate">
                   Imprimir ({PRINTER_FORMAT_OPTIONS.find((o) => o.id === receiptPrinterFormat)?.shortLabel})
                 </span>
               </button>
+
               <button
                 type="button"
                 onClick={() => setShowReceiptModal(false)}
-                className="py-2.5 px-3 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs cursor-pointer shrink-0"
+                className="py-2.5 px-3 rounded-xl bg-slate-200 hover:bg-slate-300 active:scale-95 text-slate-800 font-bold text-xs flex items-center justify-center cursor-pointer shrink-0"
               >
-                Cerrar
+                Listo / Cerrar
               </button>
             </div>
           </div>

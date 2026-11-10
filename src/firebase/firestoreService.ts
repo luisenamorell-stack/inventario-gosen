@@ -417,6 +417,7 @@ function safeWriteCache<T>(key: string, data: T): boolean {
 // never lose images or lag when localStorage hits its 5MB browser quota.
 const memoryInventoryCache = new Map<string, Product[]>();
 const memoryImageMap = new Map<string, string>();
+const memoryImage2Map = new Map<string, string>();
 
 const IDB_NAME = 'stockmaster_idb_cache_v1';
 const IDB_STORE = 'inventory_store';
@@ -560,6 +561,9 @@ export async function loadInventoryFromIndexedDB(
             if (v?.img) {
               memoryImageMap.set(`${slug}__${cleanK}`, v.img);
             }
+            if (v?.img2) {
+              memoryImage2Map.set(`${slug}__${cleanK}`, v.img2);
+            }
             // Only keep in pending upserts if it is genuinely unsynced
             if (unsyncedLookup.has(cleanK)) {
               mergedUpserts[cleanK] = v;
@@ -574,14 +578,23 @@ export async function loadInventoryFromIndexedDB(
               existingUpsert?.img ||
               memoryImageMap.get(`${slug}__${cleanK}`) ||
               '';
+            const bestImg2 =
+              v?.img2 ||
+              existingUpsert?.img2 ||
+              memoryImage2Map.get(`${slug}__${cleanK}`) ||
+              '';
             if (bestImg) {
               memoryImageMap.set(`${slug}__${cleanK}`, bestImg);
+            }
+            if (bestImg2) {
+              memoryImage2Map.set(`${slug}__${cleanK}`, bestImg2);
             }
             if (unsyncedLookup.has(cleanK)) {
               mergedUpserts[cleanK] = {
                 ...(existingUpsert || {}),
                 ...v,
                 img: bestImg,
+                img2: bestImg2 || undefined,
               };
             }
           }
@@ -599,8 +612,12 @@ export async function loadInventoryFromIndexedDB(
         const result = Array.isArray(reqInv.result) ? (reqInv.result as Product[]) : null;
         if (result && result.length > 0) {
           result.forEach((p) => {
+            const ck = (p.code || '').trim().toLowerCase();
             if (p.img) {
-              memoryImageMap.set(`${slug}__${(p.code || '').trim().toLowerCase()}`, p.img);
+              memoryImageMap.set(`${slug}__${ck}`, p.img);
+            }
+            if (p.img2) {
+              memoryImage2Map.set(`${slug}__${ck}`, p.img2);
             }
           });
           const merged = applyPendingMutationsToInventory(result, slug, false);
@@ -819,12 +836,22 @@ function savePendingMutations(mutations: PendingInventoryMutations, companyId = 
   // 3. Persist lightweight mutations to localStorage
   const lightUpserts: Record<string, Product> = {};
   for (const [k, v] of Object.entries(mutations.upserts)) {
+    const ck = (v.code || '').trim().toLowerCase();
     if (v.img) {
-      memoryImageMap.set(`${slug}__${(v.code || '').trim().toLowerCase()}`, v.img);
+      memoryImageMap.set(`${slug}__${ck}`, v.img);
     }
+    if (v.img2) {
+      memoryImage2Map.set(`${slug}__${ck}`, v.img2);
+    }
+    const stripImg1 = v.img && v.img.startsWith('data:') && v.img.length > 4000;
+    const stripImg2 = v.img2 && v.img2.startsWith('data:') && v.img2.length > 4000;
     lightUpserts[k] =
-      v.img && v.img.startsWith('data:') && v.img.length > 4000
-        ? { ...v, img: '' }
+      stripImg1 || stripImg2
+        ? {
+            ...v,
+            img: stripImg1 ? '' : v.img,
+            img2: stripImg2 ? '' : v.img2,
+          }
         : v;
   }
   const key = getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY_MUTATIONS, slug);
@@ -852,6 +879,9 @@ export function markProductsSyncedToCloud(
     const existingUp = mut.upserts[codeKey];
     if (existingUp?.img) {
       memoryImageMap.set(`${slug}__${codeKey}`, existingUp.img);
+    }
+    if (existingUp?.img2) {
+      memoryImage2Map.set(`${slug}__${codeKey}`, existingUp.img2);
     }
     delete mut.upserts[codeKey];
   }
@@ -931,6 +961,13 @@ export function recordLocalProductSave(
   );
   if (product.img) {
     memoryImageMap.set(`${slug}__${cleanNew}`, product.img);
+  } else {
+    memoryImageMap.delete(`${slug}__${cleanNew}`);
+  }
+  if (product.img2) {
+    memoryImage2Map.set(`${slug}__${cleanNew}`, product.img2);
+  } else {
+    memoryImage2Map.delete(`${slug}__${cleanNew}`);
   }
   if (!mut.unsyncedCodes.includes(cleanNew)) {
     mut.unsyncedCodes.push(cleanNew);
@@ -1124,6 +1161,7 @@ export function applyPendingMutationsToInventory(
     }
 
     const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
+    const memImg2 = memoryImage2Map.get(`${slug}__${codeKey}`);
     const existing = byCode.get(codeKey);
     if (existing) {
       const pickNew =
@@ -1131,11 +1169,13 @@ export function applyPendingMutationsToInventory(
         scoreCanonicalGyGProduct(existing, unsyncedSet);
       const chosen = pickNew ? item : existing;
       const fallbackImg = item.img || existing.img || memImg || '';
+      const fallbackImg2 = item.img2 || existing.img2 || memImg2 || '';
       byCode.set(codeKey, {
         ...chosen,
         category: (chosen.category || 'Otros').trim(),
         supplier: (chosen.supplier || '').trim(),
         img: chosen.img || fallbackImg,
+        img2: chosen.img2 || fallbackImg2 || undefined,
       });
     } else {
       byCode.set(codeKey, {
@@ -1143,6 +1183,7 @@ export function applyPendingMutationsToInventory(
         category: (item.category || 'Otros').trim(),
         supplier: (item.supplier || '').trim(),
         img: item.img || memImg || '',
+        img2: item.img2 || memImg2 || undefined,
       });
     }
   }
@@ -1152,6 +1193,7 @@ export function applyPendingMutationsToInventory(
     if (deletedCodeSet.has(codeKey) || explicitDeletedSet.has(codeKey)) continue;
     const existing = byCode.get(codeKey);
     const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
+    const memImg2 = memoryImage2Map.get(`${slug}__${codeKey}`);
 
     // When merging local cache (fromServer === false), mut.upserts wins over stale cache.
     // When merging fresh server items (fromServer === true), mut.upserts ONLY wins if the item
@@ -1163,6 +1205,7 @@ export function applyPendingMutationsToInventory(
       const mergedServerItem: Product = {
         ...existing,
         img: existing.img || upserted.img || memImg || '',
+        img2: existing.img2 || upserted.img2 || memImg2 || undefined,
       };
       byCode.set(codeKey, mergedServerItem);
       if (
@@ -1183,6 +1226,7 @@ export function applyPendingMutationsToInventory(
         category: (upserted.category || existing?.category || 'Otros').trim(),
         supplier: (upserted.supplier ?? existing?.supplier ?? '').trim(),
         img: upserted.img || memImg || existing?.img || '',
+        img2: upserted.img2 || memImg2 || existing?.img2 || undefined,
       });
     }
   }
@@ -1284,8 +1328,12 @@ export function getCachedInventory(companyId = getActiveCompanyId()): Product[] 
 export function setCachedInventory(items: Product[], syncTs?: number, companyId = getActiveCompanyId()): void {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   items.forEach((p) => {
+    const ck = (p.code || '').trim().toLowerCase();
     if (p.img) {
-      memoryImageMap.set(`${slug}__${(p.code || '').trim().toLowerCase()}`, p.img);
+      memoryImageMap.set(`${slug}__${ck}`, p.img);
+    }
+    if (p.img2) {
+      memoryImage2Map.set(`${slug}__${ck}`, p.img2);
     }
   });
 
@@ -1299,22 +1347,26 @@ export function setCachedInventory(items: Product[], syncTs?: number, companyId 
   const cacheKey = getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, slug);
   let totalImgChars = 0;
   for (let i = 0; i < merged.length; i++) {
-    totalImgChars += (merged[i].img || '').length;
+    totalImgChars += (merged[i].img || '').length + (merged[i].img2 || '').length;
   }
 
   const shouldStripLargeDataUrls = totalImgChars > 1_200_000;
   const lsPayload = shouldStripLargeDataUrls
-    ? merged.map((p) =>
-        p.img && p.img.startsWith('data:') && p.img.length > 4000
-          ? { ...p, img: '' }
-          : p
-      )
+    ? merged.map((p) => {
+        const s1 = p.img && p.img.startsWith('data:') && p.img.length > 4000;
+        const s2 = p.img2 && p.img2.startsWith('data:') && p.img2.length > 4000;
+        return s1 || s2
+          ? { ...p, img: s1 ? '' : p.img, img2: s2 ? '' : p.img2 }
+          : p;
+      })
     : merged;
 
   if (!safeWriteCache(cacheKey, lsPayload)) {
-    const ultraLight = merged.map((p) =>
-      p.img && p.img.startsWith('data:') ? { ...p, img: '' } : p
-    );
+    const ultraLight = merged.map((p) => ({
+      ...p,
+      img: p.img && p.img.startsWith('data:') ? '' : p.img,
+      img2: p.img2 && p.img2.startsWith('data:') ? '' : p.img2,
+    }));
     try {
       localStorage.removeItem(cacheKey);
     } catch {}
@@ -1446,6 +1498,15 @@ function parseInventorySnapshotDocs(snapshot: any, slug: string, fromServer = tr
       code = docSnap.id.includes('__') ? docSnap.id.split('__').slice(1).join('__') : docSnap.id;
     }
 
+    const parsedColors = Array.isArray(data.colors)
+      ? data.colors.map((c: any) => String(c || '').trim()).filter(Boolean)
+      : typeof data.color === 'string' && data.color.trim()
+      ? data.color
+          .split(',')
+          .map((c: string) => c.trim())
+          .filter(Boolean)
+      : undefined;
+
     items.push({
       id: docSnap.id,
       companyId: data.companyId || slug,
@@ -1453,6 +1514,8 @@ function parseInventorySnapshotDocs(snapshot: any, slug: string, fromServer = tr
       name: (data.name || '').trim(),
       category: (data.category || 'Otros').trim(),
       size: (data.size || '').trim(),
+      color: (data.color || (parsedColors ? parsedColors.join(', ') : '')).trim() || undefined,
+      colors: parsedColors && parsedColors.length > 0 ? parsedColors : undefined,
       supplier: (data.supplier || '').trim(),
       cost: Number(data.cost) || 0,
       price: Number(data.price) || 0,
@@ -1465,6 +1528,7 @@ function parseInventorySnapshotDocs(snapshot: any, slug: string, fromServer = tr
           ? data.warehouseStocks
           : undefined,
       img: data.img || '',
+      img2: data.img2 || undefined,
     });
   });
   return applyPendingMutationsToInventory(items, slug, fromServer);
@@ -1502,6 +1566,10 @@ export async function flushPendingInventoryToFirestore(
         const docRef = doc(db, 'inventory', docId);
         const safeImg =
           product.img && product.img.length <= 900_000 ? product.img.trim() : '';
+        const safeImg2 =
+          product.img2 && product.img2.length <= 900_000 && (safeImg.length + product.img2.length <= 940_000)
+            ? product.img2.trim()
+            : '';
 
         const payload: Record<string, any> = {
           companyId: slug,
@@ -1516,8 +1584,15 @@ export async function flushPendingInventoryToFirestore(
           stock: Math.max(0, Math.round(Number(product.stock) || 0)),
         };
         if (product.size?.trim()) payload.size = product.size.trim();
+        if (Array.isArray(product.colors) && product.colors.length > 0) {
+          payload.colors = product.colors;
+          payload.color = product.colors.join(', ');
+        } else if (product.color?.trim()) {
+          payload.color = product.color.trim();
+        }
         if (product.supplier?.trim()) payload.supplier = product.supplier.trim();
         if (safeImg) payload.img = safeImg;
+        if (safeImg2) payload.img2 = safeImg2;
         if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
           payload.warehouseStocks = product.warehouseStocks;
         }
@@ -1599,7 +1674,12 @@ export async function syncInventoryWithBackendHub(
   const enrichedItems = (localItems || []).map((p) => {
     const codeKey = (p.code || '').trim().toLowerCase();
     const memImg = memoryImageMap.get(`${slug}__${codeKey}`);
-    return memImg && !p.img ? { ...p, img: memImg } : p;
+    const memImg2 = memoryImage2Map.get(`${slug}__${codeKey}`);
+    return {
+      ...p,
+      img: p.img || memImg || '',
+      img2: p.img2 || memImg2 || undefined,
+    };
   });
 
   const unsyncedLookup = new Set(
@@ -1609,11 +1689,19 @@ export async function syncInventoryWithBackendHub(
   for (const [k, v] of Object.entries(mut.upserts || {})) {
     const cleanK = k.trim().toLowerCase();
     const memImg = memoryImageMap.get(`${slug}__${cleanK}`);
+    const memImg2 = memoryImage2Map.get(`${slug}__${cleanK}`);
     if (v?.img) {
       memoryImageMap.set(`${slug}__${cleanK}`, v.img);
     }
+    if (v?.img2) {
+      memoryImage2Map.set(`${slug}__${cleanK}`, v.img2);
+    }
     if (unsyncedLookup.has(cleanK)) {
-      enrichedUpserts[cleanK] = memImg && !v.img ? { ...v, img: memImg } : v;
+      enrichedUpserts[cleanK] = {
+        ...v,
+        img: v.img || memImg || '',
+        img2: v.img2 || memImg2 || undefined,
+      };
     }
   }
 
@@ -1651,6 +1739,9 @@ export async function syncInventoryWithBackendHub(
       if (!ck) continue;
       if (srvItem.img) {
         memoryImageMap.set(`${slug}__${ck}`, srvItem.img);
+      }
+      if (srvItem.img2) {
+        memoryImage2Map.set(`${slug}__${ck}`, srvItem.img2);
       }
     }
     mut.upserts = {};
@@ -2012,10 +2103,25 @@ export async function saveProductToFirestore(
       updatedAt: Date.now(),
     };
 
-    if (product.size?.trim()) payload.size = product.size.trim();
-    if (product.supplier?.trim()) payload.supplier = product.supplier.trim();
-    if (includeImage && product.img?.trim() && product.img.trim().length <= 920_000) {
-      payload.img = product.img.trim();
+    if (product.size !== undefined) payload.size = (product.size || '').trim();
+    if (Array.isArray(product.colors)) {
+      payload.colors = product.colors.map((c) => String(c || '').trim()).filter(Boolean);
+      payload.color = payload.colors.join(', ');
+    } else if (product.color !== undefined) {
+      payload.color = (product.color || '').trim();
+    }
+    if (product.supplier !== undefined) payload.supplier = (product.supplier || '').trim();
+    const img1Str = (product.img || '').trim();
+    const img2Str = (product.img2 || '').trim();
+    if (includeImage) {
+      if (img1Str.length <= 900_000) {
+        payload.img = img1Str;
+      }
+      if (img2Str.length <= 900_000 && img1Str.length + img2Str.length <= 940_000) {
+        payload.img2 = img2Str;
+      } else if (!img2Str) {
+        payload.img2 = '';
+      }
     }
     if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
       payload.warehouseStocks = product.warehouseStocks;
@@ -2211,9 +2317,20 @@ export async function bulkSaveProductsToFirestore(
         };
 
         if (product.size !== undefined) payload.size = product.size.trim();
+        if (Array.isArray(product.colors)) {
+          payload.colors = product.colors.map((c) => String(c || '').trim()).filter(Boolean);
+          payload.color = payload.colors.join(', ');
+        } else if (product.color !== undefined) {
+          payload.color = product.color.trim();
+        }
         if (product.supplier !== undefined) payload.supplier = product.supplier.trim();
-        if (product.img?.trim() && product.img.trim().length <= 920_000) {
-          payload.img = product.img.trim();
+        const img1Str = (product.img || '').trim();
+        const img2Str = (product.img2 || '').trim();
+        if (img1Str && img1Str.length <= 900_000) {
+          payload.img = img1Str;
+        }
+        if (img2Str && img2Str.length <= 900_000 && img1Str.length + img2Str.length <= 940_000) {
+          payload.img2 = img2Str;
         }
         if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
           payload.warehouseStocks = product.warehouseStocks;
