@@ -190,7 +190,62 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     };
   }, [inventory, sales, expenses, financePeriod]);
 
-  // Render Chart.js
+  const [chartStyle, setChartStyle] = useState<'doughnut' | 'pie'>('doughnut');
+
+  const categoryBreakdown = useMemo(() => {
+    const map = new Map<string, { stock: number; models: number; value: number }>();
+    inventory.forEach((item) => {
+      const cat = (item.category || 'Otros').trim() || 'Otros';
+      const st = Math.max(0, Number(item.stock) || 0);
+      const pr = Number(item.price) || 0;
+      const disc = Math.min(pr, Math.max(0, Number(item.discount) || 0));
+      const finalPrice = Math.max(0, pr - disc);
+      const prev = map.get(cat) || { stock: 0, models: 0, value: 0 };
+      prev.stock += st;
+      prev.models += 1;
+      prev.value += st * finalPrice;
+      map.set(cat, prev);
+    });
+
+    const palette = [
+      { hex: '#10b981', bgClass: 'bg-emerald-500', textClass: 'text-emerald-600' },
+      { hex: '#3b82f6', bgClass: 'bg-blue-500', textClass: 'text-blue-600' },
+      { hex: '#8b5cf6', bgClass: 'bg-violet-500', textClass: 'text-violet-600' },
+      { hex: '#f59e0b', bgClass: 'bg-amber-500', textClass: 'text-amber-600' },
+      { hex: '#ec4899', bgClass: 'bg-pink-500', textClass: 'text-pink-600' },
+      { hex: '#14b8a6', bgClass: 'bg-teal-500', textClass: 'text-teal-600' },
+      { hex: '#6366f1', bgClass: 'bg-indigo-500', textClass: 'text-indigo-600' },
+      { hex: '#f97316', bgClass: 'bg-orange-500', textClass: 'text-orange-600' },
+      { hex: '#06b6d4', bgClass: 'bg-cyan-500', textClass: 'text-cyan-600' },
+      { hex: '#ef4444', bgClass: 'bg-red-500', textClass: 'text-red-600' },
+      { hex: '#84cc16', bgClass: 'bg-lime-500', textClass: 'text-lime-600' },
+      { hex: '#a855f7', bgClass: 'bg-purple-500', textClass: 'text-purple-600' },
+    ];
+
+    const sorted = Array.from(map.entries())
+      .map(([name, info]) => ({
+        name,
+        stock: info.stock,
+        models: info.models,
+        value: info.value,
+      }))
+      .sort((a, b) => b.stock - a.stock || b.models - a.models);
+
+    const sumStock = sorted.reduce((acc, item) => acc + item.stock, 0);
+
+    return sorted.map((item, idx) => {
+      const swatch = palette[idx % palette.length];
+      return {
+        ...item,
+        color: swatch.hex,
+        bgClass: swatch.bgClass,
+        textClass: swatch.textClass,
+        percentage: sumStock > 0 ? (item.stock / sumStock) * 100 : 0,
+      };
+    });
+  }, [inventory]);
+
+  // Render Circular Chart.js (Doughnut / Pie)
   useEffect(() => {
     if (!chartCanvasRef.current) return;
 
@@ -198,58 +253,53 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       chartInstanceRef.current.destroy();
     }
 
-    const categoryCounts: Record<string, number> = {};
-    inventory.forEach((item) => {
-      const cat = item.category || 'Otros';
-      categoryCounts[cat] = (categoryCounts[cat] || 0) + (Number(item.stock) || 0);
-    });
-
-    const labels = Object.keys(categoryCounts);
-    const data = Object.values(categoryCounts);
-
-    const bgColors = [
-      'rgba(16, 185, 129, 0.85)',
-      'rgba(59, 130, 246, 0.85)',
-      'rgba(139, 92, 246, 0.85)',
-      'rgba(245, 158, 11, 0.85)',
-      'rgba(236, 72, 153, 0.85)',
-      'rgba(20, 184, 166, 0.85)',
-    ];
+    const hasData = categoryBreakdown.length > 0 && categoryBreakdown.some((c) => c.stock > 0);
+    const labels = hasData ? categoryBreakdown.map((c) => c.name) : ['Sin Stock'];
+    const data = hasData ? categoryBreakdown.map((c) => c.stock) : [1];
+    const colors = hasData ? categoryBreakdown.map((c) => c.color) : ['#e2e8f0'];
 
     chartInstanceRef.current = new Chart(chartCanvasRef.current, {
-      type: 'bar',
+      type: chartStyle,
       data: {
-        labels: labels.length > 0 ? labels : ['Sin Datos'],
+        labels,
         datasets: [
           {
             label: 'Unidades en Stock',
-            data: data.length > 0 ? data : [0],
-            backgroundColor: bgColors.slice(0, Math.max(labels.length, 1)),
-            borderRadius: 8,
-            maxBarThickness: 52,
+            data,
+            backgroundColor: colors,
+            borderColor: '#ffffff',
+            borderWidth: hasData ? 3 : 0,
+            hoverOffset: 10,
+            borderRadius: chartStyle === 'doughnut' && hasData ? 6 : 0,
           },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: 'rgba(15, 23, 42, 0.9)',
-            padding: 12,
-            cornerRadius: 8,
-          },
+        cutout: chartStyle === 'doughnut' ? '66%' : '0%',
+        layout: {
+          padding: 8,
         },
-        scales: {
-          y: {
-            beginAtZero: true,
-            grid: { color: '#f1f5f9' },
-            ticks: { color: '#94a3b8' },
+        plugins: {
+          legend: {
+            display: false,
           },
-          x: {
-            grid: { display: false },
-            ticks: { color: '#64748b', font: { weight: 'bold' } },
+          tooltip: {
+            enabled: hasData,
+            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+            titleFont: { size: 13, weight: 'bold' },
+            bodyFont: { size: 12, weight: 'bold' },
+            padding: 12,
+            cornerRadius: 10,
+            callbacks: {
+              label: (ctx) => {
+                const val = Number(ctx.raw) || 0;
+                const pct =
+                  totalStock > 0 ? ((val / totalStock) * 100).toFixed(1) : '0.0';
+                return ` ${val.toLocaleString('es-HN')} unids (${pct}%)`;
+              },
+            },
           },
         },
       },
@@ -260,7 +310,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         chartInstanceRef.current.destroy();
       }
     };
-  }, [inventory]);
+  }, [categoryBreakdown, chartStyle, totalStock]);
 
   return (
     <div className="flex-1 min-h-0 p-3 sm:p-6 lg:p-8 h-full w-full overflow-y-auto scroll-container bg-slate-50/50 dark:bg-slate-950 transition-colors duration-200 pb-20 md:pb-24">
@@ -538,26 +588,126 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Main Content: Chart + Critical Alerts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        {/* Category Chart (2 Cols) */}
-        <div className="lg:col-span-2 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 flex flex-col min-h-[350px]">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-white">
-              Distribución de Stock por Categoría
-            </h3>
-            <span className="text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 px-3 py-1 rounded-full border border-slate-200 dark:border-slate-700">
-              Unidades Totales
-            </span>
-          </div>
-          <div className="flex-1 relative w-full h-full min-h-[250px]">
-            {isLoading && (
-              <div className="absolute inset-0 z-10 bg-white dark:bg-slate-900 flex items-end justify-around gap-4 p-4">
-                <div className="w-full h-3/5 animate-pulse bg-gray-200 dark:bg-slate-800 rounded-md" />
-                <div className="w-full h-4/5 animate-pulse bg-gray-200 dark:bg-slate-800 rounded-md" />
-                <div className="w-full h-2/5 animate-pulse bg-gray-200 dark:bg-slate-800 rounded-md" />
-                <div className="w-full h-3/4 animate-pulse bg-gray-200 dark:bg-slate-800 rounded-md" />
+        {/* Category Circular Chart (2 Cols) */}
+        <div className="lg:col-span-2 bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 flex flex-col min-h-[360px]">
+          <div className="flex flex-wrap justify-between items-center gap-2 mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div>
+              <h3 className="text-base sm:text-lg font-extrabold text-slate-800 dark:text-white">
+                Distribución de Stock por Categoría
+              </h3>
+              <p className="text-xs text-slate-400 font-medium">
+                Proporción circular de unidades físicas disponibles ({categoryBreakdown.length}{' '}
+                {categoryBreakdown.length === 1 ? 'categoría' : 'categorías'})
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setChartStyle('doughnut')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                    chartStyle === 'doughnut'
+                      ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Anillo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChartStyle('pie')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                    chartStyle === 'pie'
+                      ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Circular
+                </button>
               </div>
-            )}
-            <canvas ref={chartCanvasRef}></canvas>
+              <span className="hidden sm:inline-flex text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-3 py-1 rounded-xl border border-emerald-200 dark:border-emerald-800">
+                {totalStock.toLocaleString('es-HN')} unids
+              </span>
+            </div>
+          </div>
+
+          <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-5 items-center min-h-[260px]">
+            {/* Left: Circular Doughnut / Pie Canvas */}
+            <div className="md:col-span-6 relative flex items-center justify-center h-[240px] sm:h-[265px] w-full">
+              {isLoading && (
+                <div className="absolute inset-0 z-10 bg-white dark:bg-slate-900 flex items-center justify-center p-4">
+                  <div className="w-44 h-44 rounded-full border-[18px] border-slate-200 dark:border-slate-800 animate-pulse" />
+                </div>
+              )}
+              <canvas ref={chartCanvasRef}></canvas>
+
+              {/* Center Total Overlay when in Doughnut Ring mode */}
+              {!isLoading && chartStyle === 'doughnut' && (
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center px-6">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                    Total Stock
+                  </span>
+                  <span className="text-2xl sm:text-3xl font-black text-slate-800 dark:text-white leading-tight tabular-nums">
+                    {totalStock.toLocaleString('es-HN')}
+                  </span>
+                  <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                    {categoryBreakdown.length} {categoryBreakdown.length === 1 ? 'cat.' : 'cats.'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Interactive Category Breakdown Legend */}
+            <div className="md:col-span-6 max-h-[265px] overflow-y-auto scroll-container pr-1 space-y-2">
+              {categoryBreakdown.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-xs font-medium">
+                  No hay productos registrados en el inventario.
+                </div>
+              ) : (
+                categoryBreakdown.map((cat) => (
+                  <div
+                    key={cat.name}
+                    className="p-2.5 rounded-xl bg-slate-50/90 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 hover:border-slate-300 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={`w-3 h-3 rounded-full shrink-0 ${cat.bgClass} shadow-2xs`} />
+                        <span className="font-extrabold text-slate-800 dark:text-slate-100 truncate">
+                          {cat.name}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-semibold shrink-0">
+                          ({cat.models} {cat.models === 1 ? 'mod.' : 'mods.'})
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0 tabular-nums">
+                        <span className="font-black text-slate-900 dark:text-white">
+                          {cat.stock.toLocaleString('es-HN')} u.
+                        </span>
+                        <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                          {cat.percentage.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <svg
+                      className="w-full h-1.5 rounded-full bg-slate-200/80 dark:bg-slate-700 mt-1.5 overflow-hidden"
+                      viewBox="0 0 100 6"
+                      preserveAspectRatio="none"
+                    >
+                      <rect
+                        x="0"
+                        y="0"
+                        width={Math.max(2, Math.min(100, cat.percentage))}
+                        height="6"
+                        rx="3"
+                        fill={cat.color}
+                      />
+                    </svg>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
 
