@@ -15,10 +15,14 @@ import {
   LoyaltyCustomerProfile,
   LoyaltyProgramConfig,
   LoyaltyTransactionLog,
+  InvoiceTemplateConfig,
+  getEffectiveInvoiceTemplate,
 } from '../types';
 import {
   getProductStockInWarehouse,
   getDefaultWarehousesForStore,
+  saveStoreSettingsToFirestore,
+  setCachedStoreSettings,
 } from '../firebase/firestoreService';
 import {
   PRINTER_FORMAT_OPTIONS,
@@ -36,6 +40,7 @@ import {
   printTicketDomElementWithFallbackCss,
 } from '../utils/universalPrintBridge';
 import { PrintFormatModal, PrinterConnectionManager } from './PrintFormatModal';
+import { InvoiceTemplateEditor } from './InvoiceTemplateEditor';
 import { AdaptiveImage } from './AdaptiveImage';
 import { getProductColors, resolveColorSwatch } from '../utils/productColorUtils';
 import {
@@ -273,6 +278,86 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [customerName, setCustomerName] = useState<string>('Consumidor Final');
   const [customerRtn, setCustomerRtn] = useState<string>('');
   const [customerPhone, setCustomerPhone] = useState<string>('');
+  const [showInvoiceTemplateModal, setShowInvoiceTemplateModal] = useState<boolean>(false);
+  const [draftInvoiceTemplate, setDraftInvoiceTemplate] = useState<InvoiceTemplateConfig>(() =>
+    getEffectiveInvoiceTemplate(storeSettings)
+  );
+  const [draftReceiptFooterText, setDraftReceiptFooterText] = useState<string>(
+    storeSettings.receiptFooterText !== undefined
+      ? storeSettings.receiptFooterText
+      : '¡Gracias por su compra! Vuelva pronto.'
+  );
+  const lastTemplateCompanyRef = useRef<string>(storeSettings.companyId || 'gosen');
+
+  useEffect(() => {
+    const activeSlug = storeSettings.companyId || 'gosen';
+    if (lastTemplateCompanyRef.current !== activeSlug) {
+      lastTemplateCompanyRef.current = activeSlug;
+      setDraftInvoiceTemplate(getEffectiveInvoiceTemplate(storeSettings));
+      setDraftReceiptFooterText(
+        storeSettings.receiptFooterText !== undefined
+          ? storeSettings.receiptFooterText
+          : '¡Gracias por su compra! Vuelva pronto.'
+      );
+    }
+  }, [storeSettings]);
+
+  const handleUpdateDraftTemplate = (nextTemplate: InvoiceTemplateConfig) => {
+    setDraftInvoiceTemplate(nextTemplate);
+    const activeSlug = storeSettings.companyId || 'gosen';
+    setCachedStoreSettings(
+      {
+        ...storeSettings,
+        invoiceTemplate: nextTemplate,
+        receiptFooterText: draftReceiptFooterText,
+        updatedAt: Date.now(),
+      },
+      activeSlug
+    );
+  };
+
+  const handleUpdateDraftFooter = (nextFooter: string) => {
+    setDraftReceiptFooterText(nextFooter);
+    const activeSlug = storeSettings.companyId || 'gosen';
+    setCachedStoreSettings(
+      {
+        ...storeSettings,
+        invoiceTemplate: draftInvoiceTemplate,
+        receiptFooterText: nextFooter,
+        updatedAt: Date.now(),
+      },
+      activeSlug
+    );
+  };
+
+  const effectiveInvoiceTemplate = useMemo(
+    () =>
+      getEffectiveInvoiceTemplate({
+        ...storeSettings,
+        invoiceTemplate: draftInvoiceTemplate,
+        receiptFooterText: draftReceiptFooterText,
+      }),
+    [storeSettings, draftInvoiceTemplate, draftReceiptFooterText]
+  );
+
+  const [invoiceIssuerName, setInvoiceIssuerName] = useState<string>(
+    () =>
+      getEffectiveInvoiceTemplate(storeSettings).defaultIssuerName?.trim() ||
+      userSession?.userName ||
+      'Administrador'
+  );
+  const [hasCustomIssuerTyped, setHasCustomIssuerTyped] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!hasCustomIssuerTyped) {
+      setInvoiceIssuerName(
+        effectiveInvoiceTemplate.defaultIssuerName?.trim() ||
+          userSession?.userName ||
+          'Administrador'
+      );
+    }
+  }, [effectiveInvoiceTemplate.defaultIssuerName, userSession?.userName, hasCustomIssuerTyped]);
+
   const [saleNotes, setSaleNotes] = useState<string>('');
   const [isSubmittingSale, setIsSubmittingSale] = useState<boolean>(false);
 
@@ -389,17 +474,24 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
 
     const displayName =
-      !rawCashier || lowerCashier === 'caja principal' || lowerCashier === 'cajero'
-        ? resolvedRole === 'admin'
-          ? 'Administrador'
-          : rawCashier || 'Colaborador'
-        : rawCashier;
+      rawCashier ||
+      effectiveInvoiceTemplate.defaultIssuerName?.trim() ||
+      (resolvedRole === 'admin' ? 'Administrador' : 'Colaborador');
 
     return {
       name: displayName,
       role: resolvedRole,
       roleLabel: resolvedRole === 'admin' ? 'Administrador' : 'Colaborador',
     };
+  };
+
+  const getFormattedSaleIssuer = (sale: SaleRecord): string => {
+    const raw = (sale.cashier || '').trim() || effectiveInvoiceTemplate.defaultIssuerName?.trim() || '';
+    if (raw) {
+      return raw;
+    }
+    const info = getSaleSellerInfo(sale);
+    return info.name;
   };
 
   // Cancel & Edit sale dialog state
@@ -1012,7 +1104,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
         status: 'completed',
         warehouseId: selectedWarehouse.id,
         warehouseName: selectedWarehouse.name,
-        cashier: userSession?.userName || 'Administrador',
+        cashier:
+          invoiceIssuerName.trim() ||
+          effectiveInvoiceTemplate.defaultIssuerName?.trim() ||
+          userSession?.userName ||
+          'Administrador',
         cashierRole: userSession?.role || 'admin',
         loyaltyCustomerId: targetLoyaltyId,
         loyaltyPointsEarned: ptsEarned > 0 ? ptsEarned : undefined,
@@ -1161,8 +1257,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
     const fmt = formatOverride || receiptPrinterFormat;
     setPreferredPrinterFormat(fmt);
     const opt = PRINTER_FORMAT_OPTIONS.find((o) => o.id === fmt);
-    const sellerInfo = getSaleSellerInfo(saleToPrint);
-    const sellerStr = `${sellerInfo.name} (${sellerInfo.roleLabel})`;
+    const sellerStr = getFormattedSaleIssuer(saleToPrint);
+    const effectiveSettingsForPrint: StoreSettings = {
+      ...storeSettings,
+      invoiceTemplate: effectiveInvoiceTemplate,
+      receiptFooterText: draftReceiptFooterText,
+    };
 
     // 1. Si hay un servidor puente en la PC de caja configurado y el contenedor del ticket está montado:
     const bridgeCfg = getBridgeConfig();
@@ -1199,12 +1299,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
 
     // 2. Impresión directa / Respaldo universal (Bluetooth/USB/Sistema window.print con reglas @page térmicas)
-    const html = buildSaleDocumentHtml(saleToPrint, storeSettings, fmt, sellerStr);
+    const html = buildSaleDocumentHtml(saleToPrint, effectiveSettingsForPrint, fmt, sellerStr);
     printHtmlDocument(
       html,
       `Factura ${saleToPrint.saleNumber}`,
       fmt,
-      storeSettings,
+      effectiveSettingsForPrint,
       saleToPrint,
       sellerStr
     );
@@ -1219,12 +1319,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
     const saleToDownload = targetSaleOverride || completedSale;
     if (!saleToDownload) return;
     const fmt = formatOverride || receiptPrinterFormat;
-    const sellerInfo = getSaleSellerInfo(saleToDownload);
+    const sellerStr = getFormattedSaleIssuer(saleToDownload);
+    const effectiveSettingsForPdf: StoreSettings = {
+      ...storeSettings,
+      invoiceTemplate: effectiveInvoiceTemplate,
+      receiptFooterText: draftReceiptFooterText,
+    };
     await downloadSalePdf(
       saleToDownload,
-      storeSettings,
+      effectiveSettingsForPdf,
       fmt,
-      `${sellerInfo.name} (${sellerInfo.roleLabel})`
+      sellerStr
     );
     showToast(`PDF Ejecutivo de ${saleToDownload.saleNumber} descargado correctamente.`, 'success');
   };
@@ -1251,8 +1356,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
     if (sale.customerPhone) {
       text += `*Teléfono:* ${sale.customerPhone}\n`;
     }
-    const sellerInfo = getSaleSellerInfo(sale);
-    text += `*Atendido por:* ${sellerInfo.name} (${sellerInfo.roleLabel})\n`;
+    if (effectiveInvoiceTemplate.showSellerName) {
+      const issuerTag = effectiveInvoiceTemplate.issuerLabel || 'Atendido por';
+      text += `*${issuerTag}:* ${getFormattedSaleIssuer(sale)}\n`;
+    }
     if (sale.status === 'cancelled') {
       text += `\n⚠️ *VENTA ANULADA*\n`;
     }
@@ -2673,6 +2780,23 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   )}
                 </div>
 
+                {/* Editable Invoice Generator / Issuer Bar in POS */}
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl">
+                  <span className="text-[11px] font-bold text-slate-600 shrink-0">
+                    {effectiveInvoiceTemplate.issuerLabel || 'Generado por'}:
+                  </span>
+                  <input
+                    type="text"
+                    value={invoiceIssuerName}
+                    onChange={(e) => {
+                      setHasCustomIssuerTyped(true);
+                      setInvoiceIssuerName(e.target.value);
+                    }}
+                    placeholder="Nombre de quien genera la factura"
+                    className="flex-1 min-w-0 bg-white px-2 py-1 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs font-bold text-slate-800"
+                  />
+                </div>
+
                 {/* Expandable Customer Inputs */}
                 {(showCustomerFieldsPos || paymentMethod === 'credit') && (
                   <div className="p-2 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
@@ -3893,7 +4017,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
         <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-[120] animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col max-h-[92dvh] sm:max-h-[90vh]">
             {/* Modal Header */}
-            <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
+            <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0 gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0">
                   ✓
@@ -3905,12 +4029,23 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </span>
                 </div>
               </div>
-              <button
-                onClick={() => setShowReceiptModal(false)}
-                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg shrink-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowInvoiceTemplateModal(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-bold transition-colors cursor-pointer"
+                  title="Editar y personalizar la plantilla de la factura"
+                >
+                  <Edit2 className="w-3 h-3 text-emerald-600" />
+                  <span>Editar Plantilla</span>
+                </button>
+                <button
+                  onClick={() => setShowReceiptModal(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg shrink-0"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Printable Receipt Body */}
@@ -3921,7 +4056,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
               >
                 {/* Store Branding Header */}
                 <div className="text-center space-y-1 pb-2 border-b border-dashed border-slate-300">
-                  {(storeSettings.logoUrl || '/store-logo.jpg') && (
+                  {effectiveInvoiceTemplate.showLogo && (storeSettings.logoUrl || '/store-logo.jpg') && (
                     <div className="flex justify-center mb-1.5">
                       <img
                         src={storeSettings.logoUrl || '/store-logo.jpg'}
@@ -3933,8 +4068,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   <h2 className="font-bold text-sm sm:text-base uppercase text-slate-900 break-words">
                     {storeSettings.storeName || 'Tienda Gosén'}
                   </h2>
-                  {storeSettings.tagline && (
+                  {effectiveInvoiceTemplate.showTagline && storeSettings.tagline && (
                     <p className="text-[11px] text-slate-500 break-words">{storeSettings.tagline}</p>
+                  )}
+                  {effectiveInvoiceTemplate.showStoreRtn && storeSettings.storeRtn && (
+                    <p className="text-[10px] font-bold text-slate-700">RTN: {storeSettings.storeRtn}</p>
                   )}
                   {storeSettings.address && (
                     <p className="text-[10px] text-slate-500 break-words">{storeSettings.address}</p>
@@ -3942,10 +4080,38 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   {storeSettings.phone && (
                     <p className="text-[10px] text-slate-500">Tel: {storeSettings.phone}</p>
                   )}
+                  {effectiveInvoiceTemplate.headerCustomNote && (
+                    <p className="text-[10px] font-bold text-emerald-800 break-words">
+                      {effectiveInvoiceTemplate.headerCustomNote}
+                    </p>
+                  )}
+                  {effectiveInvoiceTemplate.caiNumber && (
+                    <p className="text-[9.5px] text-slate-600 break-all">
+                      CAI: <span className="font-bold">{effectiveInvoiceTemplate.caiNumber}</span>
+                    </p>
+                  )}
+                  {effectiveInvoiceTemplate.caiRange && (
+                    <p className="text-[9px] text-slate-500 break-words">
+                      Rango: {effectiveInvoiceTemplate.caiRange}
+                    </p>
+                  )}
+                  {effectiveInvoiceTemplate.caiExpiryDate && (
+                    <p className="text-[9px] text-slate-500">
+                      Fecha Límite Emisión: {effectiveInvoiceTemplate.caiExpiryDate}
+                    </p>
+                  )}
                 </div>
 
                 {/* Ticket Meta */}
                 <div className="text-[11px] space-y-1 pb-2 border-b border-dashed border-slate-300">
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-500 shrink-0">Documento:</span>
+                    <span className="font-bold text-right">
+                      {completedSale.paymentMethod === 'credit'
+                        ? effectiveInvoiceTemplate.creditDocumentTitle
+                        : effectiveInvoiceTemplate.thermalDocumentTitle}
+                    </span>
+                  </div>
                   <div className="flex justify-between gap-2">
                     <span className="text-slate-500 shrink-0">N° Venta:</span>
                     <span className="font-bold text-right break-all">{completedSale.saleNumber}</span>
@@ -3958,24 +4124,42 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     <span className="text-slate-500 shrink-0">Cliente:</span>
                     <span className="font-semibold text-right break-words">{completedSale.customerName || 'Consumidor Final'}</span>
                   </div>
-                  {completedSale.customerRtn && (
+                  {effectiveInvoiceTemplate.showCustomerRtn && completedSale.customerRtn && (
                     <div className="flex justify-between gap-2">
                       <span className="text-slate-500 shrink-0">RTN/DNI:</span>
                       <span className="text-right break-all">{completedSale.customerRtn}</span>
                     </div>
                   )}
-                  {completedSale.customerPhone && (
+                  {effectiveInvoiceTemplate.showCustomerPhone && completedSale.customerPhone && (
                     <div className="flex justify-between gap-2">
                       <span className="text-slate-500 shrink-0">Tel / WhatsApp:</span>
                       <span className="font-semibold text-emerald-800 text-right">{completedSale.customerPhone}</span>
                     </div>
                   )}
-                  <div className="flex justify-between gap-2">
-                    <span className="text-slate-500 shrink-0">Atendido por:</span>
-                    <span className="font-semibold text-right">
-                      {getSaleSellerInfo(completedSale).name} ({getSaleSellerInfo(completedSale).roleLabel})
-                    </span>
-                  </div>
+                  {effectiveInvoiceTemplate.showSellerName && (
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
+                      <span className="text-slate-500 shrink-0">
+                        {effectiveInvoiceTemplate.issuerLabel || 'Atendido por'}:
+                      </span>
+                      <input
+                        type="text"
+                        value={completedSale.cashier || effectiveInvoiceTemplate.defaultIssuerName || 'Administrador'}
+                        onChange={(e) => {
+                          const nextCashier = e.target.value;
+                          const updated: SaleRecord = {
+                            ...completedSale,
+                            cashier: nextCashier,
+                          };
+                          setCompletedSale(updated);
+                          if (onUpdateSale) {
+                            onUpdateSale(completedSale, updated).catch(() => {});
+                          }
+                        }}
+                        title="Haz clic para editar el nombre de quien genera esta factura"
+                        className="font-bold text-right text-slate-900 bg-emerald-50/70 hover:bg-emerald-50 focus:bg-white border border-dashed border-emerald-300 focus:border-emerald-500 rounded px-1.5 py-0.5 text-[11px] focus:outline-none max-w-[190px]"
+                      />
+                    </div>
+                  )}
                   {completedSale.status === 'cancelled' && (
                     <div className="text-center py-1 text-rose-600 font-bold border border-rose-300 rounded bg-rose-50 my-1">
                       *** VENTA ANULADA ***
@@ -4002,8 +4186,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           <span className="font-medium text-slate-800">{it.name}</span>
                           {it.size ? ` (Talla: ${it.size})` : ''}
                           <div className="text-[10px] text-slate-500">
-                            Código: {it.code} • @ L. {it.price.toFixed(2)} c/u
-                            {unitDisc > 0 && (
+                            {effectiveInvoiceTemplate.showItemCode ? `Código: ${it.code} • ` : ''}@ L. {it.price.toFixed(2)} c/u
+                            {effectiveInvoiceTemplate.showItemDiscount && unitDisc > 0 && (
                               <span className="text-rose-600 font-semibold block">
                                 (Antes L. {origPrice.toFixed(2)} | Desc: -L. {unitDisc.toFixed(2)} c/u)
                               </span>
@@ -4025,7 +4209,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       (sum, it) => sum + (Number(it.unitDiscount) || 0) * it.quantity,
                       0
                     );
-                    return itemsSaved > 0 ? (
+                    return effectiveInvoiceTemplate.showItemDiscount && itemsSaved > 0 ? (
                       <div className="flex justify-between text-rose-600 font-semibold">
                         <span>Ahorro en artículos:</span>
                         <span>- L. {itemsSaved.toFixed(2)}</span>
@@ -4059,6 +4243,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                         ? 'Efectivo'
                         : completedSale.paymentMethod === 'card'
                         ? 'Tarjeta'
+                        : completedSale.paymentMethod === 'credit'
+                        ? 'Crédito'
                         : 'Transferencia'}
                     </span>
                   </div>
@@ -4076,10 +4262,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   )}
                 </div>
 
+                {/* Warranty / Return Policy if configured */}
+                {effectiveInvoiceTemplate.warrantyPolicyText && (
+                  <div className="text-center text-[9.5px] text-slate-600 pt-2 border-t border-dashed border-slate-300">
+                    <p className="font-bold uppercase text-slate-800">
+                      {effectiveInvoiceTemplate.warrantyTitle}:
+                    </p>
+                    <p>{effectiveInvoiceTemplate.warrantyPolicyText}</p>
+                  </div>
+                )}
+
                 {/* Thank you message footer */}
                 <div className="text-center text-[10px] text-slate-500 pt-2 border-t border-dashed border-slate-300">
-                  <p className="font-bold">¡GRACIAS POR SU COMPRA!</p>
-                  <p>Conserve este ticket para cualquier cambio o reclamo.</p>
+                  {effectiveInvoiceTemplate.footerThankYouTitle && (
+                    <p className="font-bold text-slate-800">
+                      {effectiveInvoiceTemplate.footerThankYouTitle}
+                    </p>
+                  )}
+                  <p>
+                    {draftReceiptFooterText ||
+                      storeSettings.receiptFooterText ||
+                      'Conserve este ticket para cualquier cambio o reclamo.'}
+                  </p>
                 </div>
               </div>
 
@@ -4315,6 +4519,42 @@ export const SalesView: React.FC<SalesViewProps> = ({
         onConfirm={handleConfirmCancelSale}
         onCancel={() => setSaleToCancel(null)}
       />
+
+      {/* ==================== MODAL EDITOR DE PLANTILLA DE FACTURAS Y TICKETS ==================== */}
+      {showInvoiceTemplateModal && (
+        <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-[140] animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92dvh] overflow-y-auto scroll-container">
+            <InvoiceTemplateEditor
+              storeName={storeSettings.storeName || 'Tienda Gosén'}
+              tagline={storeSettings.tagline}
+              logoUrl={storeSettings.logoUrl}
+              phone={storeSettings.phone}
+              address={storeSettings.address}
+              storeRtn={storeSettings.storeRtn}
+              receiptFooterText={draftReceiptFooterText}
+              onChangeReceiptFooterText={handleUpdateDraftFooter}
+              invoiceTemplate={draftInvoiceTemplate}
+              onChangeInvoiceTemplate={handleUpdateDraftTemplate}
+              bankAccountsCount={
+                (storeSettings.bankAccounts || []).filter((b) => b.isActive !== false).length
+              }
+              onQuickSave={async (nextTemplate, nextFooter) => {
+                handleUpdateDraftTemplate(nextTemplate);
+                handleUpdateDraftFooter(nextFooter);
+                await saveStoreSettingsToFirestore({
+                  ...storeSettings,
+                  invoiceTemplate: nextTemplate,
+                  receiptFooterText: nextFooter.trim(),
+                  updatedAt: Date.now(),
+                });
+              }}
+              showToast={showToast}
+              isModal
+              onCloseModal={() => setShowInvoiceTemplateModal(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

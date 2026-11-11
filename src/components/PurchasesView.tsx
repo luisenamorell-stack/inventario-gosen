@@ -7,10 +7,14 @@ import {
   StoreSettings,
   StoreWarehousesData,
   PrinterPaperFormat,
+  InvoiceTemplateConfig,
+  getEffectiveInvoiceTemplate,
 } from '../types';
 import {
   getDefaultWarehousesForStore,
   getProductStockInWarehouse,
+  saveStoreSettingsToFirestore,
+  setCachedStoreSettings,
 } from '../firebase/firestoreService';
 import {
   loadSequentialSkuConfig,
@@ -27,6 +31,7 @@ import {
   downloadPurchasesReportPdf,
 } from '../utils/printPdfService';
 import { PrintFormatModal } from './PrintFormatModal';
+import { InvoiceTemplateEditor } from './InvoiceTemplateEditor';
 import {
   FileText,
   Truck,
@@ -156,6 +161,78 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
   const [showPurchasesReportPrintModal, setShowPurchasesReportPrintModal] = useState<boolean>(false);
   const [invoiceToCancel, setInvoiceToCancel] = useState<PurchaseInvoice | null>(null);
   const [isCancelling, setIsCancelling] = useState<boolean>(false);
+  const [showInvoiceTemplateModal, setShowInvoiceTemplateModal] = useState<boolean>(false);
+  const [draftInvoiceTemplate, setDraftInvoiceTemplate] = useState<InvoiceTemplateConfig>(() =>
+    getEffectiveInvoiceTemplate(storeSettings)
+  );
+  const [draftReceiptFooterText, setDraftReceiptFooterText] = useState<string>(
+    storeSettings.receiptFooterText !== undefined
+      ? storeSettings.receiptFooterText
+      : '¡Gracias por su compra! Vuelva pronto.'
+  );
+  const lastTemplateCompanyRef = useRef<string>(storeSettings.companyId || 'gosen');
+
+  useEffect(() => {
+    const activeSlug = storeSettings.companyId || 'gosen';
+    if (lastTemplateCompanyRef.current !== activeSlug) {
+      lastTemplateCompanyRef.current = activeSlug;
+      setDraftInvoiceTemplate(getEffectiveInvoiceTemplate(storeSettings));
+      setDraftReceiptFooterText(
+        storeSettings.receiptFooterText !== undefined
+          ? storeSettings.receiptFooterText
+          : '¡Gracias por su compra! Vuelva pronto.'
+      );
+    }
+  }, [storeSettings]);
+
+  const handleUpdateDraftTemplate = (nextTemplate: InvoiceTemplateConfig) => {
+    setDraftInvoiceTemplate(nextTemplate);
+    const activeSlug = storeSettings.companyId || 'gosen';
+    setCachedStoreSettings(
+      {
+        ...storeSettings,
+        invoiceTemplate: nextTemplate,
+        receiptFooterText: draftReceiptFooterText,
+        updatedAt: Date.now(),
+      },
+      activeSlug
+    );
+  };
+
+  const handleUpdateDraftFooter = (nextFooter: string) => {
+    setDraftReceiptFooterText(nextFooter);
+    const activeSlug = storeSettings.companyId || 'gosen';
+    setCachedStoreSettings(
+      {
+        ...storeSettings,
+        invoiceTemplate: draftInvoiceTemplate,
+        receiptFooterText: nextFooter,
+        updatedAt: Date.now(),
+      },
+      activeSlug
+    );
+  };
+
+  const effectivePurchaseTemplate = useMemo(
+    () =>
+      getEffectiveInvoiceTemplate({
+        ...storeSettings,
+        invoiceTemplate: draftInvoiceTemplate,
+        receiptFooterText: draftReceiptFooterText,
+      }),
+    [storeSettings, draftInvoiceTemplate, draftReceiptFooterText]
+  );
+
+  const [receivedByInput, setReceivedByInput] = useState<string>(
+    () => getEffectiveInvoiceTemplate(storeSettings).defaultIssuerName?.trim() || 'Administrador'
+  );
+  const [hasCustomReceiverTyped, setHasCustomReceiverTyped] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!hasCustomReceiverTyped) {
+      setReceivedByInput(effectivePurchaseTemplate.defaultIssuerName?.trim() || 'Administrador');
+    }
+  }, [effectivePurchaseTemplate.defaultIssuerName, hasCustomReceiverTyped]);
 
   const [historySearch, setHistorySearch] = useState<string>('');
   const [historySupplierFilter, setHistorySupplierFilter] = useState<string>('all');
@@ -409,7 +486,10 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
         total: invoiceGrandTotal,
         notes: invoiceNotes.trim() || undefined,
         status: 'completed',
-        receivedBy: 'Administrador',
+        receivedBy:
+          receivedByInput.trim() ||
+          effectivePurchaseTemplate.defaultIssuerName?.trim() ||
+          'Administrador',
       };
 
       const result = await onRecordPurchase(purchasePayload);
@@ -610,7 +690,12 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
     if (!targetInv) return;
     const fmt = formatOverride || invoicePrinterFormat;
     setPreferredPrinterFormat(fmt);
-    const html = buildPurchaseInvoiceHtml(targetInv, storeSettings, fmt);
+    const effectiveSettingsForPrint: StoreSettings = {
+      ...storeSettings,
+      invoiceTemplate: effectivePurchaseTemplate,
+      receiptFooterText: draftReceiptFooterText,
+    };
+    const html = buildPurchaseInvoiceHtml(targetInv, effectiveSettingsForPrint, fmt);
     printHtmlDocument(html, `Factura Compra ${targetInv.invoiceNumber}`, fmt);
     const opt = PRINTER_FORMAT_OPTIONS.find((o) => o.id === fmt);
     showToast(`Abriendo impresión en formato ${opt?.shortLabel || fmt}...`, 'info');
@@ -620,7 +705,12 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
   const handleDownloadInvoicePdf = (invOverride?: PurchaseInvoice) => {
     const targetInv = invOverride || selectedInvoiceForModal;
     if (!targetInv) return;
-    downloadPurchaseInvoicePdf(targetInv, storeSettings);
+    const effectiveSettingsForPdf: StoreSettings = {
+      ...storeSettings,
+      invoiceTemplate: effectivePurchaseTemplate,
+      receiptFooterText: draftReceiptFooterText,
+    };
+    downloadPurchaseInvoicePdf(targetInv, effectiveSettingsForPdf);
     showToast(`PDF de Factura ${targetInv.invoiceNumber} descargado.`, 'success');
   };
 
@@ -823,8 +913,25 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                     </div>
                   )}
 
+                  {/* Generated / Received By */}
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Factura Generada / Recibida por
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Nombre de quien genera o recibe"
+                      value={receivedByInput}
+                      onChange={(e) => {
+                        setHasCustomReceiverTyped(true);
+                        setReceivedByInput(e.target.value);
+                      }}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-slate-800"
+                    />
+                  </div>
+
                   {/* Notes */}
-                  <div className={paymentCondition === 'credit' ? '' : 'sm:col-span-2'}>
+                  <div className={paymentCondition === 'credit' ? 'sm:col-span-3' : ''}>
                     <label className="block font-bold text-slate-700 mb-1">
                       Observaciones / Notas (Opcional)
                     </label>
@@ -1764,7 +1871,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
       {showInvoiceDetailsModal && selectedInvoiceForModal && (
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-50 animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[88dvh] sm:max-h-[90vh]">
-            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0 gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold shrink-0">
                   <FileText className="w-4 h-4" />
@@ -1776,12 +1883,23 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   </span>
                 </div>
               </div>
-              <button
-                onClick={() => setShowInvoiceDetailsModal(false)}
-                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg shrink-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowInvoiceTemplateModal(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-[11px] font-bold transition-colors cursor-pointer"
+                  title="Editar y personalizar la plantilla de la factura"
+                >
+                  <FileText className="w-3 h-3 text-indigo-600" />
+                  <span>Editar Plantilla</span>
+                </button>
+                <button
+                  onClick={() => setShowInvoiceDetailsModal(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg shrink-0"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Printable Body */}
@@ -1792,7 +1910,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
               >
                 {/* Header */}
                 <div className="text-center pb-3 border-b border-slate-200 space-y-1">
-                  {(storeSettings.logoUrl || '/store-logo.jpg') && (
+                  {effectivePurchaseTemplate.showLogo && (storeSettings.logoUrl || '/store-logo.jpg') && (
                     <div className="flex justify-center mb-1.5">
                       <img
                         src={storeSettings.logoUrl || '/store-logo.jpg'}
@@ -1804,9 +1922,12 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                   <h2 className="font-extrabold text-sm sm:text-base text-slate-900 uppercase break-words">
                     {storeSettings.storeName || 'Tienda Gosén'}
                   </h2>
-                  <p className="text-[10px] sm:text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
-                    COMPROBANTE DE INGRESO DE MERCADERÍA / COMPRA
+                  <p className="text-[10px] sm:text-[11px] text-indigo-700 font-bold uppercase tracking-wider">
+                    {effectivePurchaseTemplate.purchaseDocumentTitle}
                   </p>
+                  {effectivePurchaseTemplate.showStoreRtn && storeSettings.storeRtn && (
+                    <p className="text-[10px] font-bold text-slate-600">RTN: {storeSettings.storeRtn}</p>
+                  )}
                   {storeSettings.address && (
                     <p className="text-[10px] text-slate-400 break-words">{storeSettings.address}</p>
                   )}
@@ -1842,6 +1963,29 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                       {selectedInvoiceForModal.dueDate ? ` (Vence: ${selectedInvoiceForModal.dueDate})` : ''}
                     </span>
                   </div>
+                  {effectivePurchaseTemplate.showSellerName && (
+                    <div className="sm:col-span-2 flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                      <span className="text-slate-500 font-semibold shrink-0">
+                        {effectivePurchaseTemplate.issuerLabel || 'Generado / Recibido por'}:
+                      </span>
+                      <input
+                        type="text"
+                        value={
+                          selectedInvoiceForModal.receivedBy ||
+                          effectivePurchaseTemplate.defaultIssuerName ||
+                          'Administrador'
+                        }
+                        onChange={(e) => {
+                          setSelectedInvoiceForModal({
+                            ...selectedInvoiceForModal,
+                            receivedBy: e.target.value,
+                          });
+                        }}
+                        title="Haz clic para editar el nombre de quien genera o recibe la factura"
+                        className="font-bold text-right text-slate-900 bg-indigo-50/70 hover:bg-indigo-50 focus:bg-white border border-dashed border-indigo-300 focus:border-indigo-500 rounded px-2 py-0.5 text-[11px] focus:outline-none max-w-[210px]"
+                      />
+                    </div>
+                  )}
                   {selectedInvoiceForModal.status === 'cancelled' && (
                     <div className="sm:col-span-2 text-center py-1 text-rose-600 font-bold border border-rose-300 rounded bg-rose-50 my-1">
                       *** FACTURA ANULADA - STOCK RESTAURADO ***
@@ -2273,6 +2417,42 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
         onConfirm={handleConfirmCancelPurchase}
         onCancel={() => setInvoiceToCancel(null)}
       />
+
+      {/* ==================== MODAL EDITOR DE PLANTILLA DE FACTURAS Y TICKETS ==================== */}
+      {showInvoiceTemplateModal && (
+        <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-[140] animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92dvh] overflow-y-auto scroll-container">
+            <InvoiceTemplateEditor
+              storeName={storeSettings.storeName || 'Tienda Gosén'}
+              tagline={storeSettings.tagline}
+              logoUrl={storeSettings.logoUrl}
+              phone={storeSettings.phone}
+              address={storeSettings.address}
+              storeRtn={storeSettings.storeRtn}
+              receiptFooterText={draftReceiptFooterText}
+              onChangeReceiptFooterText={handleUpdateDraftFooter}
+              invoiceTemplate={draftInvoiceTemplate}
+              onChangeInvoiceTemplate={handleUpdateDraftTemplate}
+              bankAccountsCount={
+                (storeSettings.bankAccounts || []).filter((b) => b.isActive !== false).length
+              }
+              onQuickSave={async (nextTemplate, nextFooter) => {
+                handleUpdateDraftTemplate(nextTemplate);
+                handleUpdateDraftFooter(nextFooter);
+                await saveStoreSettingsToFirestore({
+                  ...storeSettings,
+                  invoiceTemplate: nextTemplate,
+                  receiptFooterText: nextFooter.trim(),
+                  updatedAt: Date.now(),
+                });
+              }}
+              showToast={showToast}
+              isModal
+              onCloseModal={() => setShowInvoiceTemplateModal(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1022,6 +1022,12 @@ app.post('/api/cloud-sync/collections', (req, res) => {
       users: Object.values(tenant.users).sort((a, b) =>
         String(a.name || '').localeCompare(String(b.name || ''))
       ),
+      allUsers: Object.entries(syncDbMemory.tenants).flatMap(([tSlug, tData]) =>
+        Object.values(tData.users || {}).map((u: any) => ({
+          ...u,
+          companyId: u.companyId || tSlug,
+        }))
+      ),
       warehouses: tenant.warehouses,
       settings: tenant.settings,
       posFinance: tenant.posFinance,

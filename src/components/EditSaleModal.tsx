@@ -53,6 +53,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
   const [customerName, setCustomerName] = useState('');
   const [customerRtn, setCustomerRtn] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [cashierName, setCashierName] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer' | 'credit' | 'other'>('cash');
   const [amountPaid, setAmountPaid] = useState('');
   const [creditDueDate, setCreditDueDate] = useState('');
@@ -69,6 +70,12 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
       setCustomerName(sale.customerName || 'Consumidor Final');
       setCustomerRtn(sale.customerRtn || '');
       setCustomerPhone(sale.customerPhone || '');
+      setCashierName(
+        sale.cashier ||
+          storeSettings.invoiceTemplate?.defaultIssuerName ||
+          userName ||
+          'Administrador'
+      );
       setPaymentMethod(sale.paymentMethod || 'cash');
       setAmountPaid(String(sale.amountPaid ?? sale.total ?? 0));
       setCreditDueDate(sale.creditDueDate || '');
@@ -86,7 +93,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
       setProductSearch('');
       setAdminPasswordInput('');
     }
-  }, [sale, isOpen]);
+  }, [sale, isOpen, storeSettings.invoiceTemplate?.defaultIssuerName, userName]);
 
   const subtotal = useMemo(
     () => items.reduce((acc, it) => acc + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0),
@@ -231,6 +238,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
       customerName: customerName.trim() || 'Consumidor Final',
       customerRtn: customerRtn.trim(),
       customerPhone: customerPhone.trim(),
+      cashier: cashierName.trim() || sale.cashier || 'Administrador',
       paymentMethod,
       items,
       totalItems: items.reduce((acc, it) => acc + it.quantity, 0),
@@ -276,7 +284,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 truncate">
-                Corrige datos del cliente, método de pago o ajusta artículos de la venta.
+                Corrige datos del cliente, quién genera la factura, método de pago o artículos.
               </p>
             </div>
           </div>
@@ -292,8 +300,8 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
           <div className="flex-1 min-h-0 overflow-y-auto scroll-container p-4 sm:p-6 space-y-5">
-            {/* Customer & Payment Info */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Customer & Issuer Info */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-extrabold uppercase text-slate-600 mb-1">
                   Nombre del Cliente
@@ -306,6 +314,22 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
                     onChange={(e) => setCustomerName(e.target.value)}
                     placeholder="Consumidor Final"
                     className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-extrabold uppercase text-emerald-700 mb-1">
+                  Factura Generada / Atendida por
+                </label>
+                <div className="relative">
+                  <User className="w-3.5 h-3.5 text-emerald-600 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={cashierName}
+                    onChange={(e) => setCashierName(e.target.value)}
+                    placeholder="Nombre de quien genera la factura"
+                    className="w-full pl-8 pr-3 py-2 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
               </div>

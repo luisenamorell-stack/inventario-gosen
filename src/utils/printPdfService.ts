@@ -16,6 +16,7 @@ import {
   WarehouseTransferRecord,
   UserAccount,
   SaaSGlobalConfig,
+  getEffectiveInvoiceTemplate,
 } from '../types';
 import { getProductStockInWarehouse } from '../firebase/firestoreService';
 import {
@@ -858,47 +859,64 @@ interface ExecutiveHeaderOptions {
   accentRgb?: [number, number, number];
 }
 
+function hexToRgbTuple(
+  hex?: string,
+  fallback: [number, number, number] = [4, 120, 87]
+): [number, number, number] {
+  const clean = (hex || '').trim().replace('#', '');
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return fallback;
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return [r, g, b];
+}
+
 function drawExecutivePdfHeader(doc: jsPDF, opts: ExecutiveHeaderOptions): number {
   const pageWidth = doc.internal.pageSize.getWidth();
-  const accent = opts.accentRgb || [4, 120, 87]; // Emerald default
+  const tpl = getEffectiveInvoiceTemplate(opts.storeSettings);
+  const accent = opts.accentRgb || hexToRgbTuple(tpl.accentColor, [4, 120, 87]);
   const storeName = (opts.storeSettings.storeName || 'TIENDA GOSÉN').toUpperCase();
 
   // Top Luxury Accent Bar
-  doc.setFillColor(15, 23, 42);
-  doc.rect(0, 0, pageWidth, 4.5, 'F');
-  doc.setFillColor(accent[0], accent[1], accent[2]);
-  doc.rect(0, 4.5, pageWidth, 1.5, 'F');
+  if (tpl.templateStyle !== 'minimal') {
+    doc.setFillColor(15, 23, 42);
+    doc.rect(0, 0, pageWidth, 4.5, 'F');
+    doc.setFillColor(accent[0], accent[1], accent[2]);
+    doc.rect(0, 4.5, pageWidth, 1.5, 'F');
+  }
 
   let y = 11;
-  const logoData = getCachedLogoDataUrl(opts.storeSettings);
+  const logoData = tpl.showLogo ? getCachedLogoDataUrl(opts.storeSettings) : null;
   const logoBoxSize = 18;
-  const textStartX = 14 + logoBoxSize + 4;
+  const textStartX = tpl.showLogo ? 14 + logoBoxSize + 4 : 14;
 
   // Draw Logo or Executive Monogram Emblem
-  doc.setDrawColor(226, 232, 240);
-  doc.setFillColor(248, 250, 252);
-  doc.roundedRect(14, y - 2, logoBoxSize, logoBoxSize, 2.5, 2.5, 'FD');
+  if (tpl.showLogo) {
+    doc.setDrawColor(226, 232, 240);
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(14, y - 2, logoBoxSize, logoBoxSize, 2.5, 2.5, 'FD');
 
-  let logoDrawn = false;
-  if (logoData) {
-    try {
-      doc.addImage(logoData, 'PNG', 15, y - 1, logoBoxSize - 2, logoBoxSize - 2, undefined, 'FAST');
-      logoDrawn = true;
-    } catch {}
-  }
-  if (!logoDrawn) {
-    doc.setFillColor(15, 23, 42);
-    doc.roundedRect(15.2, y - 0.8, logoBoxSize - 2.4, logoBoxSize - 2.4, 2, 2, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.setTextColor(255, 255, 255);
-    const initials = storeName
-      .split(' ')
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((w) => w[0])
-      .join('');
-    doc.text(initials || 'TG', 14 + logoBoxSize / 2, y + 8.5, { align: 'center' });
+    let logoDrawn = false;
+    if (logoData) {
+      try {
+        doc.addImage(logoData, 'PNG', 15, y - 1, logoBoxSize - 2, logoBoxSize - 2, undefined, 'FAST');
+        logoDrawn = true;
+      } catch {}
+    }
+    if (!logoDrawn) {
+      doc.setFillColor(accent[0], accent[1], accent[2]);
+      doc.roundedRect(15.2, y - 0.8, logoBoxSize - 2.4, logoBoxSize - 2.4, 2, 2, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(255, 255, 255);
+      const initials = storeName
+        .split(' ')
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0])
+        .join('');
+      doc.text(initials || 'TG', 14 + logoBoxSize / 2, y + 8.5, { align: 'center' });
+    }
   }
 
   // Store Identity Block (Left)
@@ -911,13 +929,13 @@ function drawExecutivePdfHeader(doc: jsPDF, opts: ExecutiveHeaderOptions): numbe
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
   doc.setTextColor(71, 85, 105);
-  if (opts.storeSettings.tagline) {
+  if (tpl.showTagline && opts.storeSettings.tagline) {
     doc.text(opts.storeSettings.tagline, textStartX, infoY);
     infoY += 3.8;
   }
 
   const fiscalParts = [
-    opts.storeSettings.storeRtn ? `RTN: ${opts.storeSettings.storeRtn}` : '',
+    tpl.showStoreRtn && opts.storeSettings.storeRtn ? `RTN: ${opts.storeSettings.storeRtn}` : '',
     opts.storeSettings.phone ? `Tel/WhatsApp: ${opts.storeSettings.phone}` : '',
   ].filter(Boolean);
   if (fiscalParts.length > 0) {
@@ -934,12 +952,21 @@ function drawExecutivePdfHeader(doc: jsPDF, opts: ExecutiveHeaderOptions): numbe
     infoY += 3.8;
   }
 
+  if (tpl.headerCustomNote) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.8);
+    doc.setTextColor(accent[0], accent[1], accent[2]);
+    doc.text(tpl.headerCustomNote.slice(0, 95), textStartX, infoY);
+    infoY += 3.6;
+  }
+
   // Right Document Badge Box
   const boxWidth = 74;
   const boxX = pageWidth - 14 - boxWidth;
+  const boxHeight = tpl.caiNumber ? 22.5 : 19;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(boxX, y - 2, boxWidth, 19, 2, 2, 'FD');
+  doc.roundedRect(boxX, y - 2, boxWidth, boxHeight, 2, 2, 'FD');
 
   // Top Header Strip inside Document Box
   doc.setFillColor(accent[0], accent[1], accent[2]);
@@ -947,9 +974,11 @@ function drawExecutivePdfHeader(doc: jsPDF, opts: ExecutiveHeaderOptions): numbe
   doc.rect(boxX, y + 1.8, boxWidth, 2, 'F');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.8);
+  doc.setFontSize(7.5);
   doc.setTextColor(255, 255, 255);
-  doc.text(opts.documentTitle.toUpperCase(), boxX + boxWidth / 2, y + 2, { align: 'center' });
+  doc.text(opts.documentTitle.toUpperCase().slice(0, 34), boxX + boxWidth / 2, y + 2, {
+    align: 'center',
+  });
 
   if (opts.documentNumber) {
     doc.setFont('courier', 'bold');
@@ -962,6 +991,13 @@ function drawExecutivePdfHeader(doc: jsPDF, opts: ExecutiveHeaderOptions): numbe
   doc.setFontSize(7.5);
   doc.setTextColor(71, 85, 105);
   doc.text(opts.dateLabel, boxX + boxWidth / 2, y + 13.5, { align: 'center' });
+
+  if (tpl.caiNumber) {
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(6.5);
+    doc.setTextColor(51, 65, 85);
+    doc.text(`CAI: ${tpl.caiNumber.slice(0, 38)}`, boxX + boxWidth / 2, y + 18, { align: 'center' });
+  }
 
   // Status Stamp if provided
   if (opts.statusBadge) {
@@ -990,7 +1026,21 @@ function drawExecutivePdfHeader(doc: jsPDF, opts: ExecutiveHeaderOptions): numbe
     });
   }
 
-  const bottomHeaderY = Math.max(infoY + 2, y + 20);
+  let bottomHeaderY = Math.max(infoY + 2, y + boxHeight + 1);
+  if (tpl.caiRange || tpl.caiExpiryDate) {
+    const caiDetails = [
+      tpl.caiRange ? `Rango Autorizado: ${tpl.caiRange}` : '',
+      tpl.caiExpiryDate ? `Fecha Límite de Emisión: ${tpl.caiExpiryDate}` : '',
+    ]
+      .filter(Boolean)
+      .join('   |   ');
+    doc.setFont('courier', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(71, 85, 105);
+    doc.text(caiDetails, 14, bottomHeaderY);
+    bottomHeaderY += 3.5;
+  }
+
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.4);
   doc.line(14, bottomHeaderY, pageWidth - 14, bottomHeaderY);
@@ -1087,6 +1137,8 @@ export function buildSaleDocumentHtml(
 ): string {
   const isThermal = format === '80mm' || format === '58mm';
   const storeName = storeSettings.storeName || 'Tienda Gosén';
+  const tpl = getEffectiveInvoiceTemplate(storeSettings);
+  const accentHex = tpl.accentColor || '#047857';
   const footerText =
     storeSettings.receiptFooterText ||
     '¡Gracias por su compra! Conserve este comprobante para cualquier cambio o garantía.';
@@ -1101,30 +1153,37 @@ export function buildSaleDocumentHtml(
       ? Math.max(0, sale.total - (sale.amountPaid || 0))
       : 0;
   const amountWords = numberToSpanishWords(sale.total);
+  const activeBanks = (storeSettings.bankAccounts || []).filter(
+    (b) => b.isActive !== false && b.accountNumber
+  );
 
   if (isThermal) {
     return `
       <div class="text-center">
         ${
-          storeSettings.logoUrl
+          tpl.showLogo && storeSettings.logoUrl
             ? `<img src="${storeSettings.logoUrl}" alt="${storeName}" style="width:48px;height:48px;object-fit:contain;margin:0 auto 4px;display:block;border-radius:6px;" />`
             : ''
         }
         <div style="font-size:${format === '58mm' ? '13px' : '15px'};font-weight:900;text-transform:uppercase;">${storeName}</div>
-        ${storeSettings.tagline ? `<div style="font-size:10px;color:#334155;">${storeSettings.tagline}</div>` : ''}
-        ${storeSettings.storeRtn ? `<div style="font-size:10px;font-weight:700;">RTN: ${storeSettings.storeRtn}</div>` : ''}
+        ${tpl.showTagline && storeSettings.tagline ? `<div style="font-size:10px;color:#334155;">${storeSettings.tagline}</div>` : ''}
+        ${tpl.showStoreRtn && storeSettings.storeRtn ? `<div style="font-size:10px;font-weight:700;">RTN: ${storeSettings.storeRtn}</div>` : ''}
         ${storeSettings.address ? `<div style="font-size:10px;">${storeSettings.address}</div>` : ''}
         ${storeSettings.phone ? `<div style="font-size:10px;">Tel: ${storeSettings.phone}</div>` : ''}
+        ${tpl.headerCustomNote ? `<div style="font-size:9.5px;font-weight:700;margin-top:2px;">${tpl.headerCustomNote}</div>` : ''}
+        ${tpl.caiNumber ? `<div style="font-size:9px;margin-top:2px;">CAI: <strong>${tpl.caiNumber}</strong></div>` : ''}
+        ${tpl.caiRange ? `<div style="font-size:8.5px;">Rango: ${tpl.caiRange}</div>` : ''}
+        ${tpl.caiExpiryDate ? `<div style="font-size:8.5px;">Fecha Límite Emisión: ${tpl.caiExpiryDate}</div>` : ''}
       </div>
       <div class="dashed-line"></div>
       <div style="font-size:${format === '58mm' ? '10px' : '11px'};">
-        <div style="display:flex;justify-content:space-between;"><span>Documento:</span><strong>${sale.paymentMethod === 'credit' ? 'FACTURA CRÉDITO' : 'FACTURA / TICKET'}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Documento:</span><strong>${sale.paymentMethod === 'credit' ? tpl.creditDocumentTitle : tpl.thermalDocumentTitle}</strong></div>
         <div style="display:flex;justify-content:space-between;"><span>N° Comprobante:</span><strong>${sale.saleNumber}</strong></div>
         <div style="display:flex;justify-content:space-between;"><span>Fecha y Hora:</span><span>${sale.date}</span></div>
         <div style="display:flex;justify-content:space-between;"><span>Cliente:</span><strong>${sale.customerName || 'Consumidor Final'}</strong></div>
-        ${sale.customerRtn ? `<div style="display:flex;justify-content:space-between;"><span>RTN / DNI:</span><span>${sale.customerRtn}</span></div>` : ''}
-        ${sale.customerPhone ? `<div style="display:flex;justify-content:space-between;"><span>Teléfono:</span><span>${sale.customerPhone}</span></div>` : ''}
-        <div style="display:flex;justify-content:space-between;"><span>Atendido por:</span><span>${sellerLabel || sale.cashier || 'Administrador'}</span></div>
+        ${tpl.showCustomerRtn && sale.customerRtn ? `<div style="display:flex;justify-content:space-between;"><span>RTN / DNI:</span><span>${sale.customerRtn}</span></div>` : ''}
+        ${tpl.showCustomerPhone && sale.customerPhone ? `<div style="display:flex;justify-content:space-between;"><span>Teléfono:</span><span>${sale.customerPhone}</span></div>` : ''}
+        ${tpl.showSellerName ? `<div style="display:flex;justify-content:space-between;"><span>${tpl.issuerLabel || 'Atendido por'}:</span><span>${sellerLabel || sale.cashier || tpl.defaultIssuerName || 'Administrador'}</span></div>` : ''}
         ${sale.status === 'cancelled' ? `<div style="text-align:center;font-weight:900;border:1px solid #000;padding:3px;margin-top:4px;">*** VENTA ANULADA ***</div>` : ''}
       </div>
       <div class="dashed-line"></div>
@@ -1144,8 +1203,8 @@ export function buildSaleDocumentHtml(
                   <td style="padding-top:4px;">
                     <strong>${it.quantity}x</strong> ${it.name}${it.size ? ` (${it.size})` : ''}
                     <div style="font-size:9.5px;color:#334155;">
-                      Cód: ${it.code} • @ ${formatCurrencyL(it.price)}
-                      ${disc > 0 ? ` (Desc -${formatCurrencyL(disc)} c/u)` : ''}
+                      ${tpl.showItemCode ? `Cód: ${it.code} • ` : ''}@ ${formatCurrencyL(it.price)}
+                      ${tpl.showItemDiscount && disc > 0 ? ` (Desc -${formatCurrencyL(disc)} c/u)` : ''}
                     </div>
                   </td>
                   <td class="text-right font-bold" style="padding-top:4px;white-space:nowrap;">${formatCurrencyL(it.subtotal)}</td>
@@ -1158,7 +1217,7 @@ export function buildSaleDocumentHtml(
       <div class="dashed-line"></div>
       <div style="font-size:${format === '58mm' ? '10.5px' : '11.5px'};">
         <div style="display:flex;justify-content:space-between;"><span>Artículos Totales:</span><span>${sale.totalItems} uds</span></div>
-        ${itemsSaved > 0 ? `<div style="display:flex;justify-content:space-between;"><span>Ahorro artículos:</span><span>-${formatCurrencyL(itemsSaved)}</span></div>` : ''}
+        ${tpl.showItemDiscount && itemsSaved > 0 ? `<div style="display:flex;justify-content:space-between;"><span>Ahorro artículos:</span><span>-${formatCurrencyL(itemsSaved)}</span></div>` : ''}
         <div style="display:flex;justify-content:space-between;"><span>Subtotal:</span><span>${formatCurrencyL(sale.subtotal)}</span></div>
         ${sale.discount > 0 ? `<div style="display:flex;justify-content:space-between;"><span>Descuento:</span><span>-${formatCurrencyL(sale.discount)}</span></div>` : ''}
         ${sale.tax > 0 ? `<div style="display:flex;justify-content:space-between;"><span>15% ISV:</span><span>${formatCurrencyL(sale.tax)}</span></div>` : ''}
@@ -1166,7 +1225,7 @@ export function buildSaleDocumentHtml(
           <span>TOTAL NETO:</span>
           <span>${formatCurrencyL(sale.total)}</span>
         </div>
-        <div style="font-size:9px;margin-top:3px;font-weight:700;">${amountWords}</div>
+        ${tpl.showAmountInWords ? `<div style="font-size:9px;margin-top:3px;font-weight:700;">${amountWords}</div>` : ''}
         <div style="display:flex;justify-content:space-between;margin-top:4px;">
           <span>Método Pago:</span>
           <strong>${getPaymentMethodLabel(sale.paymentMethod)}</strong>
@@ -1190,8 +1249,21 @@ export function buildSaleDocumentHtml(
         }
       </div>
       ${sale.notes ? `<div class="dashed-line"></div><div style="font-size:10px;"><strong>Nota:</strong> ${sale.notes}</div>` : ''}
+      ${
+        tpl.showBankAccounts && activeBanks.length > 0
+          ? `<div class="dashed-line"></div><div style="font-size:9.5px;"><strong>CUENTAS BANCARIAS:</strong>${activeBanks
+              .map((b) => `<div>• ${b.bankName}: ${b.accountNumber} (${b.holderName})</div>`)
+              .join('')}</div>`
+          : ''
+      }
+      ${
+        tpl.warrantyPolicyText
+          ? `<div class="dashed-line"></div><div style="font-size:9.5px;text-align:center;"><strong>${tpl.warrantyTitle}:</strong> ${tpl.warrantyPolicyText}</div>`
+          : ''
+      }
       <div class="dashed-line"></div>
       <div class="text-center" style="font-size:10px;margin-top:6px;">
+        ${tpl.footerThankYouTitle ? `<div style="font-weight:900;">${tpl.footerThankYouTitle}</div>` : ''}
         <div>${footerText}</div>
       </div>
     `;
@@ -1199,30 +1271,38 @@ export function buildSaleDocumentHtml(
 
   // Formal Letter / Half-Letter Executive Commercial Invoice HTML
   return `
-    <div style="border:1px solid #cbd5e1;border-radius:12px;padding:${format === 'half-letter' ? '16px' : '24px'};background:#ffffff;">
-      <div style="height:5px;background:linear-gradient(90deg,#0f172a 0%,#047857 100%);border-radius:6px;margin-bottom:14px;"></div>
+    <div style="border:${tpl.templateStyle === 'corporate' ? `2px solid ${accentHex}` : '1px solid #cbd5e1'};border-radius:12px;padding:${format === 'half-letter' ? '16px' : '24px'};background:#ffffff;">
+      ${
+        tpl.templateStyle !== 'minimal'
+          ? `<div style="height:5px;background:linear-gradient(90deg,#0f172a 0%,${accentHex} 100%);border-radius:6px;margin-bottom:14px;"></div>`
+          : ''
+      }
       <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:14px;gap:16px;">
         <div style="display:flex;gap:14px;align-items:center;">
           ${
-            storeSettings.logoUrl
-              ? `<img src="${storeSettings.logoUrl}" alt="${storeName}" style="width:62px;height:62px;object-fit:contain;border-radius:10px;border:1px solid #e2e8f0;padding:3px;background:#fff;" />`
-              : `<div style="width:56px;height:56px;border-radius:10px;background:#0f172a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px;">${storeName.slice(0, 2).toUpperCase()}</div>`
+            tpl.showLogo
+              ? storeSettings.logoUrl
+                ? `<img src="${storeSettings.logoUrl}" alt="${storeName}" style="width:62px;height:62px;object-fit:contain;border-radius:10px;border:1px solid #e2e8f0;padding:3px;background:#fff;" />`
+                : `<div style="width:56px;height:56px;border-radius:10px;background:${accentHex};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px;">${storeName.slice(0, 2).toUpperCase()}</div>`
+              : ''
           }
           <div>
             <h1 style="margin:0;font-size:21px;font-weight:900;text-transform:uppercase;color:#0f172a;letter-spacing:-0.02em;">${storeName}</h1>
-            ${storeSettings.tagline ? `<div style="font-size:11.5px;color:#475569;font-weight:600;">${storeSettings.tagline}</div>` : ''}
-            ${storeSettings.storeRtn ? `<div style="font-size:11px;color:#0f172a;margin-top:2px;">RTN: <strong>${storeSettings.storeRtn}</strong></div>` : ''}
+            ${tpl.showTagline && storeSettings.tagline ? `<div style="font-size:11.5px;color:#475569;font-weight:600;">${storeSettings.tagline}</div>` : ''}
+            ${tpl.showStoreRtn && storeSettings.storeRtn ? `<div style="font-size:11px;color:#0f172a;margin-top:2px;">RTN: <strong>${storeSettings.storeRtn}</strong></div>` : ''}
             <div style="font-size:11px;color:#475569;">
               ${[storeSettings.address, storeSettings.phone ? `Tel: ${storeSettings.phone}` : ''].filter(Boolean).join('  •  ')}
             </div>
+            ${tpl.headerCustomNote ? `<div style="font-size:10.5px;font-weight:800;color:${accentHex};margin-top:2px;">${tpl.headerCustomNote}</div>` : ''}
           </div>
         </div>
         <div style="text-align:right;min-width:210px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;">
-          <div style="font-size:10.5px;font-weight:900;text-transform:uppercase;color:${sale.paymentMethod === 'credit' ? '#b45309' : '#047857'};">
-            ${sale.paymentMethod === 'credit' ? 'FACTURA AL CRÉDITO' : 'FACTURA COMERCIAL DE VENTA'}
+          <div style="font-size:10.5px;font-weight:900;text-transform:uppercase;color:${sale.paymentMethod === 'credit' ? '#b45309' : accentHex};">
+            ${sale.paymentMethod === 'credit' ? tpl.creditDocumentTitle : tpl.salesDocumentTitle}
           </div>
           <div style="font-size:17px;font-weight:900;font-family:monospace;margin-top:3px;color:#0f172a;">N° ${sale.saleNumber}</div>
           <div style="font-size:11px;color:#475569;margin-top:2px;">Fecha: <strong>${sale.date}</strong></div>
+          ${tpl.caiNumber ? `<div style="font-size:10px;font-family:monospace;color:#334155;margin-top:2px;">CAI: <strong>${tpl.caiNumber}</strong></div>` : ''}
           <div style="margin-top:4px;">
             <span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:9.5px;font-weight:800;background:${
               sale.status === 'cancelled'
@@ -1243,30 +1323,43 @@ export function buildSaleDocumentHtml(
         </div>
       </div>
 
+      ${
+        tpl.caiRange || tpl.caiExpiryDate
+          ? `<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 12px;margin-bottom:12px;font-size:10.5px;font-family:monospace;color:#78350f;">
+              ${tpl.caiRange ? `<span><strong>Rango Autorizado:</strong> ${tpl.caiRange}</span>` : ''}
+              ${tpl.caiExpiryDate ? `<span><strong>Fecha Límite de Emisión:</strong> ${tpl.caiExpiryDate}</span>` : ''}
+            </div>`
+          : ''
+      }
+
       <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:11.5px;">
         <div style="space-y:3px;">
           <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#64748b;margin-bottom:3px;">DATOS DEL CLIENTE</div>
           <div><span style="color:#64748b;">Nombre / Razón Social:</span> <strong>${sale.customerName || 'Consumidor Final'}</strong></div>
-          <div><span style="color:#64748b;">RTN / Identidad:</span> <strong>${sale.customerRtn || 'Consumidor Final'}</strong></div>
-          <div><span style="color:#64748b;">Teléfono / WhatsApp:</span> <strong>${sale.customerPhone || 'No registrado'}</strong></div>
+          ${tpl.showCustomerRtn ? `<div><span style="color:#64748b;">RTN / Identidad:</span> <strong>${sale.customerRtn || 'Consumidor Final'}</strong></div>` : ''}
+          ${tpl.showCustomerPhone ? `<div><span style="color:#64748b;">Teléfono / WhatsApp:</span> <strong>${sale.customerPhone || 'No registrado'}</strong></div>` : ''}
         </div>
         <div style="text-align:right;">
           <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#64748b;margin-bottom:3px;">CONDICIONES DE LA TRANSACCIÓN</div>
           <div><span style="color:#64748b;">Modalidad de Pago:</span> <strong>${getPaymentMethodLabel(sale.paymentMethod)}</strong></div>
-          <div><span style="color:#64748b;">Vendedor / Cajero:</span> <strong>${sellerLabel || sale.cashier || 'Administrador'}</strong></div>
+          ${tpl.showSellerName ? `<div><span style="color:#64748b;">${tpl.issuerLabel || 'Atendido por'}:</span> <strong>${sellerLabel || sale.cashier || tpl.defaultIssuerName || 'Administrador'}</strong></div>` : ''}
           <div><span style="color:#64748b;">Fecha Vencimiento:</span> <strong>${sale.creditDueDate || 'Inmediato (Contado)'}</strong></div>
         </div>
       </div>
 
       <table style="border:1px solid #cbd5e1;font-size:11px;margin-bottom:14px;">
         <thead>
-          <tr style="background:#0f172a;color:#ffffff;">
+          <tr style="${
+            tpl.templateStyle === 'minimal'
+              ? 'background:#f8fafc;color:#0f172a;border-bottom:2px solid #0f172a;'
+              : `background:${accentHex};color:#ffffff;`
+          }">
             <th style="width:6%;" class="text-center">#</th>
-            <th style="width:15%;">CÓDIGO / SKU</th>
-            <th style="width:39%;">DESCRIPCIÓN DEL ARTÍCULO</th>
+            ${tpl.showItemCode ? `<th style="width:15%;">CÓDIGO / SKU</th>` : ''}
+            <th>DESCRIPCIÓN DEL ARTÍCULO</th>
             <th class="text-center" style="width:8%;">CANT.</th>
             <th class="text-right" style="width:11%;">PRECIO BASE</th>
-            <th class="text-right" style="width:9%;">DESC.</th>
+            ${tpl.showItemDiscount ? `<th class="text-right" style="width:9%;">DESC.</th>` : ''}
             <th class="text-right" style="width:12%;">SUBTOTAL</th>
           </tr>
         </thead>
@@ -1278,13 +1371,17 @@ export function buildSaleDocumentHtml(
               return `
                 <tr style="border-bottom:1px solid #e2e8f0;background:${i % 2 === 0 ? '#ffffff' : '#f8fafc'};">
                   <td class="text-center" style="color:#64748b;">${i + 1}</td>
-                  <td style="font-family:monospace;font-weight:700;">${it.code}</td>
+                  ${tpl.showItemCode ? `<td style="font-family:monospace;font-weight:700;">${it.code}</td>` : ''}
                   <td>
                     <strong>${it.name}</strong>${it.size ? ` <span style="color:#475569;">(Talla: ${it.size})</span>` : ''}
                   </td>
                   <td class="text-center font-bold">${it.quantity}</td>
                   <td class="text-right">${formatCurrencyL(orig)}</td>
-                  <td class="text-right" style="color:${disc > 0 ? '#e11d48' : '#64748b'};">${disc > 0 ? `-${formatCurrencyL(disc)}` : 'L. 0.00'}</td>
+                  ${
+                    tpl.showItemDiscount
+                      ? `<td class="text-right" style="color:${disc > 0 ? '#e11d48' : '#64748b'};">${disc > 0 ? `-${formatCurrencyL(disc)}` : 'L. 0.00'}</td>`
+                      : ''
+                  }
                   <td class="text-right font-bold">${formatCurrencyL(it.subtotal)}</td>
                 </tr>
               `;
@@ -1295,19 +1392,46 @@ export function buildSaleDocumentHtml(
 
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;">
         <div style="flex:1;font-size:11px;color:#334155;">
-          <div style="padding:8px 12px;background:#f1f5f9;border-left:3px solid #0f172a;border-radius:4px;font-weight:800;color:#0f172a;margin-bottom:8px;">
-            ${amountWords}
-          </div>
+          ${
+            tpl.showAmountInWords
+              ? `<div style="padding:8px 12px;background:#f1f5f9;border-left:3px solid ${accentHex};border-radius:4px;font-weight:800;color:#0f172a;margin-bottom:8px;">
+                  ${amountWords}
+                </div>`
+              : ''
+          }
           <div><strong>Total Unidades Facturadas:</strong> ${sale.totalItems} ${sale.totalItems === 1 ? 'unidad' : 'unidades'} (${(sale.items || []).length} líneas)</div>
           ${sale.notes ? `<div style="margin-top:6px;padding:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;"><strong>Observaciones:</strong> ${sale.notes}</div>` : ''}
-          <div style="margin-top:8px;font-size:10px;color:#64748b;">${footerText}</div>
+          ${
+            tpl.warrantyPolicyText
+              ? `<div style="margin-top:6px;padding:8px 10px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;font-size:10.5px;">
+                  <strong style="display:block;color:#0f172a;text-transform:uppercase;">${tpl.warrantyTitle}:</strong>
+                  ${tpl.warrantyPolicyText}
+                </div>`
+              : ''
+          }
+          ${
+            tpl.showBankAccounts && activeBanks.length > 0
+              ? `<div style="margin-top:6px;padding:8px 10px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;font-size:10.5px;color:#065f46;">
+                  <strong style="display:block;text-transform:uppercase;">Cuentas Bancarias Oficiales (${storeName}):</strong>
+                  ${activeBanks
+                    .map(
+                      (b) =>
+                        `<div>• <strong>${b.bankName}</strong> (${b.accountType || 'Cuenta'}): <span style="font-family:monospace;font-weight:800;">${b.accountNumber}</span> — Titular: ${b.holderName}</div>`
+                    )
+                    .join('')}
+                </div>`
+              : ''
+          }
+          <div style="margin-top:8px;font-size:10.5px;color:#334155;">
+            ${tpl.footerThankYouTitle ? `<strong style="color:#0f172a;">${tpl.footerThankYouTitle}</strong> — ` : ''}${footerText}
+          </div>
         </div>
         <div style="width:280px;border:1px solid #cbd5e1;border-radius:10px;padding:12px 14px;background:#f8fafc;font-size:11.5px;">
-          ${itemsSaved > 0 ? `<div style="display:flex;justify-content:space-between;color:#e11d48;margin-bottom:4px;"><span>Ahorro en Artículos:</span><span>-${formatCurrencyL(itemsSaved)}</span></div>` : ''}
+          ${tpl.showItemDiscount && itemsSaved > 0 ? `<div style="display:flex;justify-content:space-between;color:#e11d48;margin-bottom:4px;"><span>Ahorro en Artículos:</span><span>-${formatCurrencyL(itemsSaved)}</span></div>` : ''}
           <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>Subtotal Gravado / Exento:</span><strong>${formatCurrencyL(sale.subtotal)}</strong></div>
           <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>Descuento General:</span><span style="color:${sale.discount > 0 ? '#e11d48' : '#475569'};">-${formatCurrencyL(sale.discount || 0)}</span></div>
           <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>Impuesto (15% ISV):</span><strong>${formatCurrencyL(sale.tax || 0)}</strong></div>
-          <div style="display:flex;justify-content:space-between;border-top:2px solid #0f172a;padding-top:6px;margin-top:4px;font-size:15px;font-weight:900;color:#047857;">
+          <div style="display:flex;justify-content:space-between;border-top:2px solid #0f172a;padding-top:6px;margin-top:4px;font-size:15px;font-weight:900;color:${accentHex};">
             <span>TOTAL NETO:</span>
             <span>${formatCurrencyL(sale.total)}</span>
           </div>
@@ -1315,7 +1439,7 @@ export function buildSaleDocumentHtml(
             sale.paymentMethod === 'cash'
               ? `
                 <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px;padding-top:4px;border-top:1px dashed #cbd5e1;"><span>Efectivo Recibido:</span><strong>${formatCurrencyL(sale.amountPaid)}</strong></div>
-                <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;color:#047857;"><span>Cambio Entregado:</span><span>${formatCurrencyL(sale.change)}</span></div>
+                <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;color:${accentHex};"><span>Cambio Entregado:</span><span>${formatCurrencyL(sale.change)}</span></div>
               `
               : ''
           }
@@ -1330,16 +1454,20 @@ export function buildSaleDocumentHtml(
         </div>
       </div>
 
-      <div class="signatures" style="margin-top:${format === 'half-letter' ? '18px' : '30px'};">
-        <div class="sig-block">
-          <div class="sig-line"></div>
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#475569;">Firma / Sello Autorizado ${storeName}</div>
-        </div>
-        <div class="sig-block">
-          <div class="sig-line"></div>
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#475569;">Firma de Recibido Conforme Cliente</div>
-        </div>
-      </div>
+      ${
+        tpl.showSignatureLines
+          ? `<div class="signatures" style="margin-top:${format === 'half-letter' ? '18px' : '30px'};">
+              <div class="sig-block">
+                <div class="sig-line"></div>
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#475569;">${tpl.signatureLeftLabel} (${storeName})</div>
+              </div>
+              <div class="sig-block">
+                <div class="sig-line"></div>
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#475569;">${tpl.signatureRightLabel}</div>
+              </div>
+            </div>`
+          : ''
+      }
     </div>
   `;
 }
@@ -1352,6 +1480,8 @@ export async function downloadSalePdf(
 ): Promise<void> {
   await preloadStoreLogoForPdf(storeSettings.logoUrl);
   const storeName = storeSettings.storeName || 'Tienda Gosén';
+  const tpl = getEffectiveInvoiceTemplate(storeSettings);
+  const accentRgb = hexToRgbTuple(tpl.accentColor, [4, 120, 87]);
   const isThermal = format === '80mm' || format === '58mm';
   const itemsSaved = (sale.items || []).reduce(
     (sum, it) => sum + (Number(it.unitDiscount) || 0) * it.quantity,
@@ -1367,7 +1497,7 @@ export async function downloadSalePdf(
 
   if (isThermal) {
     const pageWidth = format === '58mm' ? 58 : 80;
-    const estimatedHeight = Math.max(175, 135 + (sale.items?.length || 1) * 15);
+    const estimatedHeight = Math.max(185, 145 + (sale.items?.length || 1) * 15);
     const doc = new jsPDF({
       orientation: 'portrait',
       unit: 'mm',
@@ -1379,7 +1509,7 @@ export async function downloadSalePdf(
     let y = 6;
 
     // Logo in Thermal PDF
-    const logoData = getCachedLogoDataUrl(storeSettings);
+    const logoData = tpl.showLogo ? getCachedLogoDataUrl(storeSettings) : null;
     if (logoData) {
       try {
         const logoW = format === '58mm' ? 14 : 18;
@@ -1395,11 +1525,11 @@ export async function downloadSalePdf(
 
     doc.setFont('courier', 'normal');
     doc.setFontSize(7.2);
-    if (storeSettings.tagline) {
+    if (tpl.showTagline && storeSettings.tagline) {
       doc.text(storeSettings.tagline.slice(0, 38), pageWidth / 2, y, { align: 'center' });
       y += 3.2;
     }
-    if (storeSettings.storeRtn) {
+    if (tpl.showStoreRtn && storeSettings.storeRtn) {
       doc.text(`RTN: ${storeSettings.storeRtn}`, pageWidth / 2, y, { align: 'center' });
       y += 3.2;
     }
@@ -1410,7 +1540,25 @@ export async function downloadSalePdf(
     }
     if (storeSettings.phone) {
       doc.text(`Tel: ${storeSettings.phone}`, pageWidth / 2, y, { align: 'center' });
-      y += 3.5;
+      y += 3.4;
+    }
+    if (tpl.headerCustomNote) {
+      const noteLines = doc.splitTextToSize(tpl.headerCustomNote, contentWidth);
+      doc.text(noteLines, pageWidth / 2, y, { align: 'center' });
+      y += noteLines.length * 3.1;
+    }
+    if (tpl.caiNumber) {
+      doc.text(`CAI: ${tpl.caiNumber.slice(0, 34)}`, pageWidth / 2, y, { align: 'center' });
+      y += 3.2;
+    }
+    if (tpl.caiRange) {
+      const rLines = doc.splitTextToSize(`Rango: ${tpl.caiRange}`, contentWidth);
+      doc.text(rLines, pageWidth / 2, y, { align: 'center' });
+      y += rLines.length * 3.1;
+    }
+    if (tpl.caiExpiryDate) {
+      doc.text(`Limite Emision: ${tpl.caiExpiryDate}`, pageWidth / 2, y, { align: 'center' });
+      y += 3.4;
     }
 
     doc.setLineWidth(0.3);
@@ -1420,7 +1568,7 @@ export async function downloadSalePdf(
     doc.setFont('courier', 'bold');
     doc.setFontSize(7.8);
     doc.text(
-      sale.paymentMethod === 'credit' ? 'FACTURA AL CREDITO' : 'FACTURA / COMPROBANTE',
+      (sale.paymentMethod === 'credit' ? tpl.creditDocumentTitle : tpl.thermalDocumentTitle).toUpperCase(),
       pageWidth / 2,
       y,
       { align: 'center' }
@@ -1435,16 +1583,20 @@ export async function downloadSalePdf(
     y += 3.4;
     doc.text(`Cliente: ${(sale.customerName || 'Consumidor Final').slice(0, 30)}`, marginX, y);
     y += 3.4;
-    if (sale.customerRtn) {
+    if (tpl.showCustomerRtn && sale.customerRtn) {
       doc.text(`RTN/ID: ${sale.customerRtn}`, marginX, y);
       y += 3.4;
     }
-    if (sale.customerPhone) {
+    if (tpl.showCustomerPhone && sale.customerPhone) {
       doc.text(`Tel: ${sale.customerPhone}`, marginX, y);
       y += 3.4;
     }
-    doc.text(`Atendio: ${(sellerLabel || sale.cashier || 'Admin').slice(0, 26)}`, marginX, y);
-    y += 3.4;
+    if (tpl.showSellerName) {
+      const issuerTag = (tpl.issuerLabel || 'Atendido por').slice(0, 16);
+      const issuerVal = (sellerLabel || sale.cashier || tpl.defaultIssuerName || 'Admin').slice(0, 26);
+      doc.text(`${issuerTag}: ${issuerVal}`, marginX, y);
+      y += 3.4;
+    }
 
     doc.line(marginX, y, pageWidth - marginX, y);
     y += 3.8;
@@ -1465,8 +1617,10 @@ export async function downloadSalePdf(
       doc.setFont('courier', 'normal');
       doc.setFontSize(6.8);
       doc.text(
-        `Cod: ${it.code} @ ${formatCurrencyL(it.price)}${
-          Number(it.unitDiscount) > 0 ? ` (-${formatCurrencyL(Number(it.unitDiscount))})` : ''
+        `${tpl.showItemCode ? `Cod: ${it.code} ` : ''}@ ${formatCurrencyL(it.price)}${
+          tpl.showItemDiscount && Number(it.unitDiscount) > 0
+            ? ` (-${formatCurrencyL(Number(it.unitDiscount))})`
+            : ''
         }`,
         marginX + 2,
         y
@@ -1478,7 +1632,7 @@ export async function downloadSalePdf(
     doc.line(marginX, y, pageWidth - marginX, y);
     y += 3.8;
 
-    if (itemsSaved > 0) {
+    if (tpl.showItemDiscount && itemsSaved > 0) {
       doc.text('Ahorro articulos:', marginX, y);
       doc.text(`-${formatCurrencyL(itemsSaved)}`, pageWidth - marginX, y, { align: 'right' });
       y += 3.4;
@@ -1504,10 +1658,12 @@ export async function downloadSalePdf(
     doc.text(formatCurrencyL(sale.total), pageWidth - marginX, y + 0.5, { align: 'right' });
     y += 4.5;
 
-    doc.setFontSize(6.6);
-    const wordLines = doc.splitTextToSize(amountWords, contentWidth);
-    doc.text(wordLines, marginX, y);
-    y += wordLines.length * 3 + 1.5;
+    if (tpl.showAmountInWords) {
+      doc.setFontSize(6.6);
+      const wordLines = doc.splitTextToSize(amountWords, contentWidth);
+      doc.text(wordLines, marginX, y);
+      y += wordLines.length * 3 + 1.5;
+    }
 
     doc.setFont('courier', 'normal');
     doc.setFontSize(7.5);
@@ -1528,9 +1684,25 @@ export async function downloadSalePdf(
       y += 3.8;
     }
 
-    drawDeterministicQrCode(doc, (pageWidth - 18) / 2, y + 1, 18, `${sale.saleNumber}-${sale.total}`);
-    y += 22;
+    if (tpl.showQrCode) {
+      drawDeterministicQrCode(doc, (pageWidth - 18) / 2, y + 1, 18, `${sale.saleNumber}-${sale.total}`);
+      y += 22;
+    }
 
+    if (tpl.warrantyPolicyText) {
+      doc.setFont('courier', 'normal');
+      doc.setFontSize(6.5);
+      const wLines = doc.splitTextToSize(`${tpl.warrantyTitle}: ${tpl.warrantyPolicyText}`, contentWidth);
+      doc.text(wLines, pageWidth / 2, y, { align: 'center' });
+      y += wLines.length * 2.8 + 1.5;
+    }
+
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(7.2);
+    if (tpl.footerThankYouTitle) {
+      doc.text(tpl.footerThankYouTitle, pageWidth / 2, y, { align: 'center' });
+      y += 3.2;
+    }
     doc.setFont('courier', 'normal');
     doc.setFontSize(7);
     const footLines = doc.splitTextToSize(
@@ -1555,10 +1727,10 @@ export async function downloadSalePdf(
 
   let y = drawExecutivePdfHeader(doc, {
     storeSettings,
-    documentTitle: isCredit ? 'FACTURA AL CRÉDITO' : 'FACTURA COMERCIAL DE VENTA',
+    documentTitle: isCredit ? tpl.creditDocumentTitle : tpl.salesDocumentTitle,
     documentNumber: `N° ${sale.saleNumber}`,
     dateLabel: `Emisión: ${sale.date}`,
-    accentRgb: isCredit ? [180, 83, 9] : [4, 120, 87],
+    accentRgb: isCredit ? [180, 83, 9] : accentRgb,
     statusBadge:
       sale.status === 'cancelled'
         ? { text: 'ANULADA', bgRgb: [254, 226, 226], textRgb: [185, 28, 28] }
@@ -1589,15 +1761,25 @@ export async function downloadSalePdf(
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.2);
   doc.setTextColor(51, 65, 85);
-  doc.text(`RTN / Identidad: ${sale.customerRtn || 'Consumidor Final'}`, 18, y + 14.2);
-  doc.text(`Teléfono / WhatsApp: ${sale.customerPhone || 'No registrado'}`, 18, y + 18.8);
+  if (tpl.showCustomerRtn) {
+    doc.text(`RTN / Identidad: ${sale.customerRtn || 'Consumidor Final'}`, 18, y + 14.2);
+  }
+  if (tpl.showCustomerPhone) {
+    doc.text(`Teléfono / WhatsApp: ${sale.customerPhone || 'No registrado'}`, 18, y + 18.8);
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text(`Método de Pago: ${getPaymentMethodLabel(sale.paymentMethod)}`, midX + 4, y + 9.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(51, 65, 85);
-  doc.text(`Atendido por: ${sellerLabel || sale.cashier || 'Administrador'}`, midX + 4, y + 14.2);
+  if (tpl.showSellerName) {
+    doc.text(
+      `${tpl.issuerLabel || 'Atendido por'}: ${sellerLabel || sale.cashier || tpl.defaultIssuerName || 'Administrador'}`,
+      midX + 4,
+      y + 14.2
+    );
+  }
   doc.text(
     `Condición / Vencimiento: ${
       isCredit ? `Crédito (Vence: ${sale.creditDueDate || 'Por definir'})` : 'Contado Inmediato'
@@ -1629,19 +1811,19 @@ export async function downloadSalePdf(
         it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) + unitDisc;
       return [
         String(idx + 1),
-        it.code || '-',
+        tpl.showItemCode ? it.code || '-' : '-',
         `${it.name}${it.size ? ` (Talla: ${it.size})` : ''}`,
         String(it.quantity),
         formatCurrencyL(origPrice),
-        unitDisc > 0 ? `-${formatCurrencyL(unitDisc)}` : 'L. 0.00',
+        tpl.showItemDiscount && unitDisc > 0 ? `-${formatCurrencyL(unitDisc)}` : 'L. 0.00',
         formatCurrencyL(it.price),
         formatCurrencyL(it.subtotal),
       ];
     }),
-    theme: 'grid',
+    theme: tpl.templateStyle === 'minimal' ? 'plain' : 'grid',
     headStyles: {
-      fillColor: [15, 23, 42],
-      textColor: 255,
+      fillColor: tpl.templateStyle === 'minimal' ? [241, 245, 249] : accentRgb,
+      textColor: tpl.templateStyle === 'minimal' ? [15, 23, 42] : 255,
       fontSize: 8,
       fontStyle: 'bold',
       halign: 'left',
@@ -1669,35 +1851,40 @@ export async function downloadSalePdf(
 
   // Left Column: Amount in Words + QR + Payment Details + Notes
   const leftColWidth = pageWidth - 28 - 78;
-  doc.setFillColor(241, 245, 249);
-  doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(14, summaryY, leftColWidth, 10, 1.5, 1.5, 'FD');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.8);
-  doc.setTextColor(15, 23, 42);
-  doc.text(amountWords, 17, summaryY + 6.3);
+  if (tpl.showAmountInWords) {
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(14, summaryY, leftColWidth, 10, 1.5, 1.5, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(amountWords, 17, summaryY + 6.3);
+  }
 
   // QR + Verification Block
   const qrY = summaryY + 13;
-  drawDeterministicQrCode(doc, 15, qrY, 22, `${storeName}|${sale.saleNumber}|${sale.total}`);
+  const textInfoX = tpl.showQrCode ? 41 : 15;
+  if (tpl.showQrCode) {
+    drawDeterministicQrCode(doc, 15, qrY, 22, `${storeName}|${sale.saleNumber}|${sale.total}`);
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
   doc.setTextColor(15, 23, 42);
-  doc.text('RESUMEN DE PAGO Y VERIFICACIÓN', 41, qrY + 4);
+  doc.text('RESUMEN DE PAGO Y VERIFICACIÓN', textInfoX, qrY + 4);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.8);
   doc.setTextColor(51, 65, 85);
   doc.text(
     `Artículos facturados: ${sale.totalItems} uds (${(sale.items || []).length} productos)`,
-    41,
+    textInfoX,
     qrY + 8.5
   );
 
   if (sale.paymentMethod === 'cash') {
     doc.text(
       `Efectivo Recibido: ${formatCurrencyL(sale.amountPaid)}   |   Cambio Entregado: ${formatCurrencyL(sale.change)}`,
-      41,
+      textInfoX,
       qrY + 13
     );
   } else if (isCredit) {
@@ -1705,17 +1892,26 @@ export async function downloadSalePdf(
     doc.setTextColor(180, 83, 9);
     doc.text(
       `Abonado: ${formatCurrencyL(sale.amountPaid || 0)}   |   SALDO PENDIENTE: ${formatCurrencyL(balanceDue)}`,
-      41,
+      textInfoX,
       qrY + 13
     );
   } else {
-    doc.text(`Pago confirmado vía ${getPaymentMethodLabel(sale.paymentMethod)}`, 41, qrY + 13);
+    doc.text(`Pago confirmado vía ${getPaymentMethodLabel(sale.paymentMethod)}`, textInfoX, qrY + 13);
   }
 
   if (sale.notes) {
     doc.setFont('helvetica', 'italic');
     doc.setTextColor(71, 85, 105);
-    doc.text(`Observaciones: ${sale.notes.slice(0, 75)}`, 41, qrY + 17.5);
+    doc.text(`Observaciones: ${sale.notes.slice(0, 75)}`, textInfoX, qrY + 17.5);
+  } else if (tpl.warrantyPolicyText) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      `${tpl.warrantyTitle}: ${tpl.warrantyPolicyText.slice(0, 85)}`,
+      textInfoX,
+      qrY + 17.5
+    );
   }
 
   // Right Column: Financial Breakdown Box
@@ -1762,14 +1958,14 @@ export async function downloadSalePdf(
   fy += 3.5;
 
   // Total Bar inside Financial Box
-  doc.setFillColor(15, 23, 42);
+  doc.setFillColor(accentRgb[0], accentRgb[1], accentRgb[2]);
   doc.roundedRect(finBoxX + 2, fy, finBoxW - 4, 10, 1.5, 1.5, 'F');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(255, 255, 255);
   doc.text('TOTAL L.:', labelX + 1, fy + 6.5);
   doc.setFontSize(11);
-  doc.setTextColor(110, 231, 183);
+  doc.setTextColor(255, 255, 255);
   doc.text(formatCurrencyL(sale.total), valX - 1, fy + 6.5, { align: 'right' });
 
   let afterSummaryY = summaryY + 42;
@@ -1796,7 +1992,7 @@ export async function downloadSalePdf(
   }
 
   // Signatures Block
-  if (afterSummaryY + 22 < pageHeight - 16) {
+  if (tpl.showSignatureLines && afterSummaryY + 22 < pageHeight - 16) {
     const sigY = afterSummaryY + 14;
     doc.setDrawColor(100, 116, 139);
     doc.setLineWidth(0.35);
@@ -1806,8 +2002,10 @@ export async function downloadSalePdf(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(`FIRMA Y SELLO ${storeName.toUpperCase()}`, 62, sigY + 4.2, { align: 'center' });
-    doc.text('FIRMA RECIBIDO CONFORME CLIENTE', pageWidth - 62, sigY + 4.2, { align: 'center' });
+    doc.text(`${tpl.signatureLeftLabel.toUpperCase()} (${storeName.toUpperCase()})`, 62, sigY + 4.2, {
+      align: 'center',
+    });
+    doc.text(tpl.signatureRightLabel.toUpperCase(), pageWidth - 62, sigY + 4.2, { align: 'center' });
   }
 
   drawPdfPageFooters(doc, storeSettings, `Factura ${sale.saleNumber}`);
@@ -1824,13 +2022,15 @@ export function buildPurchaseInvoiceHtml(
 ): string {
   const isThermal = format === '80mm' || format === '58mm';
   const storeName = storeSettings.storeName || 'Tienda Gosén';
+  const tpl = getEffectiveInvoiceTemplate(storeSettings);
+  const accentHex = tpl.accentColor || '#4338ca';
   const amountWords = numberToSpanishWords(invoice.total);
 
   if (isThermal) {
     return `
       <div class="text-center">
         <div style="font-size:14px;font-weight:900;text-transform:uppercase;">${storeName}</div>
-        <div style="font-size:10px;font-weight:700;">COMPROBANTE DE COMPRA / RECEPCIÓN</div>
+        <div style="font-size:10px;font-weight:700;">${tpl.purchaseDocumentTitle}</div>
       </div>
       <div class="dashed-line"></div>
       <div style="font-size:10.5px;">
@@ -1855,7 +2055,7 @@ export function buildPurchaseInvoiceHtml(
               <tr>
                 <td>
                   <strong>${it.quantity}x</strong> ${it.name}
-                  <div style="font-size:9px;color:#334155;">${it.code} • @ ${formatCurrencyL(it.cost)}</div>
+                  <div style="font-size:9px;color:#334155;">${tpl.showItemCode ? `${it.code} • ` : ''}@ ${formatCurrencyL(it.cost)}</div>
                 </td>
                 <td class="text-right font-bold">${formatCurrencyL(it.subtotal)}</td>
               </tr>
@@ -1873,13 +2073,17 @@ export function buildPurchaseInvoiceHtml(
   }
 
   return `
-    <div style="border:1px solid #cbd5e1;border-radius:12px;padding:22px;background:#ffffff;">
-      <div style="height:5px;background:linear-gradient(90deg,#1e1b4b 0%,#4338ca 100%);border-radius:6px;margin-bottom:14px;"></div>
+    <div style="border:${tpl.templateStyle === 'corporate' ? `2px solid ${accentHex}` : '1px solid #cbd5e1'};border-radius:12px;padding:22px;background:#ffffff;">
+      ${
+        tpl.templateStyle !== 'minimal'
+          ? `<div style="height:5px;background:linear-gradient(90deg,#1e1b4b 0%,${accentHex} 100%);border-radius:6px;margin-bottom:14px;"></div>`
+          : ''
+      }
       <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:14px;">
         <div>
           <h1 style="margin:0;font-size:20px;font-weight:900;text-transform:uppercase;">${storeName}</h1>
-          <div style="font-size:12px;font-weight:800;color:#4338ca;">ORDEN DE RECEPCIÓN DE MERCADERÍA Y FACTURA DE COMPRA</div>
-          <div style="font-size:11px;color:#475569;">${[storeSettings.storeRtn ? `RTN: ${storeSettings.storeRtn}` : '', storeSettings.address, storeSettings.phone].filter(Boolean).join(' • ')}</div>
+          <div style="font-size:12px;font-weight:800;color:${accentHex};">${tpl.purchaseDocumentTitle}</div>
+          <div style="font-size:11px;color:#475569;">${[tpl.showStoreRtn && storeSettings.storeRtn ? `RTN: ${storeSettings.storeRtn}` : '', storeSettings.address, storeSettings.phone].filter(Boolean).join(' • ')}</div>
         </div>
         <div style="text-align:right;background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;">
           <div style="font-size:15px;font-weight:900;font-family:monospace;">Factura N° ${invoice.invoiceNumber}</div>
@@ -1890,8 +2094,8 @@ export function buildPurchaseInvoiceHtml(
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11.5px;">
         <div>
           <div><span style="color:#64748b;">Proveedor Comercial:</span> <strong>${invoice.supplierName}</strong></div>
-          <div><span style="color:#64748b;">Bodega Destino de Artículos:</span> <strong style="color:#4338ca;">${invoice.warehouseName || 'Tienda Principal'}</strong></div>
-          <div><span style="color:#64748b;">Recibido en Bodega por:</span> <strong>${invoice.receivedBy || 'Administrador'}</strong></div>
+          <div><span style="color:#64748b;">Bodega Destino de Artículos:</span> <strong style="color:${accentHex};">${invoice.warehouseName || 'Tienda Principal'}</strong></div>
+          ${tpl.showSellerName ? `<div><span style="color:#64748b;">${tpl.issuerLabel || 'Recibido en Bodega por'}:</span> <strong>${invoice.receivedBy || tpl.defaultIssuerName || 'Administrador'}</strong></div>` : ''}
         </div>
         <div style="text-align:right;">
           <div><span style="color:#64748b;">Condición de Pago:</span> <strong>${invoice.paymentCondition === 'credit' ? 'CRÉDITO PROVEEDOR' : 'CONTADO PAGADO'}</strong></div>
@@ -1901,9 +2105,13 @@ export function buildPurchaseInvoiceHtml(
 
       <table style="border:1px solid #cbd5e1;font-size:11px;margin-bottom:14px;">
         <thead>
-          <tr style="background:#1e1b4b;color:#ffffff;">
+          <tr style="${
+            tpl.templateStyle === 'minimal'
+              ? 'background:#f8fafc;color:#0f172a;border-bottom:2px solid #0f172a;'
+              : `background:${accentHex};color:#ffffff;`
+          }">
             <th>#</th>
-            <th>CÓDIGO</th>
+            ${tpl.showItemCode ? `<th>CÓDIGO</th>` : ''}
             <th>ARTÍCULO INGRESADO AL INVENTARIO</th>
             <th class="text-center">CANT.</th>
             <th class="text-right">COSTO UNIT.</th>
@@ -1917,7 +2125,7 @@ export function buildPurchaseInvoiceHtml(
               (it, idx) => `
               <tr style="border-bottom:1px solid #e2e8f0;background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
                 <td>${idx + 1}</td>
-                <td style="font-family:monospace;font-weight:700;">${it.code}</td>
+                ${tpl.showItemCode ? `<td style="font-family:monospace;font-weight:700;">${it.code}</td>` : ''}
                 <td><strong>${it.name}</strong>${it.size ? ` (${it.size})` : ''}${it.category ? ` <span style="color:#64748b;">• ${it.category}</span>` : ''}</td>
                 <td class="text-center font-bold">${it.quantity}</td>
                 <td class="text-right">${formatCurrencyL(it.cost)}</td>
@@ -1932,7 +2140,11 @@ export function buildPurchaseInvoiceHtml(
 
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
         <div style="flex:1;font-size:11px;color:#475569;">
-          <div style="padding:7px 10px;background:#f1f5f9;border-left:3px solid #1e1b4b;font-weight:800;color:#0f172a;margin-bottom:6px;">${amountWords}</div>
+          ${
+            tpl.showAmountInWords
+              ? `<div style="padding:7px 10px;background:#f1f5f9;border-left:3px solid ${accentHex};font-weight:800;color:#0f172a;margin-bottom:6px;">${amountWords}</div>`
+              : ''
+          }
           <strong>Unidades Ingresadas al Stock:</strong> ${invoice.totalItems} unidades (${(invoice.items || []).length} referencias)
           ${invoice.notes ? `<div style="margin-top:6px;"><strong>Observaciones:</strong> ${invoice.notes}</div>` : ''}
         </div>
@@ -1940,17 +2152,21 @@ export function buildPurchaseInvoiceHtml(
           <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>Subtotal Costo:</span><strong>${formatCurrencyL(invoice.subtotal)}</strong></div>
           <div style="display:flex;justify-content:space-between;color:#e11d48;margin-bottom:4px;"><span>Descuento Proveedor:</span><span>-${formatCurrencyL(invoice.discount || 0)}</span></div>
           <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>15% ISV Compra:</span><strong>${formatCurrencyL(invoice.tax || 0)}</strong></div>
-          <div style="display:flex;justify-content:space-between;border-top:2px solid #0f172a;padding-top:6px;font-size:14px;font-weight:900;color:#1e1b4b;">
+          <div style="display:flex;justify-content:space-between;border-top:2px solid #0f172a;padding-top:6px;font-size:14px;font-weight:900;color:${accentHex};">
             <span>TOTAL COMPRA:</span>
             <span>${formatCurrencyL(invoice.total)}</span>
           </div>
         </div>
       </div>
 
-      <div class="signatures">
-        <div class="sig-block"><div class="sig-line"></div><div style="font-size:10px;font-weight:700;">Recibido Conforme Bodega</div></div>
-        <div class="sig-block"><div class="sig-line"></div><div style="font-size:10px;font-weight:700;">Autorizado Administración</div></div>
-      </div>
+      ${
+        tpl.showSignatureLines
+          ? `<div class="signatures">
+              <div class="sig-block"><div class="sig-line"></div><div style="font-size:10px;font-weight:700;">Recibido Conforme Bodega</div></div>
+              <div class="sig-block"><div class="sig-line"></div><div style="font-size:10px;font-weight:700;">Autorizado Administración (${storeName})</div></div>
+            </div>`
+          : ''
+      }
     </div>
   `;
 }
@@ -1960,15 +2176,17 @@ export async function downloadPurchaseInvoicePdf(
   storeSettings: StoreSettings
 ): Promise<void> {
   await preloadStoreLogoForPdf(storeSettings.logoUrl);
+  const tpl = getEffectiveInvoiceTemplate(storeSettings);
+  const accentRgb = hexToRgbTuple(tpl.accentColor, [67, 56, 202]);
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
   const pageWidth = doc.internal.pageSize.getWidth();
 
   let y = drawExecutivePdfHeader(doc, {
     storeSettings,
-    documentTitle: 'FACTURA DE COMPRA / INGRESO',
+    documentTitle: tpl.purchaseDocumentTitle,
     documentNumber: `N° ${invoice.invoiceNumber}`,
     dateLabel: `Fecha Compra: ${invoice.date}`,
-    accentRgb: [67, 56, 202],
+    accentRgb,
     statusBadge:
       invoice.status === 'cancelled'
         ? { text: 'ANULADA', bgRgb: [254, 226, 226], textRgb: [185, 28, 28] }
@@ -1987,12 +2205,18 @@ export async function downloadPurchaseInvoicePdf(
   doc.text(`Proveedor: ${invoice.supplierName}`, 18, y + 6);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
-  doc.setTextColor(67, 56, 202);
+  doc.setTextColor(accentRgb[0], accentRgb[1], accentRgb[2]);
   doc.text(`Bodega Destino: ${invoice.warehouseName || 'Tienda Principal'}`, 18, y + 12);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.2);
   doc.setTextColor(71, 85, 105);
-  doc.text(`Recibido en Inventario por: ${invoice.receivedBy || 'Administrador'}`, 18, y + 17.5);
+  if (tpl.showSellerName) {
+    doc.text(
+      `${tpl.issuerLabel || 'Recibido en Inventario por'}: ${invoice.receivedBy || tpl.defaultIssuerName || 'Administrador'}`,
+      18,
+      y + 17.5
+    );
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
@@ -2027,7 +2251,7 @@ export async function downloadPurchaseInvoicePdf(
     ],
     body: (invoice.items || []).map((it, idx) => [
       String(idx + 1),
-      it.code,
+      tpl.showItemCode ? it.code : '-',
       it.name,
       [it.category, it.size ? `Talla ${it.size}` : ''].filter(Boolean).join(' • ') || 'General',
       String(it.quantity),
@@ -2035,8 +2259,12 @@ export async function downloadPurchaseInvoicePdf(
       formatCurrencyL(it.salePrice || (it as any).price || 0),
       formatCurrencyL(it.subtotal),
     ]),
-    theme: 'grid',
-    headStyles: { fillColor: [30, 27, 75], textColor: 255, fontSize: 8 },
+    theme: tpl.templateStyle === 'minimal' ? 'plain' : 'grid',
+    headStyles: {
+      fillColor: tpl.templateStyle === 'minimal' ? [241, 245, 249] : accentRgb,
+      textColor: tpl.templateStyle === 'minimal' ? [15, 23, 42] : 255,
+      fontSize: 8,
+    },
     bodyStyles: { fontSize: 8 },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
@@ -2051,13 +2279,15 @@ export async function downloadPurchaseInvoicePdf(
   });
 
   const finalY = (doc as any).lastAutoTable.finalY + 6;
-  doc.setFillColor(241, 245, 249);
-  doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(14, finalY, pageWidth - 28 - 72, 10, 1.5, 1.5, 'FD');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.8);
-  doc.setTextColor(15, 23, 42);
-  doc.text(numberToSpanishWords(invoice.total), 17, finalY + 6.3);
+  if (tpl.showAmountInWords) {
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(14, finalY, pageWidth - 28 - 72, 10, 1.5, 1.5, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(numberToSpanishWords(invoice.total), 17, finalY + 6.3);
+  }
 
   const boxW = 68;
   const boxX = pageWidth - 14 - boxW;
@@ -2076,7 +2306,7 @@ export async function downloadPurchaseInvoicePdf(
   );
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10.5);
-  doc.setTextColor(67, 56, 202);
+  doc.setTextColor(accentRgb[0], accentRgb[1], accentRgb[2]);
   doc.text('TOTAL COMPRA:', boxX + 4, finalY + 19.5);
   doc.text(formatCurrencyL(invoice.total), boxX + boxW - 4, finalY + 19.5, { align: 'right' });
 

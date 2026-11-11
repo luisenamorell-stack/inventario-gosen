@@ -2356,25 +2356,39 @@ export const App: React.FC = () => {
     setIsSyncing(true);
     try {
       const userId = userPayload.id || `usr_${Date.now()}`;
-      const normalizedUser: UserAccount = { ...userPayload, id: userId };
+      const normalizedUser: UserAccount = {
+        ...userPayload,
+        id: userId,
+        companyId: activeCompanyId,
+      };
 
       setUsers((prev) => {
-        const idx = prev.findIndex((u) => u.id === userId);
-        const next = idx >= 0 ? prev.map((u, i) => (i === idx ? normalizedUser : u)) : [...prev, normalizedUser];
-        setCachedUsers(next);
+        const idx = prev.findIndex(
+          (u) =>
+            u.id === userId ||
+            u.username.trim().toLowerCase() === normalizedUser.username.trim().toLowerCase()
+        );
+        const next =
+          idx >= 0
+            ? prev.map((u, i) => (i === idx ? normalizedUser : u))
+            : [...prev, normalizedUser];
+        setCachedUsers(next, activeCompanyId);
         return next;
       });
 
-      await saveUserToFirestore(normalizedUser);
+      await saveUserToFirestore(normalizedUser, activeCompanyId);
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Administrador',
-        userRole: 'admin',
-        action: `Guardó colaborador "${userPayload.name}" (@${userPayload.username})`,
-        module: 'users',
-        details: `Permisos: ${userPayload.allowedTabs.join(', ')}`,
-      });
+      logActivityInFirestore(
+        {
+          userName: userSession?.userName || 'Administrador',
+          userRole: 'admin',
+          action: `Guardó colaborador "${userPayload.name}" (@${userPayload.username})`,
+          module: 'users',
+          details: `Permisos: ${userPayload.allowedTabs.join(', ')}`,
+        },
+        activeCompanyId
+      );
     } finally {
       setIsSyncing(false);
     }
@@ -2385,19 +2399,22 @@ export const App: React.FC = () => {
     try {
       setUsers((prev) => {
         const next = prev.filter((u) => u.id !== userId);
-        setCachedUsers(next);
+        setCachedUsers(next, activeCompanyId);
         return next;
       });
 
-      await deleteUserFromFirestore(userId);
+      await deleteUserFromFirestore(userId, activeCompanyId);
       setLastSyncTime(new Date());
 
-      logActivityInFirestore({
-        userName: userSession?.userName || 'Administrador',
-        userRole: 'admin',
-        action: `Eliminó al colaborador con ID ${userId}`,
-        module: 'users',
-      });
+      logActivityInFirestore(
+        {
+          userName: userSession?.userName || 'Administrador',
+          userRole: 'admin',
+          action: `Eliminó al colaborador con ID ${userId}`,
+          module: 'users',
+        },
+        activeCompanyId
+      );
     } finally {
       setIsSyncing(false);
     }

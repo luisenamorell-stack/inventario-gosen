@@ -276,15 +276,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     setIsVerifying(true);
     try {
-      const resolution = await resolveClientLoginAcrossAllTenants({
-        passwordInput: cleanInput,
-        usernameInput: loginMode === 'collaborator' ? usernameInput.trim() : undefined,
-        mode: loginMode === 'collaborator' ? 'collaborator' : 'store_pass',
-        preferredSlug: normalizedSlug,
-        companiesInMemory: companies,
-        usersInMemory: users,
-        activeStoreSettings: storeSettings,
-      });
+      const resolution = await Promise.race([
+        resolveClientLoginAcrossAllTenants({
+          passwordInput: cleanInput,
+          usernameInput: loginMode === 'collaborator' ? usernameInput.trim() : undefined,
+          mode: loginMode === 'collaborator' ? 'collaborator' : 'store_pass',
+          preferredSlug: normalizedSlug,
+          companiesInMemory: companies,
+          usersInMemory: users,
+          activeStoreSettings: storeSettings,
+        }),
+        new Promise<{ matched: false }>((resolve) =>
+          setTimeout(() => resolve({ matched: false }), 4500)
+        ),
+      ]);
 
       if (!resolution.matched || !resolution.companySlug) {
         registerFailedAttempt(
@@ -302,7 +307,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
       const resolvedStoreName =
         resolution.companyName ||
         matchedCompanyObj?.name ||
-        (matchedSlug === 'gosen' ? 'Tienda Gosén' : matchedSlug.toUpperCase());
+        (matchedSlug === 'tiendagyg'
+          ? 'COMERCIAL GYG'
+          : matchedSlug === 'gosen'
+          ? 'Tienda Gosén'
+          : matchedSlug.toUpperCase());
 
       // Check if the matched company is suspended
       if (matchedCompanyObj && matchedCompanyObj.status === 'suspended') {
@@ -332,23 +341,39 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       if (resolution.type === 'collaborator' && resolution.collaborator) {
         const collabUser = resolution.collaborator;
+        const effectiveRole = collabUser.role === 'admin' ? 'admin' : 'collaborator';
         const collabSession: UserSession = {
           userId: collabUser.id,
           companyId: matchedSlug,
           companyName: resolvedStoreName,
           isSuperAdmin: false,
           isStandaloneSaaS: false,
-          userName: collabUser.name,
+          userName: collabUser.name || collabUser.username,
           username: collabUser.username,
-          role: 'collaborator',
+          role: effectiveRole,
           allowedTabs:
             collabUser.allowedTabs && collabUser.allowedTabs.length > 0
               ? collabUser.allowedTabs
+              : effectiveRole === 'admin'
+              ? [
+                  'dashboard',
+                  'inventory',
+                  'warehouses',
+                  'sales',
+                  'purchases',
+                  'audit',
+                  'price-checker',
+                  'suppliers',
+                  'settings',
+                  'catalog',
+                  'users',
+                  'activity',
+                ]
               : ['sales', 'inventory', 'price-checker', 'catalog'],
           salesPermissions: collabUser.salesPermissions || {
             canEditSales: true,
-            canCancelSales: false,
-            canViewCostsAndProfits: false,
+            canCancelSales: effectiveRole === 'admin',
+            canViewCostsAndProfits: effectiveRole === 'admin',
           },
         };
 

@@ -676,6 +676,40 @@ export interface StoreBankAccount {
   isActive?: boolean;
 }
 
+export type InvoiceTemplateStyle = 'classic' | 'modern' | 'minimal' | 'corporate';
+
+export interface InvoiceTemplateConfig {
+  templateStyle?: InvoiceTemplateStyle;
+  accentColor?: string;
+  salesDocumentTitle?: string;
+  creditDocumentTitle?: string;
+  purchaseDocumentTitle?: string;
+  thermalDocumentTitle?: string;
+  headerCustomNote?: string;
+  issuerLabel?: string;
+  defaultIssuerName?: string;
+  caiNumber?: string;
+  caiRange?: string;
+  caiExpiryDate?: string;
+  showLogo?: boolean;
+  showTagline?: boolean;
+  showStoreRtn?: boolean;
+  showCustomerRtn?: boolean;
+  showCustomerPhone?: boolean;
+  showSellerName?: boolean;
+  showItemCode?: boolean;
+  showItemDiscount?: boolean;
+  showAmountInWords?: boolean;
+  showQrCode?: boolean;
+  showBankAccounts?: boolean;
+  showSignatureLines?: boolean;
+  signatureLeftLabel?: string;
+  signatureRightLabel?: string;
+  warrantyTitle?: string;
+  warrantyPolicyText?: string;
+  footerThankYouTitle?: string;
+}
+
 export interface StoreSettings {
   companyId?: string;
   storeName: string;
@@ -686,6 +720,7 @@ export interface StoreSettings {
   storeRtn?: string;
   defaultPrinterFormat?: PrinterPaperFormat;
   receiptFooterText?: string;
+  invoiceTemplate?: InvoiceTemplateConfig;
   accessPassword?: string;
   whatsappOrderPhone?: string;
   catalogWelcomeMsg?: string;
@@ -702,9 +737,137 @@ export interface StoreSettings {
   updatedAt?: number;
 }
 
+export function getDefaultInvoiceTemplate(
+  storeSettings?: StoreSettings | null
+): Required<InvoiceTemplateConfig> {
+  const defaultAccent = storeSettings?.catalogAccentColor?.trim() || '#047857';
+  return {
+    templateStyle: 'classic',
+    accentColor: defaultAccent,
+    salesDocumentTitle: 'FACTURA COMERCIAL DE VENTA',
+    creditDocumentTitle: 'FACTURA AL CRÉDITO',
+    purchaseDocumentTitle: 'ORDEN DE RECEPCIÓN Y FACTURA DE COMPRA',
+    thermalDocumentTitle: 'FACTURA / TICKET',
+    headerCustomNote: '',
+    issuerLabel: 'Atendido por',
+    defaultIssuerName: '',
+    caiNumber: '',
+    caiRange: '',
+    caiExpiryDate: '',
+    showLogo: true,
+    showTagline: true,
+    showStoreRtn: true,
+    showCustomerRtn: true,
+    showCustomerPhone: true,
+    showSellerName: true,
+    showItemCode: true,
+    showItemDiscount: true,
+    showAmountInWords: true,
+    showQrCode: true,
+    showBankAccounts: false,
+    showSignatureLines: true,
+    signatureLeftLabel: 'Firma y Sello Autorizado',
+    signatureRightLabel: 'Firma Recibido Conforme Cliente',
+    warrantyTitle: 'CONDICIONES Y GARANTÍA',
+    warrantyPolicyText: '',
+    footerThankYouTitle: '¡GRACIAS POR SU COMPRA!',
+  };
+}
+
+export function getEffectiveInvoiceTemplate(
+  storeSettings?: StoreSettings | null
+): Required<InvoiceTemplateConfig> {
+  const defaults = getDefaultInvoiceTemplate(storeSettings);
+  const raw = storeSettings?.invoiceTemplate || {};
+
+  return {
+    templateStyle:
+      raw.templateStyle === 'modern' ||
+      raw.templateStyle === 'minimal' ||
+      raw.templateStyle === 'corporate' ||
+      raw.templateStyle === 'classic'
+        ? raw.templateStyle
+        : defaults.templateStyle,
+    accentColor: raw.accentColor?.trim() || defaults.accentColor,
+    salesDocumentTitle:
+      raw.salesDocumentTitle !== undefined
+        ? raw.salesDocumentTitle
+        : defaults.salesDocumentTitle,
+    creditDocumentTitle:
+      raw.creditDocumentTitle !== undefined
+        ? raw.creditDocumentTitle
+        : defaults.creditDocumentTitle,
+    purchaseDocumentTitle:
+      raw.purchaseDocumentTitle !== undefined
+        ? raw.purchaseDocumentTitle
+        : defaults.purchaseDocumentTitle,
+    thermalDocumentTitle:
+      raw.thermalDocumentTitle !== undefined
+        ? raw.thermalDocumentTitle
+        : defaults.thermalDocumentTitle,
+    headerCustomNote:
+      raw.headerCustomNote !== undefined ? raw.headerCustomNote : defaults.headerCustomNote,
+    issuerLabel: raw.issuerLabel !== undefined ? raw.issuerLabel : defaults.issuerLabel,
+    defaultIssuerName:
+      raw.defaultIssuerName !== undefined ? raw.defaultIssuerName : defaults.defaultIssuerName,
+    caiNumber: raw.caiNumber !== undefined ? raw.caiNumber : defaults.caiNumber,
+    caiRange: raw.caiRange !== undefined ? raw.caiRange : defaults.caiRange,
+    caiExpiryDate:
+      raw.caiExpiryDate !== undefined ? raw.caiExpiryDate : defaults.caiExpiryDate,
+    showLogo: raw.showLogo !== undefined ? Boolean(raw.showLogo) : defaults.showLogo,
+    showTagline: raw.showTagline !== undefined ? Boolean(raw.showTagline) : defaults.showTagline,
+    showStoreRtn:
+      raw.showStoreRtn !== undefined ? Boolean(raw.showStoreRtn) : defaults.showStoreRtn,
+    showCustomerRtn:
+      raw.showCustomerRtn !== undefined ? Boolean(raw.showCustomerRtn) : defaults.showCustomerRtn,
+    showCustomerPhone:
+      raw.showCustomerPhone !== undefined
+        ? Boolean(raw.showCustomerPhone)
+        : defaults.showCustomerPhone,
+    showSellerName:
+      raw.showSellerName !== undefined ? Boolean(raw.showSellerName) : defaults.showSellerName,
+    showItemCode:
+      raw.showItemCode !== undefined ? Boolean(raw.showItemCode) : defaults.showItemCode,
+    showItemDiscount:
+      raw.showItemDiscount !== undefined
+        ? Boolean(raw.showItemDiscount)
+        : defaults.showItemDiscount,
+    showAmountInWords:
+      raw.showAmountInWords !== undefined
+        ? Boolean(raw.showAmountInWords)
+        : defaults.showAmountInWords,
+    showQrCode: raw.showQrCode !== undefined ? Boolean(raw.showQrCode) : defaults.showQrCode,
+    showBankAccounts:
+      raw.showBankAccounts !== undefined
+        ? Boolean(raw.showBankAccounts)
+        : defaults.showBankAccounts,
+    showSignatureLines:
+      raw.showSignatureLines !== undefined
+        ? Boolean(raw.showSignatureLines)
+        : defaults.showSignatureLines,
+    signatureLeftLabel:
+      raw.signatureLeftLabel !== undefined
+        ? raw.signatureLeftLabel
+        : defaults.signatureLeftLabel,
+    signatureRightLabel:
+      raw.signatureRightLabel !== undefined
+        ? raw.signatureRightLabel
+        : defaults.signatureRightLabel,
+    warrantyTitle:
+      raw.warrantyTitle !== undefined ? raw.warrantyTitle : defaults.warrantyTitle,
+    warrantyPolicyText:
+      raw.warrantyPolicyText !== undefined ? raw.warrantyPolicyText : defaults.warrantyPolicyText,
+    footerThankYouTitle:
+      raw.footerThankYouTitle !== undefined
+        ? raw.footerThankYouTitle
+        : defaults.footerThankYouTitle,
+  };
+}
+
 export interface ToastMessage {
   id: string;
   message: string;
   type: 'success' | 'error' | 'warning' | 'info';
 }
+
 

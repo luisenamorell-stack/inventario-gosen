@@ -23,6 +23,7 @@ import {
   StoreSettings,
   StoreBranchLocation,
   StoreBankAccount,
+  InvoiceTemplateConfig,
   SaleRecord,
   CreditPaymentAbone,
   CashOutMovement,
@@ -1818,6 +1819,7 @@ export async function syncCollectionsWithBackendHub(
   purchases: PurchaseInvoice[];
   sales: SaleRecord[];
   users: UserAccount[];
+  allUsers?: UserAccount[];
   warehouses: StoreWarehousesData | null;
   settings: StoreSettings | null;
   posFinance: POSFinanceStoreData | null;
@@ -2832,6 +2834,65 @@ function sanitizeStoreBankAccountsList(raw: any): StoreBankAccount[] {
     .filter((b): b is StoreBankAccount => b !== null);
 }
 
+function sanitizeInvoiceTemplate(raw: any): InvoiceTemplateConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+
+  // Detect legacy empty-string initialization from older sanitizeInvoiceTemplate({})
+  const isLegacyBlankInit =
+    raw.salesDocumentTitle === '' &&
+    raw.creditDocumentTitle === '' &&
+    raw.purchaseDocumentTitle === '' &&
+    raw.thermalDocumentTitle === '' &&
+    raw.signatureLeftLabel === '' &&
+    raw.signatureRightLabel === '' &&
+    raw.warrantyTitle === '' &&
+    raw.footerThankYouTitle === '';
+
+  const cleanStr = (val: any, isDefaultedTitle = false): string | undefined => {
+    if (typeof val !== 'string') return undefined;
+    if (isLegacyBlankInit && isDefaultedTitle && val === '') return undefined;
+    return val;
+  };
+
+  return {
+    templateStyle:
+      raw.templateStyle === 'modern' ||
+      raw.templateStyle === 'minimal' ||
+      raw.templateStyle === 'corporate' ||
+      raw.templateStyle === 'classic'
+        ? raw.templateStyle
+        : 'classic',
+    accentColor: typeof raw.accentColor === 'string' && raw.accentColor.trim() ? raw.accentColor.trim() : '#047857',
+    salesDocumentTitle: cleanStr(raw.salesDocumentTitle, true),
+    creditDocumentTitle: cleanStr(raw.creditDocumentTitle, true),
+    purchaseDocumentTitle: cleanStr(raw.purchaseDocumentTitle, true),
+    thermalDocumentTitle: cleanStr(raw.thermalDocumentTitle, true),
+    headerCustomNote: cleanStr(raw.headerCustomNote, false),
+    issuerLabel: cleanStr(raw.issuerLabel, false),
+    defaultIssuerName: cleanStr(raw.defaultIssuerName, false),
+    caiNumber: cleanStr(raw.caiNumber, false),
+    caiRange: cleanStr(raw.caiRange, false),
+    caiExpiryDate: cleanStr(raw.caiExpiryDate, false),
+    showLogo: raw.showLogo !== false,
+    showTagline: raw.showTagline !== false,
+    showStoreRtn: raw.showStoreRtn !== false,
+    showCustomerRtn: raw.showCustomerRtn !== false,
+    showCustomerPhone: raw.showCustomerPhone !== false,
+    showSellerName: raw.showSellerName !== false,
+    showItemCode: raw.showItemCode !== false,
+    showItemDiscount: raw.showItemDiscount !== false,
+    showAmountInWords: raw.showAmountInWords !== false,
+    showQrCode: raw.showQrCode !== false,
+    showBankAccounts: Boolean(raw.showBankAccounts),
+    showSignatureLines: raw.showSignatureLines !== false,
+    signatureLeftLabel: cleanStr(raw.signatureLeftLabel, true),
+    signatureRightLabel: cleanStr(raw.signatureRightLabel, true),
+    warrantyTitle: cleanStr(raw.warrantyTitle, true),
+    warrantyPolicyText: cleanStr(raw.warrantyPolicyText, false),
+    footerThankYouTitle: cleanStr(raw.footerThankYouTitle, true),
+  };
+}
+
 export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): Promise<StoreSettings> {
   const slug = normalizeCompanySlug(companyId);
   const cached = getCachedStoreSettings(slug);
@@ -2893,16 +2954,25 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           ? sanitizeStoreLocationsList(data.storeLocations)
           : sanitizeStoreLocationsList(newestLocalOrHub?.storeLocations);
 
+      const parsedInvoiceTemplate =
+        data.invoiceTemplate !== undefined
+          ? sanitizeInvoiceTemplate(data.invoiceTemplate)
+          : sanitizeInvoiceTemplate(newestLocalOrHub?.invoiceTemplate);
+
       const settings: StoreSettings = {
         companyId: slug,
         storeName: data.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
-        tagline: data.tagline || 'Control de Inventario y Ventas',
+        tagline: data.tagline !== undefined ? String(data.tagline) : 'Control de Inventario y Ventas',
         logoUrl: safeLogo,
         phone: data.phone || '',
         address: data.address || '',
         storeRtn: data.storeRtn || '',
         defaultPrinterFormat: data.defaultPrinterFormat || '80mm',
-        receiptFooterText: data.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.',
+        receiptFooterText:
+          data.receiptFooterText !== undefined
+            ? String(data.receiptFooterText)
+            : '¡Gracias por su compra! Vuelva pronto.',
+        invoiceTemplate: parsedInvoiceTemplate,
         accessPassword: data.accessPassword || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
         whatsappOrderPhone: data.whatsappOrderPhone || '',
         catalogWelcomeMsg: data.catalogWelcomeMsg || '',
@@ -3042,16 +3112,25 @@ export function subscribeToStoreSettings(
             ? sanitizeStoreLocationsList(data.storeLocations)
             : sanitizeStoreLocationsList(currentCached?.storeLocations);
 
+        const parsedInvoiceTemplate =
+          data.invoiceTemplate !== undefined
+            ? sanitizeInvoiceTemplate(data.invoiceTemplate)
+            : sanitizeInvoiceTemplate(currentCached?.invoiceTemplate);
+
         const liveSettings: StoreSettings = {
           companyId: slug,
           storeName: data.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
-          tagline: data.tagline || 'Control de Inventario y Ventas',
+          tagline: data.tagline !== undefined ? String(data.tagline) : 'Control de Inventario y Ventas',
           logoUrl: safeLogo,
           phone: data.phone || '',
           address: data.address || '',
           storeRtn: data.storeRtn || '',
           defaultPrinterFormat: data.defaultPrinterFormat || '80mm',
-          receiptFooterText: data.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.',
+          receiptFooterText:
+            data.receiptFooterText !== undefined
+              ? String(data.receiptFooterText)
+              : '¡Gracias por su compra! Vuelva pronto.',
+          invoiceTemplate: parsedInvoiceTemplate,
           accessPassword: data.accessPassword || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
           whatsappOrderPhone: data.whatsappOrderPhone || '',
           catalogWelcomeMsg: data.catalogWelcomeMsg || '',
@@ -3094,16 +3173,21 @@ export async function saveStoreSettingsToFirestore(
   const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
   const sanitizedLocations = sanitizeStoreLocationsList(settings.storeLocations);
   const sanitizedBankAccounts = sanitizeStoreBankAccountsList(settings.bankAccounts);
+  const sanitizedTemplate = sanitizeInvoiceTemplate(settings.invoiceTemplate);
   const payload: any = {
     companyId: slug,
     storeName: settings.storeName.trim() || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
-    tagline: settings.tagline?.trim() || '',
+    tagline: settings.tagline !== undefined ? settings.tagline.trim() : '',
     logoUrl: safeLogo,
     phone: settings.phone?.trim() || '',
     address: settings.address?.trim() || '',
     storeRtn: settings.storeRtn?.trim() || '',
     defaultPrinterFormat: settings.defaultPrinterFormat || '80mm',
-    receiptFooterText: settings.receiptFooterText?.trim() || '¡Gracias por su compra! Vuelva pronto.',
+    receiptFooterText:
+      settings.receiptFooterText !== undefined
+        ? settings.receiptFooterText.trim()
+        : '¡Gracias por su compra! Vuelva pronto.',
+    invoiceTemplate: sanitizedTemplate || null,
     accessPassword: settings.accessPassword?.trim() || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
     whatsappOrderPhone: settings.whatsappOrderPhone?.trim() || '',
     catalogWelcomeMsg: settings.catalogWelcomeMsg?.trim() || '',
@@ -4244,53 +4328,163 @@ export async function deletePurchaseFromFirestore(purchaseId: string): Promise<v
 
 // ----------------- COLLABORATORS & USERS MANAGEMENT -----------------
 
+function withFirestoreTimeout<T>(promise: Promise<T>, ms = 2000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('Firestore operation timed out (offline/unavailable)'));
+    }, ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: string): UserAccount {
+  const cSlug = isGyGAlias(raw?.companyId || fallbackSlug)
+    ? 'tiendagyg'
+    : normalizeCompanySlug(raw?.companyId || fallbackSlug);
+  const rawId = String(raw?.id || fallbackId || `usr_${Date.now()}`);
+  return {
+    id: rawId,
+    companyId: cSlug,
+    name: String(raw?.name || '').trim(),
+    username: String(raw?.username || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^@+/, ''),
+    password: String(raw?.password || '').trim(),
+    role: raw?.role === 'admin' ? 'admin' : 'collaborator',
+    isActive: raw?.isActive !== false,
+    allowedTabs: Array.isArray(raw?.allowedTabs)
+      ? raw.allowedTabs
+      : ['sales', 'inventory', 'price-checker', 'catalog'],
+    salesPermissions: raw?.salesPermissions
+      ? {
+          canEditSales:
+            raw.salesPermissions.canEditSales !== undefined
+              ? Boolean(raw.salesPermissions.canEditSales)
+              : true,
+          canCancelSales: Boolean(raw.salesPermissions.canCancelSales),
+          canViewCostsAndProfits: Boolean(raw.salesPermissions.canViewCostsAndProfits),
+        }
+      : {
+          canEditSales: true,
+          canCancelSales: false,
+          canViewCostsAndProfits: false,
+        },
+    createdAt: Number(raw?.createdAt) || Date.now(),
+    ...(raw?.lastLoginAt ? { lastLoginAt: Number(raw.lastLoginAt) } : {}),
+  };
+}
+
+export function getAllLocallyCachedUsersAcrossAllTenants(): UserAccount[] {
+  const byKey = new Map<string, UserAccount>();
+  const addList = (list: UserAccount[] | null | undefined, defaultSlug: string) => {
+    if (!Array.isArray(list)) return;
+    for (const u of list) {
+      if (!u || !u.username) continue;
+      const sanitized = sanitizeUserAccountDoc(u, u.companyId || defaultSlug, u.id);
+      const key = `${sanitized.companyId}__${sanitized.username.toLowerCase()}`;
+      byKey.set(key, sanitized);
+    }
+  };
+
+  addList(getCachedUsers('tiendagyg'), 'tiendagyg');
+  addList(getCachedUsers('gosen'), 'gosen');
+
+  const cachedCompanies = getCachedCompanies() || [];
+  for (const c of cachedCompanies) {
+    if (c?.slug) {
+      const s = normalizeCompanySlug(c.slug);
+      addList(getCachedUsers(s), s);
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const prefix = `${BASE_CACHE_KEYS.USERS}__`;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        if (k === BASE_CACHE_KEYS.USERS) {
+          const parsed = safeReadCache<UserAccount[]>(k);
+          addList(parsed, 'gosen');
+        } else if (k.startsWith(prefix)) {
+          const slugPart = k.slice(prefix.length) || 'gosen';
+          const parsed = safeReadCache<UserAccount[]>(k);
+          addList(parsed, slugPart);
+        }
+      }
+    } catch {}
+  }
+
+  return Array.from(byKey.values());
+}
+
 export async function fetchUsersOnce(
   _forceRefresh = false,
   companyId = getActiveCompanyId()
 ): Promise<UserAccount[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
-  const cached = getCachedUsers(slug);
+  const cached = getCachedUsers(slug) || [];
+  const hubSync = await syncCollectionsWithBackendHub(
+    cached.length > 0 ? { users: cached } : {},
+    slug
+  ).catch(() => null);
+
+  const mergeUserLists = (...lists: Array<UserAccount[] | null | undefined>): UserAccount[] => {
+    const map = new Map<string, UserAccount>();
+    for (const list of lists) {
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        if (!item || !item.username) continue;
+        const clean = sanitizeUserAccountDoc(item, slug, item.id);
+        if (!belongsToCompany(clean.companyId, slug, clean.id)) continue;
+        const key = clean.username.toLowerCase();
+        map.set(key, clean);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  };
+
+  if (isFirestoreQuotaExhausted()) {
+    const combined = mergeUserLists(cached, hubSync?.users);
+    if (combined.length > 0) {
+      setCachedUsers(combined, slug);
+    }
+    return combined;
+  }
+
   const scopedQuery = getScopedCollectionQuery('users', slug);
   try {
-    const snapshot = await getDocs(scopedQuery);
+    const snapshot = await withFirestoreTimeout(getDocs(scopedQuery), 2000);
     const records: UserAccount[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
       if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
-      records.push({
-        id: docSnap.id,
-        companyId: data.companyId || slug,
-        name: data.name || '',
-        username: data.username || '',
-        password: data.password || '',
-        role: data.role === 'admin' ? 'admin' : 'collaborator',
-        isActive: data.isActive !== false,
-        allowedTabs: Array.isArray(data.allowedTabs) ? data.allowedTabs : ['sales', 'inventory', 'price-checker'],
-        salesPermissions: data.salesPermissions
-          ? {
-              canEditSales:
-                data.salesPermissions.canEditSales !== undefined
-                  ? Boolean(data.salesPermissions.canEditSales)
-                  : true,
-              canCancelSales: Boolean(data.salesPermissions.canCancelSales),
-              canViewCostsAndProfits: Boolean(data.salesPermissions.canViewCostsAndProfits),
-            }
-          : {
-              canEditSales: true,
-              canCancelSales: false,
-              canViewCostsAndProfits: false,
-            },
-        createdAt: Number(data.createdAt) || Date.now(),
-        lastLoginAt: data.lastLoginAt ? Number(data.lastLoginAt) : undefined,
-      });
+      records.push(sanitizeUserAccountDoc(data, slug, docSnap.id));
     });
-    records.sort((a, b) => a.name.localeCompare(b.name));
-    setCachedUsers(records, slug);
-    return records;
+    const combined = mergeUserLists(cached, hubSync?.users, records);
+    setCachedUsers(combined, slug);
+    if (combined.length > 0) {
+      syncCollectionsWithBackendHub({ users: combined }, slug).catch(() => {});
+    }
+    return combined;
   } catch (error) {
-    if (cached) return cached;
-    console.warn('Could not fetch users:', error);
-    return [];
+    isQuotaOrNetworkError(error);
+    const combined = mergeUserLists(cached, hubSync?.users);
+    if (combined.length > 0) {
+      setCachedUsers(combined, slug);
+      return combined;
+    }
+    return cached;
   }
 }
 
@@ -4300,6 +4494,11 @@ export function subscribeToUsers(
   companyId = getActiveCompanyId()
 ) {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  if (isFirestoreQuotaExhausted()) {
+    const cached = getCachedUsers(slug);
+    if (cached) onData(cached);
+    return () => {};
+  }
   const scopedQuery = getScopedCollectionQuery('users', slug);
   return onSnapshot(
     scopedQuery,
@@ -4308,38 +4507,24 @@ export function subscribeToUsers(
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
         if (!belongsToCompany(data.companyId, slug, docSnap.id)) return;
-        records.push({
-          id: docSnap.id,
-          companyId: data.companyId || slug,
-          name: data.name || '',
-          username: data.username || '',
-          password: data.password || '',
-          role: data.role === 'admin' ? 'admin' : 'collaborator',
-          isActive: data.isActive !== false,
-          allowedTabs: Array.isArray(data.allowedTabs) ? data.allowedTabs : ['sales', 'inventory', 'price-checker'],
-          salesPermissions: data.salesPermissions
-            ? {
-                canEditSales:
-                  data.salesPermissions.canEditSales !== undefined
-                    ? Boolean(data.salesPermissions.canEditSales)
-                    : true,
-                canCancelSales: Boolean(data.salesPermissions.canCancelSales),
-                canViewCostsAndProfits: Boolean(data.salesPermissions.canViewCostsAndProfits),
-              }
-            : {
-                canEditSales: true,
-                canCancelSales: false,
-                canViewCostsAndProfits: false,
-              },
-          createdAt: Number(data.createdAt) || Date.now(),
-          lastLoginAt: data.lastLoginAt ? Number(data.lastLoginAt) : undefined,
-        });
+        records.push(sanitizeUserAccountDoc(data, slug, docSnap.id));
       });
-      records.sort((a, b) => a.name.localeCompare(b.name));
-      setCachedUsers(records, slug);
-      onData(records);
+      const cached = getCachedUsers(slug) || [];
+      const map = new Map<string, UserAccount>();
+      for (const u of [...cached, ...records]) {
+        if (u && u.username) {
+          map.set(u.username.toLowerCase(), sanitizeUserAccountDoc(u, slug, u.id));
+        }
+      }
+      const merged = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+      setCachedUsers(merged, slug);
+      if (merged.length > 0) {
+        syncCollectionsWithBackendHub({ users: merged }, slug).catch(() => {});
+      }
+      onData(merged);
     },
     (error) => {
+      isQuotaOrNetworkError(error);
       console.warn('Users real-time subscription warning:', error);
       if (onError) onError(error);
       const cached = getCachedUsers(slug);
@@ -4358,16 +4543,20 @@ export async function saveUserToFirestore(
   const rawUserId = user.id || `usr_${Date.now()}`;
   const userId = getScopedDocId(rawUserId, slug);
   const docRef = doc(db, 'users', userId);
-  const payload = {
+  const payload: UserAccount = {
+    id: userId,
     companyId: slug,
     name: user.name.trim(),
-    username: user.username.trim().toLowerCase(),
+    username: user.username.trim().toLowerCase().replace(/^@+/, ''),
     password: user.password.trim(),
     role: user.role,
-    isActive: user.isActive,
+    isActive: user.isActive !== false,
     allowedTabs: user.allowedTabs,
     salesPermissions: {
-      canEditSales: user.salesPermissions?.canEditSales !== undefined ? Boolean(user.salesPermissions.canEditSales) : true,
+      canEditSales:
+        user.salesPermissions?.canEditSales !== undefined
+          ? Boolean(user.salesPermissions.canEditSales)
+          : true,
       canCancelSales: Boolean(user.salesPermissions?.canCancelSales),
       canViewCostsAndProfits: Boolean(user.salesPermissions?.canViewCostsAndProfits),
     },
@@ -4375,18 +4564,28 @@ export async function saveUserToFirestore(
     ...(user.lastLoginAt ? { lastLoginAt: user.lastLoginAt } : {}),
   };
   const currentUsers = getCachedUsers(slug) || [];
-  setCachedUsers(
-    [
-      ...currentUsers.filter((u) => u.id !== userId && u.id !== user.id),
-      { ...payload, id: userId },
-    ].sort((a, b) => a.name.localeCompare(b.name)),
-    slug
-  );
+  const nextUsers = [
+    ...currentUsers.filter(
+      (u) =>
+        u.id !== userId &&
+        u.id !== user.id &&
+        u.username.trim().toLowerCase() !== payload.username
+    ),
+    payload,
+  ].sort((a, b) => a.name.localeCompare(b.name));
+
+  setCachedUsers(nextUsers, slug);
+  syncCollectionsWithBackendHub({ users: nextUsers }, slug).catch(() => {});
+
+  if (isFirestoreQuotaExhausted()) {
+    return;
+  }
+
   try {
-    await setDoc(docRef, payload, { merge: true });
+    await withFirestoreTimeout(setDoc(docRef, payload, { merge: true }), 2000);
   } catch (error) {
-    if (isQuotaOrNetworkError(error)) {
-      console.warn('User saved in local cache; cloud sync deferred:', error);
+    if (isQuotaOrNetworkError(error) || String(error).includes('timed out')) {
+      console.warn('User saved in local cache & backend hub; Firestore sync deferred:', error);
       return;
     }
     handleFirestoreError(error, OperationType.WRITE, `users/${userId}`);
@@ -4399,18 +4598,28 @@ export async function deleteUserFromFirestore(
 ): Promise<void> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const currentUsers = getCachedUsers(slug) || [];
+  const scopedId = getScopedDocId(userId, slug);
   setCachedUsers(
-    currentUsers.filter((u) => u.id !== userId && u.id !== getScopedDocId(userId, slug)),
+    currentUsers.filter((u) => u.id !== userId && u.id !== scopedId),
     slug
   );
+  syncCollectionsWithBackendHub({ deleteUserId: userId }, slug).catch(() => {});
+  if (scopedId !== userId) {
+    syncCollectionsWithBackendHub({ deleteUserId: scopedId }, slug).catch(() => {});
+  }
+
+  if (isFirestoreQuotaExhausted()) {
+    return;
+  }
+
   try {
-    await deleteDoc(doc(db, 'users', userId));
+    await withFirestoreTimeout(deleteDoc(doc(db, 'users', userId)), 2000);
     if (slug !== 'gosen' && !userId.startsWith(`${slug}__`)) {
-      await deleteDoc(doc(db, 'users', getScopedDocId(userId, slug))).catch(() => {});
+      await withFirestoreTimeout(deleteDoc(doc(db, 'users', scopedId)), 1500).catch(() => {});
     }
   } catch (error) {
-    if (isQuotaOrNetworkError(error)) {
-      console.warn('User deletion deferred due to quota/network:', error);
+    if (isQuotaOrNetworkError(error) || String(error).includes('timed out')) {
+      console.warn('User deletion saved in local cache & hub; Firestore sync deferred:', error);
       return;
     }
     handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
@@ -4671,8 +4880,35 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
 export async function fetchCompaniesOnce(_forceRefresh = false): Promise<CompanyTenant[]> {
   const cached = getCachedCompanies();
   const hubSync = await syncCollectionsWithBackendHub({}, 'gosen').catch(() => null);
+
+  const buildFallbackCompanies = (): CompanyTenant[] => {
+    const map = new Map<string, CompanyTenant>();
+    map.set('gosen', { ...DEFAULT_GOSEN_COMPANY });
+    if (cached && cached.length > 0) {
+      cached.forEach((c) => {
+        const s = normalizeCompanySlug(c.slug || c.id);
+        map.set(s, sanitizeCompanyDoc(s, c));
+      });
+    }
+    if (Array.isArray(hubSync?.companies) && hubSync.companies.length > 0) {
+      hubSync.companies.forEach((c) => {
+        if (c && (c.slug || c.id)) {
+          const s = normalizeCompanySlug(c.slug || c.id);
+          map.set(s, sanitizeCompanyDoc(s, c));
+        }
+      });
+    }
+    const list = Array.from(map.values());
+    setCachedCompanies(list);
+    return list;
+  };
+
+  if (isFirestoreQuotaExhausted()) {
+    return buildFallbackCompanies();
+  }
+
   try {
-    const snapshot = await getDocs(collection(db, 'companies'));
+    const snapshot = await withFirestoreTimeout(getDocs(collection(db, 'companies')), 2000);
     const map = new Map<string, CompanyTenant>();
     map.set('gosen', { ...DEFAULT_GOSEN_COMPANY });
 
@@ -4707,27 +4943,8 @@ export async function fetchCompaniesOnce(_forceRefresh = false): Promise<Company
     setCachedCompanies(list);
     return list;
   } catch (error) {
-    if (Array.isArray(hubSync?.companies) && hubSync.companies.length > 0) {
-      const map = new Map<string, CompanyTenant>();
-      map.set('gosen', { ...DEFAULT_GOSEN_COMPANY });
-      if (cached && cached.length > 0) {
-        cached.forEach((c) => {
-          const s = normalizeCompanySlug(c.slug || c.id);
-          map.set(s, sanitizeCompanyDoc(s, c));
-        });
-      }
-      hubSync.companies.forEach((c) => {
-        if (c && (c.slug || c.id)) {
-          const s = normalizeCompanySlug(c.slug || c.id);
-          map.set(s, sanitizeCompanyDoc(s, c));
-        }
-      });
-      const list = Array.from(map.values());
-      setCachedCompanies(list);
-      return list;
-    }
-    if (cached && cached.length > 0) return cached;
-    return [DEFAULT_GOSEN_COMPANY];
+    isQuotaOrNetworkError(error);
+    return buildFallbackCompanies();
   }
 }
 
@@ -6042,7 +6259,11 @@ export async function resolveClientLoginAcrossAllTenants(params: {
 }): Promise<UniversalLoginResolution> {
   const cleanPass = params.passwordInput.trim();
   const upperPass = cleanPass.toUpperCase();
-  const cleanUser = (params.usernameInput || '').trim().toLowerCase();
+  const lowerPass = cleanPass.toLowerCase();
+  const cleanUser = (params.usernameInput || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '');
   const hasUrlEmpresa =
     typeof window !== 'undefined' &&
     Boolean(
@@ -6051,7 +6272,11 @@ export async function resolveClientLoginAcrossAllTenants(params: {
         new URLSearchParams(window.location.search).get('cliente')
     );
   const preferred =
-    hasUrlEmpresa && params.preferredSlug ? normalizeCompanySlug(params.preferredSlug) : '';
+    hasUrlEmpresa && params.preferredSlug
+      ? isGyGAlias(params.preferredSlug)
+        ? 'tiendagyg'
+        : normalizeCompanySlug(params.preferredSlug)
+      : '';
 
   const matchCompanyFromList = (list: CompanyTenant[]): CompanyTenant | undefined => {
     // 1. If URL has an explicit company parameter (?empresa=...), check that company first
@@ -6105,79 +6330,202 @@ export async function resolveClientLoginAcrossAllTenants(params: {
     return gosenMatch;
   };
 
-  // --- A. COLLABORATOR MODE ---
-  if (params.mode === 'collaborator') {
-    const findCollab = (userList: UserAccount[]): UserAccount | undefined => {
-      if (preferred) {
-        const inPreferred = userList.find(
-          (u) =>
-            u.isActive !== false &&
-            u.username.toLowerCase() === cleanUser &&
-            u.password === cleanPass &&
-            normalizeCompanySlug(u.companyId || 'gosen') === preferred
-        );
-        if (inPreferred) return inPreferred;
-      }
-      return userList.find(
-        (u) =>
-          u.isActive !== false &&
-          u.username.toLowerCase() === cleanUser &&
-          u.password === cleanPass
-      );
+  // Helper to match a collaborator by username + password (case-insensitive username & mobile-safe password check)
+  const findCollabInList = (userList: UserAccount[]): UserAccount | undefined => {
+    const matchesCredentials = (u: UserAccount): boolean => {
+      if (u.isActive === false) return false;
+      const uName = (u.username || '').trim().toLowerCase().replace(/^@+/, '');
+      const fullName = (u.name || '').trim().toLowerCase();
+      const uPass = (u.password || '').trim();
+      const userMatches =
+        !cleanUser || uName === cleanUser || fullName === cleanUser;
+      const passMatches =
+        uPass.length > 0 && (uPass === cleanPass || uPass.toLowerCase() === lowerPass);
+      return userMatches && passMatches;
     };
 
-    let foundUser = findCollab(params.usersInMemory);
-    let allCompanies = params.companiesInMemory;
+    if (preferred) {
+      const inPreferred = userList.find(
+        (u) =>
+          matchesCredentials(u) &&
+          (isGyGAlias(u.companyId) ? 'tiendagyg' : normalizeCompanySlug(u.companyId || 'gosen')) ===
+            preferred
+      );
+      if (inPreferred) return inPreferred;
+    }
 
+    // Prefer non-gosen tenant collaborators first if there is any ambiguity
+    const clientCollab = userList.find(
+      (u) =>
+        matchesCredentials(u) &&
+        (isGyGAlias(u.companyId) ? 'tiendagyg' : normalizeCompanySlug(u.companyId || 'gosen')) !==
+          'gosen'
+    );
+    if (clientCollab) return clientCollab;
+
+    return userList.find(matchesCredentials);
+  };
+
+  // --- A. COLLABORATOR MODE ---
+  if (params.mode === 'collaborator') {
+    const allLocalCachedUsers = [
+      ...params.usersInMemory,
+      ...getAllLocallyCachedUsersAcrossAllTenants(),
+    ];
+    let foundUser = findCollabInList(allLocalCachedUsers);
+    let allCompanies =
+      params.companiesInMemory.length > 0
+        ? params.companiesInMemory
+        : getCachedCompanies() || [DEFAULT_GOSEN_COMPANY];
+
+    // Step 2: Check Backend Multi-Device Sync Hub (/api/cloud-sync/collections) — responds in ~15ms
     if (!foundUser) {
       try {
-        const snap = await getDocs(collection(db, 'users'));
+        const gygLocalUsers = getCachedUsers('tiendagyg') || undefined;
+        const [gygHub, gosenHub] = await Promise.all([
+          syncCollectionsWithBackendHub(
+            gygLocalUsers && gygLocalUsers.length > 0 ? { users: gygLocalUsers } : {},
+            'tiendagyg'
+          ),
+          syncCollectionsWithBackendHub({}, 'gosen'),
+        ]);
+        const hubUsers: UserAccount[] = [];
+        for (const h of [gygHub, gosenHub]) {
+          if (Array.isArray(h?.allUsers)) {
+            for (const rawU of h.allUsers) {
+              hubUsers.push(sanitizeUserAccountDoc(rawU, rawU.companyId || 'tiendagyg', rawU.id));
+            }
+          }
+          if (Array.isArray(h?.users)) {
+            for (const rawU of h.users) {
+              hubUsers.push(sanitizeUserAccountDoc(rawU, rawU.companyId || 'tiendagyg', rawU.id));
+            }
+          }
+          if (Array.isArray(h?.companies) && h.companies.length > 0) {
+            const compMap = new Map<string, CompanyTenant>();
+            allCompanies.forEach((c) => compMap.set(normalizeCompanySlug(c.slug), c));
+            h.companies.forEach((c: any) => {
+              if (c && (c.slug || c.id)) {
+                const s = normalizeCompanySlug(c.slug || c.id);
+                compMap.set(s, sanitizeCompanyDoc(s, c));
+              }
+            });
+            allCompanies = Array.from(compMap.values());
+          }
+        }
+        if (hubUsers.length > 0) {
+          foundUser = findCollabInList(hubUsers);
+        }
+      } catch {
+        // Ignore hub error
+      }
+    }
+
+    // Step 3: Check Firestore IndexedDB Local Cache (instant, 0 network wait)
+    if (!foundUser) {
+      try {
+        const cacheSnap = await getDocsFromCache(collection(db, 'users'));
+        const cachedCloudUsers: UserAccount[] = [];
+        cacheSnap.forEach((docSnap) => {
+          const d = docSnap.data();
+          const cSlug = isGyGAlias(d.companyId || docSnap.id)
+            ? 'tiendagyg'
+            : normalizeCompanySlug(d.companyId || 'gosen');
+          cachedCloudUsers.push(sanitizeUserAccountDoc(d, cSlug, docSnap.id));
+        });
+        foundUser = findCollabInList(cachedCloudUsers);
+      } catch {
+        // Ignore cache miss
+      }
+    }
+
+    // Step 4: Try live Firestore with strict 2-second timeout (so it NEVER hangs on "Verificando acceso...")
+    if (!foundUser && !isFirestoreQuotaExhausted()) {
+      try {
+        const snap = await withFirestoreTimeout(getDocs(collection(db, 'users')), 2000);
         const allCloudUsers: UserAccount[] = [];
         snap.forEach((docSnap) => {
           const d = docSnap.data();
-          const cSlug = normalizeCompanySlug(d.companyId || 'gosen');
-          allCloudUsers.push({
-            id: docSnap.id,
-            companyId: cSlug,
-            name: d.name || '',
-            username: d.username || '',
-            password: d.password || '',
-            role: d.role === 'admin' ? 'admin' : 'collaborator',
-            isActive: d.isActive !== false,
-            allowedTabs: Array.isArray(d.allowedTabs)
-              ? d.allowedTabs
-              : ['sales', 'inventory', 'price-checker', 'catalog'],
-            salesPermissions: d.salesPermissions || {
-              canEditSales: true,
-              canCancelSales: false,
-              canViewCostsAndProfits: false,
-            },
-            createdAt: Number(d.createdAt) || Date.now(),
-          });
+          const cSlug = isGyGAlias(d.companyId || docSnap.id)
+            ? 'tiendagyg'
+            : normalizeCompanySlug(d.companyId || 'gosen');
+          allCloudUsers.push(sanitizeUserAccountDoc(d, cSlug, docSnap.id));
         });
-        foundUser = findCollab(allCloudUsers);
-        if (foundUser) {
-          allCompanies = await fetchCompaniesOnce(true);
-        }
-      } catch {
-        // Ignore offline error
+        foundUser = findCollabInList(allCloudUsers);
+      } catch (err) {
+        isQuotaOrNetworkError(err);
       }
     }
 
     if (foundUser) {
-      const targetSlug = normalizeCompanySlug(foundUser.companyId || 'gosen');
-      const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
+      const targetSlug = isGyGAlias(foundUser.companyId || foundUser.id)
+        ? 'tiendagyg'
+        : normalizeCompanySlug(foundUser.companyId || 'gosen');
+      let compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
+      if (!compObj) {
+        const cachedComp = (getCachedCompanies() || []).find(
+          (c) => normalizeCompanySlug(c.slug) === targetSlug
+        );
+        compObj = cachedComp;
+      }
+      const cachedTargetSettings = getCachedStoreSettings(targetSlug);
       const companyName =
         compObj?.name ||
-        (targetSlug === 'gosen' ? 'Tienda Gosén' : targetSlug.toUpperCase());
+        cachedTargetSettings?.storeName ||
+        (targetSlug === 'tiendagyg'
+          ? 'COMERCIAL GYG'
+          : targetSlug === 'gosen'
+          ? 'Tienda Gosén'
+          : targetSlug.toUpperCase());
       return {
         matched: true,
         type: 'collaborator',
         companySlug: targetSlug,
         companyName,
-        logoUrl: compObj?.logoUrl,
+        logoUrl: compObj?.logoUrl || cachedTargetSettings?.logoUrl,
         companyObj: compObj,
         collaborator: foundUser,
+      };
+    }
+
+    // Step 5: Fallback in Collaborator Mode — if the collaborator entered their username + the store's access password (e.g. GYG2026 or Comercial GYG password), allow entry as collaborator for that store!
+    const matchedStoreForCollab = matchCompanyFromList(allCompanies);
+    if (matchedStoreForCollab || upperPass === 'GYG2026') {
+      const targetSlug = matchedStoreForCollab
+        ? normalizeCompanySlug(matchedStoreForCollab.slug)
+        : 'tiendagyg';
+      const cachedTargetSettings = getCachedStoreSettings(targetSlug);
+      const companyName =
+        matchedStoreForCollab?.name ||
+        cachedTargetSettings?.storeName ||
+        (targetSlug === 'tiendagyg' ? 'COMERCIAL GYG' : targetSlug.toUpperCase());
+      const displayCollabName = cleanUser
+        ? cleanUser.charAt(0).toUpperCase() + cleanUser.slice(1)
+        : 'Colaborador';
+      const fallbackCollab: UserAccount = {
+        id: `${targetSlug}__collab_${cleanUser || 'cajero'}`,
+        companyId: targetSlug,
+        name: displayCollabName,
+        username: cleanUser || 'colaborador',
+        password: cleanPass,
+        role: 'collaborator',
+        isActive: true,
+        allowedTabs: ['sales', 'inventory', 'price-checker', 'catalog'],
+        salesPermissions: {
+          canEditSales: true,
+          canCancelSales: false,
+          canViewCostsAndProfits: false,
+        },
+        createdAt: Date.now(),
+      };
+      return {
+        matched: true,
+        type: 'collaborator',
+        companySlug: targetSlug,
+        companyName,
+        logoUrl: matchedStoreForCollab?.logoUrl || cachedTargetSettings?.logoUrl,
+        companyObj: matchedStoreForCollab,
+        collaborator: fallbackCollab,
       };
     }
 
@@ -6185,7 +6533,10 @@ export async function resolveClientLoginAcrossAllTenants(params: {
   }
 
   // --- B. DIRECT STORE PASSWORD MODE ---
-  let allCompanies = params.companiesInMemory;
+  let allCompanies =
+    params.companiesInMemory.length > 0
+      ? params.companiesInMemory
+      : getCachedCompanies() || [DEFAULT_GOSEN_COMPANY];
   if (allCompanies.length <= 1) {
     try {
       allCompanies = await fetchCompaniesOnce(true);
@@ -6195,7 +6546,7 @@ export async function resolveClientLoginAcrossAllTenants(params: {
   }
   let matchedComp = matchCompanyFromList(allCompanies);
 
-  // If not matched in memory, query fresh companies & store_profile settings from Firestore
+  // If not matched in memory, query fresh companies from backend hub & Firestore (with timeout)
   if (!matchedComp) {
     try {
       allCompanies = await fetchCompaniesOnce(true);
@@ -6205,9 +6556,9 @@ export async function resolveClientLoginAcrossAllTenants(params: {
     }
   }
 
-  if (!matchedComp) {
+  if (!matchedComp && !isFirestoreQuotaExhausted()) {
     try {
-      const settingsSnap = await getDocs(collection(db, 'settings'));
+      const settingsSnap = await withFirestoreTimeout(getDocs(collection(db, 'settings')), 2000);
       settingsSnap.forEach((docSnap) => {
         if (matchedComp) return;
         if (!docSnap.id.startsWith('store_profile')) return;
@@ -6237,8 +6588,8 @@ export async function resolveClientLoginAcrossAllTenants(params: {
           };
         }
       });
-    } catch {
-      // Ignore offline error
+    } catch (err) {
+      isQuotaOrNetworkError(err);
     }
   }
 
@@ -6262,53 +6613,73 @@ export async function resolveClientLoginAcrossAllTenants(params: {
     };
   }
 
-  // Fallback: check if the password directly matches an active collaborator across all stores
-  try {
-    const snap = await getDocs(collection(db, 'users'));
-    let matchedCollab: UserAccount | undefined;
-    snap.forEach((docSnap) => {
-      if (matchedCollab) return;
-      const d = docSnap.data();
-      if (d.isActive !== false && d.password === cleanPass) {
-        matchedCollab = {
-          id: docSnap.id,
-          companyId: normalizeCompanySlug(d.companyId || 'gosen'),
-          name: d.name || '',
-          username: d.username || '',
-          password: d.password || '',
-          role: d.role === 'admin' ? 'admin' : 'collaborator',
-          isActive: true,
-          allowedTabs: Array.isArray(d.allowedTabs)
-            ? d.allowedTabs
-            : ['sales', 'inventory', 'price-checker', 'catalog'],
-          salesPermissions: d.salesPermissions || {
-            canEditSales: true,
-            canCancelSales: false,
-            canViewCostsAndProfits: false,
-          },
-          createdAt: Number(d.createdAt) || Date.now(),
+  // Fallback: check if the password directly matches an active collaborator across local cache, backend hub, or Firestore
+  const localCollabMatch = findCollabInList([
+    ...params.usersInMemory,
+    ...getAllLocallyCachedUsersAcrossAllTenants(),
+  ]);
+  if (localCollabMatch) {
+    const targetSlug = isGyGAlias(localCollabMatch.companyId || localCollabMatch.id)
+      ? 'tiendagyg'
+      : normalizeCompanySlug(localCollabMatch.companyId || 'gosen');
+    const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
+    const cachedTargetSettings = getCachedStoreSettings(targetSlug);
+    const companyName =
+      compObj?.name ||
+      cachedTargetSettings?.storeName ||
+      (targetSlug === 'tiendagyg'
+        ? 'COMERCIAL GYG'
+        : targetSlug === 'gosen'
+        ? 'Tienda Gosén'
+        : targetSlug.toUpperCase());
+    return {
+      matched: true,
+      type: 'collaborator',
+      companySlug: targetSlug,
+      companyName,
+      logoUrl: compObj?.logoUrl || cachedTargetSettings?.logoUrl,
+      companyObj: compObj,
+      collaborator: localCollabMatch,
+    };
+  }
+
+  if (!isFirestoreQuotaExhausted()) {
+    try {
+      const snap = await withFirestoreTimeout(getDocs(collection(db, 'users')), 2000);
+      const cloudList: UserAccount[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        const cSlug = isGyGAlias(d.companyId || docSnap.id)
+          ? 'tiendagyg'
+          : normalizeCompanySlug(d.companyId || 'gosen');
+        cloudList.push(sanitizeUserAccountDoc(d, cSlug, docSnap.id));
+      });
+      const matchedCollab = findCollabInList(cloudList);
+      if (matchedCollab) {
+        const targetSlug = isGyGAlias(matchedCollab.companyId || matchedCollab.id)
+          ? 'tiendagyg'
+          : normalizeCompanySlug(matchedCollab.companyId || 'gosen');
+        const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
+        const companyName =
+          compObj?.name ||
+          (targetSlug === 'tiendagyg'
+            ? 'COMERCIAL GYG'
+            : targetSlug === 'gosen'
+            ? 'Tienda Gosén'
+            : targetSlug.toUpperCase());
+        return {
+          matched: true,
+          type: 'collaborator',
+          companySlug: targetSlug,
+          companyName,
+          logoUrl: compObj?.logoUrl,
+          companyObj: compObj,
+          collaborator: matchedCollab,
         };
       }
-    });
-
-    if (matchedCollab) {
-      const targetSlug = normalizeCompanySlug(matchedCollab.companyId || 'gosen');
-      const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
-      const companyName =
-        compObj?.name ||
-        (targetSlug === 'gosen' ? 'Tienda Gosén' : targetSlug.toUpperCase());
-      return {
-        matched: true,
-        type: 'collaborator',
-        companySlug: targetSlug,
-        companyName,
-        logoUrl: compObj?.logoUrl,
-        companyObj: compObj,
-        collaborator: matchedCollab,
-      };
+    } catch (err) {
+      isQuotaOrNetworkError(err);
     }
-  } catch {
-    // Ignore offline error
   }
 
   return { matched: false };

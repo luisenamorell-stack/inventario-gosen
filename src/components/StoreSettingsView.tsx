@@ -1,9 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { StoreSettings, PrinterPaperFormat, StoreBranchLocation, StoreBankAccount } from '../types';
+import {
+  StoreSettings,
+  PrinterPaperFormat,
+  StoreBranchLocation,
+  StoreBankAccount,
+  InvoiceTemplateConfig,
+  getEffectiveInvoiceTemplate,
+} from '../types';
+import { setCachedStoreSettings } from '../firebase/firestoreService';
 import { uploadStoreLogo } from '../firebase/storageService';
 import { PrinterConnectionManager } from './PrintFormatModal';
 import { StoreLocationsEditor } from './StoreLocationsEditor';
 import { StoreBankAccountsEditor, mergeBankAccountsWithPendingDraft } from './StoreBankAccountsEditor';
+import { InvoiceTemplateEditor } from './InvoiceTemplateEditor';
 import { generateMonogramIconDataUrl } from '../utils/dynamicPwaManifest';
 import {
   CATALOG_THEME_PRESETS,
@@ -80,7 +89,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
 
   // Local form state
   const [storeName, setStoreName] = useState(currentSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda'));
-  const [tagline, setTagline] = useState(currentSettings.tagline || '');
+  const [tagline, setTagline] = useState(currentSettings.tagline ?? '');
   const [logoUrl, setLogoUrl] = useState(currentSettings.logoUrl || '');
   const [phone, setPhone] = useState(currentSettings.phone || '');
   const [address, setAddress] = useState(currentSettings.address || '');
@@ -89,7 +98,9 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     currentSettings.defaultPrinterFormat || '80mm'
   );
   const [receiptFooterText, setReceiptFooterText] = useState(
-    currentSettings.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.'
+    currentSettings.receiptFooterText !== undefined
+      ? currentSettings.receiptFooterText
+      : '¡Gracias por su compra! Vuelva pronto.'
   );
   const [accessPassword, setAccessPassword] = useState(currentSettings.accessPassword || defaultPassword);
   const [showAccessPassword, setShowAccessPassword] = useState(false);
@@ -109,6 +120,9 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
   const [catalogHeaderBg, setCatalogHeaderBg] = useState<string>(
     currentSettings.catalogHeaderBg || ''
   );
+  const [invoiceTemplate, setInvoiceTemplate] = useState<InvoiceTemplateConfig>(() =>
+    getEffectiveInvoiceTemplate(currentSettings)
+  );
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -120,38 +134,88 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const lastLoadedCompanyIdRef = useRef<string>(currentSettings.companyId || 'gosen');
 
-  // Sync state if external changes happen
+  // Sync state ONLY when switching active company tenant so background polling never overwrites active user edits
   useEffect(() => {
+    const activeSlug = currentSettings.companyId || 'gosen';
+    if (lastLoadedCompanyIdRef.current === activeSlug) {
+      return;
+    }
+    lastLoadedCompanyIdRef.current = activeSlug;
     setStoreName(currentSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda'));
-    setTagline(currentSettings.tagline || '');
+    setTagline(currentSettings.tagline ?? '');
     setLogoUrl(currentSettings.logoUrl || '');
     setPhone(currentSettings.phone || '');
     setAddress(currentSettings.address || '');
     setStoreRtn(currentSettings.storeRtn || '');
     setDefaultPrinterFormat(currentSettings.defaultPrinterFormat || '80mm');
-    setReceiptFooterText(currentSettings.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.');
+    setReceiptFooterText(
+      currentSettings.receiptFooterText !== undefined
+        ? currentSettings.receiptFooterText
+        : '¡Gracias por su compra! Vuelva pronto.'
+    );
     setAccessPassword(currentSettings.accessPassword || defaultPassword);
     setShowLocationsInCatalog(currentSettings.showLocationsInCatalog !== false);
     setStoreLocations(Array.isArray(currentSettings.storeLocations) ? currentSettings.storeLocations : []);
     setBankAccounts(Array.isArray(currentSettings.bankAccounts) ? currentSettings.bankAccounts : []);
     setCatalogAccentColor(currentSettings.catalogAccentColor || '');
     setCatalogHeaderBg(currentSettings.catalogHeaderBg || '');
+    setInvoiceTemplate(getEffectiveInvoiceTemplate(currentSettings));
   }, [currentSettings, isGosen, defaultPassword]);
+
+  const handleTemplateChange = (nextTemplate: InvoiceTemplateConfig) => {
+    setInvoiceTemplate(nextTemplate);
+    const activeSlug = currentSettings.companyId || 'gosen';
+    setCachedStoreSettings(
+      {
+        ...currentSettings,
+        storeName: storeName.trim() || currentSettings.storeName,
+        tagline: tagline.trim(),
+        logoUrl: logoUrl.trim(),
+        phone: phone.trim(),
+        address: address.trim(),
+        storeRtn: storeRtn.trim(),
+        defaultPrinterFormat,
+        receiptFooterText,
+        invoiceTemplate: nextTemplate,
+        updatedAt: Date.now(),
+      },
+      activeSlug
+    );
+  };
+
+  const handleReceiptFooterChange = (nextFooter: string) => {
+    setReceiptFooterText(nextFooter);
+    const activeSlug = currentSettings.companyId || 'gosen';
+    setCachedStoreSettings(
+      {
+        ...currentSettings,
+        receiptFooterText: nextFooter,
+        invoiceTemplate,
+        updatedAt: Date.now(),
+      },
+      activeSlug
+    );
+  };
 
   const hasUnsavedChanges =
     storeName !== (currentSettings.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda')) ||
-    tagline !== (currentSettings.tagline || '') ||
+    tagline !== (currentSettings.tagline ?? '') ||
     logoUrl !== (currentSettings.logoUrl || '') ||
     phone !== (currentSettings.phone || '') ||
     address !== (currentSettings.address || '') ||
     storeRtn !== (currentSettings.storeRtn || '') ||
     defaultPrinterFormat !== (currentSettings.defaultPrinterFormat || '80mm') ||
-    receiptFooterText !== (currentSettings.receiptFooterText || '¡Gracias por su compra! Vuelva pronto.') ||
+    receiptFooterText !==
+      (currentSettings.receiptFooterText !== undefined
+        ? currentSettings.receiptFooterText
+        : '¡Gracias por su compra! Vuelva pronto.') ||
     accessPassword !== (currentSettings.accessPassword || defaultPassword) ||
     showLocationsInCatalog !== (currentSettings.showLocationsInCatalog !== false) ||
     JSON.stringify(storeLocations) !== JSON.stringify(currentSettings.storeLocations || []) ||
     JSON.stringify(bankAccounts) !== JSON.stringify(currentSettings.bankAccounts || []) ||
+    JSON.stringify(invoiceTemplate) !== JSON.stringify(getEffectiveInvoiceTemplate(currentSettings)) ||
     catalogAccentColor !== (currentSettings.catalogAccentColor || '') ||
     catalogHeaderBg !== (currentSettings.catalogHeaderBg || '') ||
     Boolean(pendingBankDraft?.accountNumber?.trim());
@@ -265,6 +329,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
         storeRtn: storeRtn.trim(),
         defaultPrinterFormat,
         receiptFooterText: receiptFooterText.trim(),
+        invoiceTemplate,
         accessPassword: accessPassword.trim(),
         showLocationsInCatalog,
         storeLocations,
@@ -1007,6 +1072,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                       address,
                       storeRtn,
                       receiptFooterText,
+                      invoiceTemplate,
                       defaultPrinterFormat,
                       logoUrl,
                     }}
@@ -1017,6 +1083,48 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Card 3-Template: Diseñador y Editor de Plantilla de Facturas y Tickets */}
+            <InvoiceTemplateEditor
+              storeName={storeName}
+              tagline={tagline}
+              logoUrl={logoUrl}
+              phone={phone}
+              address={address}
+              storeRtn={storeRtn}
+              receiptFooterText={receiptFooterText}
+              onChangeReceiptFooterText={handleReceiptFooterChange}
+              invoiceTemplate={invoiceTemplate}
+              onChangeInvoiceTemplate={handleTemplateChange}
+              bankAccountsCount={bankAccounts.filter((b) => b.isActive !== false).length}
+              onQuickSave={async (nextTemplate, nextFooter) => {
+                setInvoiceTemplate(nextTemplate);
+                setReceiptFooterText(nextFooter);
+                const effectiveBanks = mergeBankAccountsWithPendingDraft(bankAccounts, pendingBankDraft);
+                setBankAccounts(effectiveBanks);
+                setPendingBankDraft(null);
+                await onSaveSettings({
+                  ...currentSettings,
+                  storeName: storeName.trim() || currentSettings.storeName,
+                  tagline: tagline.trim(),
+                  logoUrl: logoUrl.trim(),
+                  phone: phone.trim(),
+                  address: address.trim(),
+                  storeRtn: storeRtn.trim(),
+                  defaultPrinterFormat,
+                  receiptFooterText: nextFooter.trim(),
+                  invoiceTemplate: nextTemplate,
+                  accessPassword: accessPassword.trim() || defaultPassword,
+                  showLocationsInCatalog,
+                  storeLocations,
+                  bankAccounts: effectiveBanks,
+                  catalogAccentColor: catalogAccentColor.trim(),
+                  catalogHeaderBg: catalogHeaderBg.trim(),
+                  updatedAt: Date.now(),
+                });
+              }}
+              showToast={showToast}
+            />
 
             {/* Card 3A: Cuentas Bancarias para Transferencias en el Catálogo Digital */}
             <StoreBankAccountsEditor
@@ -1037,6 +1145,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   storeRtn: storeRtn.trim(),
                   defaultPrinterFormat,
                   receiptFooterText: receiptFooterText.trim(),
+                  invoiceTemplate,
                   accessPassword: accessPassword.trim() || defaultPassword,
                   showLocationsInCatalog,
                   storeLocations,
