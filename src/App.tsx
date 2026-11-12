@@ -16,7 +16,8 @@ import {
   SaaSGlobalConfig,
   POSFinanceStoreData,
   CreditPaymentAbone,
-  StoreWarehousesData
+  StoreWarehousesData,
+  resolveInvoiceIssuerName,
 } from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
@@ -557,6 +558,9 @@ export const App: React.FC = () => {
               accessPassword: compObj?.adminPassword || 'ADMIN2026',
               allowedModules: compObj?.allowedModules || [...ALL_COMPANY_MODULES],
               enableDeliveryDvolada: compObj?.enableDeliveryDvolada ?? false,
+              enableCreditContract: compObj?.enableCreditContract ?? false,
+              enableDigitalSignature:
+                compObj?.enableDigitalSignature ?? compObj?.enableCreditContract ?? false,
             }
       );
     }
@@ -896,6 +900,14 @@ export const App: React.FC = () => {
                 matchedTenant.enableDeliveryDvolada !== undefined
                   ? matchedTenant.enableDeliveryDvolada
                   : settings.enableDeliveryDvolada,
+              enableCreditContract:
+                matchedTenant.enableCreditContract !== undefined
+                  ? matchedTenant.enableCreditContract
+                  : settings.enableCreditContract,
+              enableDigitalSignature:
+                matchedTenant.enableDigitalSignature !== undefined
+                  ? matchedTenant.enableDigitalSignature
+                  : settings.enableDigitalSignature,
               maxProducts: matchedTenant.maxProducts ?? settings.maxProducts ?? 0,
               maxUsers: matchedTenant.maxUsers ?? settings.maxUsers ?? 0,
             }
@@ -966,6 +978,14 @@ export const App: React.FC = () => {
               myTenant.enableDeliveryDvolada !== undefined
                 ? myTenant.enableDeliveryDvolada
                 : prev.enableDeliveryDvolada ?? activeCompanyId === 'gosen',
+            enableCreditContract:
+              myTenant.enableCreditContract !== undefined
+                ? myTenant.enableCreditContract
+                : prev.enableCreditContract,
+            enableDigitalSignature:
+              myTenant.enableDigitalSignature !== undefined
+                ? myTenant.enableDigitalSignature
+                : prev.enableDigitalSignature,
             maxProducts: myTenant.maxProducts ?? prev.maxProducts ?? 0,
             maxUsers: myTenant.maxUsers ?? prev.maxUsers ?? 0,
           };
@@ -1354,6 +1374,14 @@ export const App: React.FC = () => {
             saved.enableDeliveryDvolada !== undefined
               ? saved.enableDeliveryDvolada
               : prev.enableDeliveryDvolada ?? saved.slug === 'gosen',
+          enableCreditContract:
+            saved.enableCreditContract !== undefined
+              ? saved.enableCreditContract
+              : prev.enableCreditContract,
+          enableDigitalSignature:
+            saved.enableDigitalSignature !== undefined
+              ? saved.enableDigitalSignature
+              : prev.enableDigitalSignature,
           maxProducts: saved.maxProducts ?? prev.maxProducts ?? 0,
           maxUsers: saved.maxUsers ?? prev.maxUsers ?? 0,
         }));
@@ -1835,7 +1863,11 @@ export const App: React.FC = () => {
   const handleRecordSale = async (saleData: Omit<SaleRecord, 'id'>) => {
     setIsSyncing(true);
     try {
-      const activeCashier = userSession?.userName || saleData.cashier || 'Administrador';
+      const activeCashier = resolveInvoiceIssuerName(
+        saleData.cashier || userSession?.userName,
+        storeSettings.invoiceTemplate?.defaultIssuerName,
+        userSession?.userName || 'Administrador'
+      );
       const activeCashierRole =
         userSession?.role ||
         saleData.cashierRole ||
@@ -2149,7 +2181,11 @@ export const App: React.FC = () => {
   const handleRecordPurchase = async (purchaseData: Omit<PurchaseInvoice, 'id'>) => {
     setIsSyncing(true);
     try {
-      const activeUser = userSession?.userName || purchaseData.receivedBy || 'Usuario';
+      const activeUser = resolveInvoiceIssuerName(
+        purchaseData.receivedBy || userSession?.userName,
+        storeSettings.invoiceTemplate?.defaultIssuerName,
+        userSession?.userName || 'Usuario'
+      );
       const payload = {
         ...purchaseData,
         receivedBy: activeUser,
@@ -3142,6 +3178,7 @@ export const App: React.FC = () => {
                 onCancelSale={handleCancelSale}
                 onSavePOSFinanceData={handleSavePOSFinanceData}
                 onRecordCreditPayment={handleRecordCreditPayment}
+                onSaveStoreSettings={handleSaveStoreSettings}
                 showToast={showToast}
               />
             )}
@@ -3231,6 +3268,7 @@ export const App: React.FC = () => {
                 onRecordPurchase={handleRecordPurchase}
                 onCancelPurchase={handleCancelPurchase}
                 onSaveSupplier={handleSaveSupplier}
+                onSaveStoreSettings={handleSaveStoreSettings}
                 showToast={showToast}
               />
             )}

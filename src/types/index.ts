@@ -10,6 +10,7 @@ export interface Product {
   supplier?: string;
   cost: number;
   price: number;
+  creditPrice?: number;
   discount?: number;
   discountType?: 'fixed' | 'percent';
   discountValue?: number;
@@ -258,6 +259,8 @@ export interface CompanyTenant {
   allowedModules?: ActiveTab[];
   enableDeliveryDvolada?: boolean;
   enableOnlineSales?: boolean;
+  enableCreditContract?: boolean;
+  enableDigitalSignature?: boolean;
   maxProducts?: number; // 0 or undefined = Ilimitado
   maxUsers?: number; // 0 or undefined = Ilimitado
   paymentHistory?: SubscriptionPaymentRecord[];
@@ -368,6 +371,8 @@ export interface SaleItem {
   category?: string;
   size?: string;
   originalPrice?: number;
+  cashPrice?: number;
+  creditPrice?: number;
   unitDiscount?: number;
   price: number;
   cost?: number;
@@ -434,6 +439,36 @@ export interface OnlineCustomerProfile {
   updatedAt: number;
 }
 
+export interface CreditContractData {
+  lessorName: string;
+  customerName: string;
+  customerIdentity: string;
+  customerPhone: string;
+  customerAddress: string;
+  installationAddress: string;
+  articleDescription: string;
+  articleBrand: string;
+  articleModel: string;
+  creditTotalValue: number;
+  downPaymentValue: number;
+  financedBalance: number;
+  numberOfInstallments: number;
+  termMonths: number;
+  installmentValue: number;
+  paymentDayOfMonth: string;
+  firstPaymentDate: string;
+  signLocation: string;
+  signDay: string;
+  signMonth: string;
+  signYear: string;
+  customerSignatureDataUrl?: string;
+  customerSignedAt?: string;
+  lessorSignatureDataUrl?: string;
+  lessorSignedAt?: string;
+  customWarrantyNote?: string;
+  updatedAt?: number;
+}
+
 export interface SaleRecord {
   id: string;
   companyId?: string;
@@ -446,6 +481,7 @@ export interface SaleRecord {
   discount: number;
   tax: number;
   total: number;
+  cashPriceTotal?: number;
   paymentMethod: 'cash' | 'card' | 'transfer' | 'credit' | 'other';
   amountPaid: number;
   change: number;
@@ -453,9 +489,11 @@ export interface SaleRecord {
   creditStatus?: 'pending' | 'paid';
   creditDueDate?: string;
   creditPayments?: CreditPaymentAbone[];
+  creditContract?: CreditContractData;
   customerName?: string;
   customerPhone?: string;
   customerRtn?: string;
+  customerAddress?: string;
   notes?: string;
   status: 'completed' | 'cancelled';
   warehouseId?: string;
@@ -593,7 +631,9 @@ export interface CreditAccountControlMeta {
   nextPaymentDate?: string;
   paymentFrequency?: 'weekly' | 'biweekly' | 'monthly' | 'daily' | 'custom';
   installmentAmount?: number;
+  numberOfInstallments?: number;
   collectionNotes?: string;
+  creditContract?: CreditContractData;
   lastNoticeAt?: number;
   lastNoticeTimestamp?: number;
   lastNoticeDate?: string;
@@ -732,9 +772,45 @@ export interface StoreSettings {
   allowedModules?: ActiveTab[];
   enableDeliveryDvolada?: boolean;
   enableOnlineSales?: boolean;
+  enableCreditContract?: boolean;
+  enableDigitalSignature?: boolean;
   maxProducts?: number;
   maxUsers?: number;
   updatedAt?: number;
+}
+
+export function isStoreCreditContractEnabled(
+  settings?: StoreSettings | null,
+  company?: CompanyTenant | null
+): boolean {
+  if (company?.enableCreditContract !== undefined) {
+    return Boolean(company.enableCreditContract);
+  }
+  if (settings?.enableCreditContract !== undefined) {
+    return Boolean(settings.enableCreditContract);
+  }
+  const slug = String(company?.slug || settings?.companyId || '').toLowerCase().trim();
+  return (
+    slug === 'gosen' ||
+    slug === 'tiendagyg' ||
+    slug === 'comercialgyg' ||
+    slug === 'comercial-gyg' ||
+    slug === 'comercial_gyg' ||
+    slug === 'gyg'
+  );
+}
+
+export function isStoreDigitalSignatureEnabled(
+  settings?: StoreSettings | null,
+  company?: CompanyTenant | null
+): boolean {
+  if (company?.enableDigitalSignature !== undefined) {
+    return Boolean(company.enableDigitalSignature);
+  }
+  if (settings?.enableDigitalSignature !== undefined) {
+    return Boolean(settings.enableDigitalSignature);
+  }
+  return isStoreCreditContractEnabled(settings, company);
 }
 
 export function getDefaultInvoiceTemplate(
@@ -864,10 +940,64 @@ export function getEffectiveInvoiceTemplate(
   };
 }
 
+/**
+ * Detects whether a recorded cashier/issuer string is a generic auto-generated
+ * system administrator label (e.g. "Administrador Gosén", "Administrador", "Admin ...").
+ */
+export function isGenericSystemAdminIssuer(name?: string | null): boolean {
+  const clean = (name || '').trim().toLowerCase();
+  if (!clean) return true;
+  if (
+    clean === 'administrador' ||
+    clean === 'admin' ||
+    clean === 'administrador gosén' ||
+    clean === 'administrador gosen' ||
+    clean === 'administrador saas' ||
+    clean === 'usuario' ||
+    clean === 'cajero' ||
+    clean === 'caja principal' ||
+    clean === 'cajero principal'
+  ) {
+    return true;
+  }
+  if (
+    clean.startsWith('admin ') ||
+    clean.startsWith('administrador ') ||
+    clean.startsWith('administrador —') ||
+    clean.startsWith('administrador -')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Resolves the issuer/cashier name to display and print on invoices & tickets.
+ * When the store has configured `defaultIssuerName` in the Invoice Template Editor,
+ * it takes priority over generic system admin session names like "Administrador Gosén".
+ */
+export function resolveInvoiceIssuerName(
+  recordedCashier?: string | null,
+  templateDefaultIssuer?: string | null,
+  fallback = 'Administrador'
+): string {
+  const tplIssuer = (templateDefaultIssuer || '').trim();
+  const rawCashier = (recordedCashier || '').trim();
+
+  if (tplIssuer && (!rawCashier || isGenericSystemAdminIssuer(rawCashier))) {
+    return tplIssuer;
+  }
+  if (rawCashier) {
+    return rawCashier;
+  }
+  return tplIssuer || fallback;
+}
+
 export interface ToastMessage {
   id: string;
   message: string;
   type: 'success' | 'error' | 'warning' | 'info';
 }
+
 
 

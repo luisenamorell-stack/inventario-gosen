@@ -1520,6 +1520,7 @@ function parseInventorySnapshotDocs(snapshot: any, slug: string, fromServer = tr
       supplier: (data.supplier || '').trim(),
       cost: Number(data.cost) || 0,
       price: Number(data.price) || 0,
+      creditPrice: data.creditPrice !== undefined && Number(data.creditPrice) > 0 ? Number(data.creditPrice) : undefined,
       discount: Math.max(0, Number(data.discount) || 0),
       discountType: data.discountType === 'percent' ? 'percent' : 'fixed',
       discountValue: Math.max(0, Number(data.discountValue) || Number(data.discount) || 0),
@@ -1579,6 +1580,7 @@ export async function flushPendingInventoryToFirestore(
           category: (product.category || 'Otros').trim(),
           cost: Math.max(0, Number(product.cost) || 0),
           price: Math.max(0, Number(product.price) || 0),
+          ...(product.creditPrice !== undefined ? { creditPrice: Math.max(0, Number(product.creditPrice) || 0) } : {}),
           discount: Math.max(0, Number(product.discount) || 0),
           discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
           discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
@@ -2098,6 +2100,7 @@ export async function saveProductToFirestore(
       category: (product.category || 'Otros').trim(),
       cost: Number(product.cost) || 0,
       price: Number(product.price) || 0,
+      ...(product.creditPrice !== undefined ? { creditPrice: Math.max(0, Number(product.creditPrice) || 0) } : {}),
       discount: Math.max(0, Number(product.discount) || 0),
       discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
       discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
@@ -2312,6 +2315,7 @@ export async function bulkSaveProductsToFirestore(
           category: (product.category || 'General').trim(),
           cost: Math.max(0, Number(product.cost) || 0),
           price: Math.max(0, Number(product.price) || 0),
+          ...(product.creditPrice !== undefined ? { creditPrice: Math.max(0, Number(product.creditPrice) || 0) } : {}),
           discount: Math.max(0, Number(product.discount) || 0),
           discountType: product.discountType === 'percent' ? 'percent' : 'fixed',
           discountValue: Math.max(0, Number(product.discountValue) || Number(product.discount) || 0),
@@ -2748,6 +2752,8 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   accessPassword: 'GOSEN2026',
   allowedModules: ALL_COMPANY_MODULES,
   enableDeliveryDvolada: true,
+  enableCreditContract: true,
+  enableDigitalSignature: true,
   maxProducts: 0,
   maxUsers: 0,
 };
@@ -2759,6 +2765,14 @@ export function getDefaultStoreSettingsForCompany(companyId = getActiveCompanyId
   }
   const cachedComps = getCachedCompanies() || [];
   const comp = cachedComps.find((c) => normalizeCompanySlug(c.slug) === slug);
+  const defaultCreditContract =
+    comp?.enableCreditContract !== undefined
+      ? Boolean(comp.enableCreditContract)
+      : isGyGAlias(slug);
+  const defaultDigitalSignature =
+    comp?.enableDigitalSignature !== undefined
+      ? Boolean(comp.enableDigitalSignature)
+      : defaultCreditContract;
   return {
     companyId: slug,
     storeName: comp?.name || slug.toUpperCase(),
@@ -2774,6 +2788,8 @@ export function getDefaultStoreSettingsForCompany(companyId = getActiveCompanyId
         ? comp!.allowedModules
         : ALL_COMPANY_MODULES,
     enableDeliveryDvolada: Boolean(comp?.enableDeliveryDvolada === true),
+    enableCreditContract: defaultCreditContract,
+    enableDigitalSignature: defaultDigitalSignature,
     maxProducts: Math.max(0, Number(comp?.maxProducts) || 0),
     maxUsers: Math.max(0, Number(comp?.maxUsers) || 0),
   };
@@ -2987,6 +3003,16 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
             ? Boolean(data.enableDeliveryDvolada)
             : slug === 'gosen',
         enableOnlineSales: isOnlineSalesEnabled,
+        enableCreditContract:
+          data.enableCreditContract !== undefined
+            ? Boolean(data.enableCreditContract)
+            : slug === 'gosen' || isGyGAlias(slug),
+        enableDigitalSignature:
+          data.enableDigitalSignature !== undefined
+            ? Boolean(data.enableDigitalSignature)
+            : data.enableCreditContract !== undefined
+            ? Boolean(data.enableCreditContract)
+            : slug === 'gosen' || isGyGAlias(slug),
         maxProducts: Math.max(0, Number(data.maxProducts) || 0),
         maxUsers: Math.max(0, Number(data.maxUsers) || 0),
         updatedAt: snapTs || Date.now(),
@@ -3041,6 +3067,16 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           allowedModules: effectiveAllowedModules,
           enableDeliveryDvolada: Boolean(cData.enableDeliveryDvolada === true),
           enableOnlineSales: isOnlineSalesEnabled,
+          enableCreditContract:
+            cData.enableCreditContract !== undefined
+              ? Boolean(cData.enableCreditContract)
+              : isGyGAlias(slug),
+          enableDigitalSignature:
+            cData.enableDigitalSignature !== undefined
+              ? Boolean(cData.enableDigitalSignature)
+              : cData.enableCreditContract !== undefined
+              ? Boolean(cData.enableCreditContract)
+              : isGyGAlias(slug),
           maxProducts: Math.max(0, Number(cData.maxProducts) || 0),
           maxUsers: Math.max(0, Number(cData.maxUsers) || 0),
           updatedAt: Date.now(),
@@ -3145,6 +3181,16 @@ export function subscribeToStoreSettings(
               ? Boolean(data.enableDeliveryDvolada)
               : slug === 'gosen',
           enableOnlineSales: isOnlineSalesEnabled,
+          enableCreditContract:
+            data.enableCreditContract !== undefined
+              ? Boolean(data.enableCreditContract)
+              : slug === 'gosen' || isGyGAlias(slug),
+          enableDigitalSignature:
+            data.enableDigitalSignature !== undefined
+              ? Boolean(data.enableDigitalSignature)
+              : data.enableCreditContract !== undefined
+              ? Boolean(data.enableCreditContract)
+              : slug === 'gosen' || isGyGAlias(slug),
           maxProducts: Math.max(0, Number(data.maxProducts) || 0),
           maxUsers: Math.max(0, Number(data.maxUsers) || 0),
           updatedAt: snapTs || Date.now(),
@@ -3208,6 +3254,12 @@ export async function saveStoreSettingsToFirestore(
   if (settings.enableOnlineSales !== undefined) {
     payload.enableOnlineSales = Boolean(settings.enableOnlineSales);
   }
+  if (settings.enableCreditContract !== undefined) {
+    payload.enableCreditContract = Boolean(settings.enableCreditContract);
+  }
+  if (settings.enableDigitalSignature !== undefined) {
+    payload.enableDigitalSignature = Boolean(settings.enableDigitalSignature);
+  }
   if (settings.maxProducts !== undefined) {
     payload.maxProducts = Math.max(0, Number(settings.maxProducts) || 0);
   }
@@ -3266,6 +3318,8 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
             size: it.size || '',
             originalPrice:
               it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+            cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
+            creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
             unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
             price: Number(it.price) || 0,
             cost: Number(it.cost) || 0,
@@ -3278,6 +3332,7 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
       discount: Number(data.discount) || 0,
       tax: Number(data.tax) || 0,
       total: Number(data.total) || 0,
+      cashPriceTotal: data.cashPriceTotal !== undefined ? Number(data.cashPriceTotal) : undefined,
       paymentMethod: data.paymentMethod || 'cash',
       amountPaid: Number(data.amountPaid) || 0,
       change: Number(data.change) || 0,
@@ -3310,9 +3365,14 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
             notes: cp.notes ? String(cp.notes) : '',
           }))
         : [],
+      creditContract:
+        data.creditContract && typeof data.creditContract === 'object'
+          ? data.creditContract
+          : undefined,
       customerName: data.customerName || 'Consumidor Final',
       customerPhone: data.customerPhone || '',
       customerRtn: data.customerRtn || '',
+      customerAddress: data.customerAddress || '',
       notes: data.notes || '',
       status: data.status === 'cancelled' ? 'cancelled' : 'completed',
       warehouseId: data.warehouseId ? String(data.warehouseId) : undefined,
@@ -3457,6 +3517,8 @@ export async function recordSaleInFirestore(
       category: String(it.category || 'General').trim(),
       size: String(it.size || '').trim(),
       originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+      cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
+      creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
       unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
       price: Number(it.price) || 0,
       cost: Number(it.cost) || 0,
@@ -3468,6 +3530,7 @@ export async function recordSaleInFirestore(
     discount: Number(saleData.discount) || 0,
     tax: Number(saleData.tax) || 0,
     total: totalVal,
+    cashPriceTotal: saleData.cashPriceTotal !== undefined ? Number(saleData.cashPriceTotal) : undefined,
     paymentMethod: String(saleData.paymentMethod || 'cash').slice(0, 50),
     amountPaid: paidVal,
     change: Number(saleData.change) || 0,
@@ -3475,9 +3538,13 @@ export async function recordSaleInFirestore(
     creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
     creditDueDate: String(saleData.creditDueDate || '').trim().slice(0, 50),
     creditPayments: Array.isArray(saleData.creditPayments) ? saleData.creditPayments : [],
+    creditContract: saleData.creditContract ? saleData.creditContract : undefined,
     customerName: String(saleData.customerName || 'Consumidor Final').trim().slice(0, 200),
     customerPhone: String(saleData.customerPhone || '').trim().slice(0, 50),
     customerRtn: String(saleData.customerRtn || '').trim().slice(0, 50),
+    customerAddress: saleData.customerAddress
+      ? String(saleData.customerAddress).trim().slice(0, 300)
+      : undefined,
     notes: String(saleData.notes || '').trim().slice(0, 500),
     status: 'completed',
     warehouseId: saleData.warehouseId ? String(saleData.warehouseId).trim().slice(0, 100) : undefined,
@@ -3698,6 +3765,8 @@ export async function updateSaleInFirestore(
     category: String(it.category || 'General').trim(),
     size: String(it.size || '').trim(),
     originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+    cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
+    creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
     unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
     price: Number(it.price) || 0,
     cost: Number(it.cost) || 0,
@@ -3716,6 +3785,10 @@ export async function updateSaleInFirestore(
     discount: Number(updatedSale.discount) || 0,
     tax: Number(updatedSale.tax) || 0,
     total: totalVal,
+    cashPriceTotal:
+      updatedSale.cashPriceTotal !== undefined
+        ? Number(updatedSale.cashPriceTotal)
+        : originalSale.cashPriceTotal,
     paymentMethod: String(updatedSale.paymentMethod || 'cash').slice(0, 50),
     amountPaid: paidVal,
     change: Math.max(0, Number(updatedSale.change) || 0),
@@ -3723,9 +3796,17 @@ export async function updateSaleInFirestore(
     creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
     creditDueDate: String(updatedSale.creditDueDate || '').trim().slice(0, 50),
     creditPayments: Array.isArray(updatedSale.creditPayments) ? updatedSale.creditPayments : [],
+    creditContract:
+      updatedSale.creditContract !== undefined
+        ? updatedSale.creditContract
+        : originalSale.creditContract,
     customerName: String(updatedSale.customerName || 'Consumidor Final').trim().slice(0, 200),
     customerPhone: String(updatedSale.customerPhone || '').trim().slice(0, 50),
     customerRtn: String(updatedSale.customerRtn || '').trim().slice(0, 50),
+    customerAddress:
+      updatedSale.customerAddress !== undefined
+        ? String(updatedSale.customerAddress).trim().slice(0, 300)
+        : originalSale.customerAddress,
     notes: String(updatedSale.notes || '').trim().slice(0, 500),
     status: updatedSale.status === 'cancelled' ? 'cancelled' : 'completed',
     warehouseId: updatedSale.warehouseId || originalSale.warehouseId || undefined,
@@ -4797,6 +4878,8 @@ export const DEFAULT_GOSEN_COMPANY: CompanyTenant = {
   tagline: 'Control de Inventario y Ventas',
   allowedModules: ALL_COMPANY_MODULES,
   enableDeliveryDvolada: true,
+  enableCreditContract: true,
+  enableDigitalSignature: true,
   maxProducts: 0,
   maxUsers: 0,
   paymentHistory: [],
@@ -4869,6 +4952,16 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
         ? Boolean(data.enableDeliveryDvolada)
         : slug === 'gosen',
     enableOnlineSales: isOnlineSalesEnabled,
+    enableCreditContract:
+      data.enableCreditContract !== undefined
+        ? Boolean(data.enableCreditContract)
+        : slug === 'gosen' || isGyGAlias(slug),
+    enableDigitalSignature:
+      data.enableDigitalSignature !== undefined
+        ? Boolean(data.enableDigitalSignature)
+        : data.enableCreditContract !== undefined
+        ? Boolean(data.enableCreditContract)
+        : slug === 'gosen' || isGyGAlias(slug),
     maxProducts: Math.max(0, Number(data.maxProducts) || 0),
     maxUsers: Math.max(0, Number(data.maxUsers) || 0),
     paymentHistory: parsedHistory,
@@ -5006,6 +5099,14 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     company.enableDeliveryDvolada !== undefined
       ? Boolean(company.enableDeliveryDvolada)
       : slug === 'gosen';
+  const safeEnableCreditContract =
+    company.enableCreditContract !== undefined
+      ? Boolean(company.enableCreditContract)
+      : slug === 'gosen' || isGyGAlias(slug);
+  const safeEnableDigitalSignature =
+    company.enableDigitalSignature !== undefined
+      ? Boolean(company.enableDigitalSignature)
+      : safeEnableCreditContract;
   const safeMaxProducts = Math.max(0, Number(company.maxProducts) || 0);
   const safeMaxUsers = Math.max(0, Number(company.maxUsers) || 0);
   const safePaymentHistory: SubscriptionPaymentRecord[] = Array.isArray(company.paymentHistory)
@@ -5034,6 +5135,8 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     allowedModules: safeAllowedModules,
     enableDeliveryDvolada: safeDeliveryDvolada,
     enableOnlineSales: safeEnableOnlineSales,
+    enableCreditContract: safeEnableCreditContract,
+    enableDigitalSignature: safeEnableDigitalSignature,
     maxProducts: safeMaxProducts,
     maxUsers: safeMaxUsers,
     paymentHistory: safePaymentHistory,
@@ -5066,6 +5169,8 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     allowedModules: normalized.allowedModules,
     enableDeliveryDvolada: normalized.enableDeliveryDvolada,
     enableOnlineSales: normalized.enableOnlineSales,
+    enableCreditContract: normalized.enableCreditContract,
+    enableDigitalSignature: normalized.enableDigitalSignature,
     maxProducts: normalized.maxProducts,
     maxUsers: normalized.maxUsers,
     updatedAt: Date.now(),
@@ -5101,6 +5206,8 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
         allowedModules: normalized.allowedModules,
         enableDeliveryDvolada: normalized.enableDeliveryDvolada,
         enableOnlineSales: normalized.enableOnlineSales,
+        enableCreditContract: normalized.enableCreditContract,
+        enableDigitalSignature: normalized.enableDigitalSignature,
         maxProducts: normalized.maxProducts,
         maxUsers: normalized.maxUsers,
         paymentHistory: normalized.paymentHistory,

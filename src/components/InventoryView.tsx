@@ -177,6 +177,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     supplier: '',
     cost: 0,
     price: 0,
+    creditPrice: 0,
     discountType: 'fixed' as 'fixed' | 'percent',
     discountValue: 0,
     img: '',
@@ -262,6 +263,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       supplier: availableSupplierNames.length > 0 ? availableSupplierNames[0] : '',
       cost: 0,
       price: 0,
+      creditPrice: 0,
       discountType: 'fixed',
       discountValue: 0,
       img: '',
@@ -430,6 +432,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       supplier: (product.supplier || '').trim(),
       cost: product.cost,
       price: product.price,
+      creditPrice: Number(product.creditPrice) || 0,
       discountType: savedType,
       discountValue: savedVal,
       img: product.img || '',
@@ -547,6 +550,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       supplier: formData.supplier.trim(),
       cost: Number(formData.cost) || 0,
       price: Number(formData.price) || 0,
+      creditPrice: Number(formData.creditPrice) > 0 ? Number(formData.creditPrice) : undefined,
       discount: Number(computedFormDiscount.toFixed(2)),
       discountType: formData.discountType,
       discountValue: Math.max(0, Number(formData.discountValue) || 0),
@@ -570,6 +574,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         stock: 0,
         cost: 0,
         price: 0,
+        creditPrice: 0,
         discountValue: 0,
         img: '',
         img2: '',
@@ -1234,8 +1239,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         </div>
                       ) : (
                         <span className="font-bold text-slate-900 text-sm text-emerald-700">
-                          L. {Number(item.price || 0).toFixed(2)}
+                          Contado: L. {Number(item.price || 0).toFixed(2)}
                         </span>
+                      )}
+                      {Number(item.creditPrice) > 0 && (
+                        <div className="text-[10px] font-extrabold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded inline-block mt-0.5">
+                          Crédito: L. {Number(item.creditPrice).toFixed(2)}
+                        </div>
                       )}
                       {(() => {
                         const finalP = Math.max(0, Number(item.price || 0) - Number(item.discount || 0));
@@ -1573,8 +1583,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         ) : (
                           <div>
                             <p className="font-semibold text-slate-800">
-                              V: L {Number(item.price || 0).toFixed(2)}
+                              Contado: L {Number(item.price || 0).toFixed(2)}
                             </p>
+                            {Number(item.creditPrice) > 0 && (
+                              <p className="text-[11px] font-bold text-amber-700">
+                                Crédito: L {Number(item.creditPrice).toFixed(2)}
+                              </p>
+                            )}
                             <button
                               type="button"
                               onClick={() => handleOpenQuickDiscount(item)}
@@ -2386,7 +2401,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
                         <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
                           Costo Unit. (L)
@@ -2405,7 +2420,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                          Precio Venta (L) *
+                          Precio Contado (L) *
                         </label>
                         <input
                           type="number"
@@ -2418,6 +2433,25 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                           }
                           placeholder="0.00"
                           className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-semibold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-amber-800 uppercase tracking-wider mb-1">
+                          Precio al Crédito (L)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={formData.creditPrice || ''}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              creditPrice: parseFloat(e.target.value) || 0,
+                            })
+                          }
+                          placeholder="Opcional (Fiado)"
+                          className="w-full p-2.5 border border-amber-300 bg-amber-50/40 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none text-sm font-bold text-amber-950"
                         />
                       </div>
                     </div>

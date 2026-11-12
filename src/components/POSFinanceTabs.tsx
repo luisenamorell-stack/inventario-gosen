@@ -15,6 +15,8 @@ import {
   LoyaltyCustomerProfile,
   LoyaltyProgramConfig,
   LoyaltyTransactionLog,
+  CreditContractData,
+  isStoreCreditContractEnabled,
 } from '../types';
 import {
   Wallet,
@@ -53,6 +55,7 @@ import {
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { PrintFormatModal } from './PrintFormatModal';
+import { CreditContractModal } from './CreditContractModal';
 import {
   buildShiftArqueoHtml,
   downloadShiftArqueoPdf,
@@ -368,6 +371,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
   // Control de Costo, Alerta de Cobro y Registro de Avisos Modal State
   const [selectedSaleForControl, setSelectedSaleForControl] = useState<SaleRecord | null>(null);
+  const [selectedSaleForContract, setSelectedSaleForContract] = useState<SaleRecord | null>(null);
   const [ctrlCustomCost, setCtrlCustomCost] = useState<string>('');
   const [ctrlNextPaymentDate, setCtrlNextPaymentDate] = useState<string>('');
   const [ctrlFrequency, setCtrlFrequency] = useState<
@@ -3147,6 +3151,16 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       >
                         Abonar
                       </button>
+                      {isStoreCreditContractEnabled(storeSettings) && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSaleForContract(sale)}
+                          className="py-1.5 px-2 rounded-lg bg-amber-50 border border-amber-300 hover:bg-amber-100 text-amber-900 font-bold text-[11px] cursor-pointer"
+                          title="Ver / Imprimir Contrato de Crédito con Reserva de Dominio"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-amber-700" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => openControlModalForSale(sale)}
@@ -3744,6 +3758,18 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
                       <span>Estado Cuenta</span>
                     </button>
+
+                    {isStoreCreditContractEnabled(storeSettings) && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSaleForContract(sale)}
+                        className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
+                        title="Ver, editar, imprimir o enviar el Contrato de Arrendamiento con Reserva de Dominio"
+                      >
+                        <FileText className="w-4 h-4 text-amber-700 shrink-0" />
+                        <span>Contrato de Crédito</span>
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -4364,6 +4390,50 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           onDownloadPdf={() => downloadCreditPortfolioReportPdf(filteredCreditSales, storeSettings)}
           showToast={showToast}
         />
+
+        {/* Modal for Credit Lease Contract with Retention of Title (Contrato de Arrendamiento con Reserva de Dominio) */}
+        {selectedSaleForContract && isStoreCreditContractEnabled(storeSettings) && (
+          <CreditContractModal
+            sale={
+              creditAccountControls[selectedSaleForContract.id]?.creditContract
+                ? {
+                    ...selectedSaleForContract,
+                    creditContract: creditAccountControls[selectedSaleForContract.id].creditContract,
+                  }
+                : selectedSaleForContract
+            }
+            storeSettings={storeSettings}
+            controlMeta={creditAccountControls[selectedSaleForContract.id]}
+            inventory={inventory}
+            onClose={() => setSelectedSaleForContract(null)}
+            onSaveContract={async (updatedContract: CreditContractData) => {
+              const existingMeta: CreditAccountControlMeta =
+                creditAccountControls[selectedSaleForContract.id] || {
+                  saleId: selectedSaleForContract.id,
+                };
+              const nextMeta: CreditAccountControlMeta = {
+                ...existingMeta,
+                saleId: selectedSaleForContract.id,
+                installmentAmount: updatedContract.installmentValue,
+                numberOfInstallments: updatedContract.numberOfInstallments,
+                nextPaymentDate: updatedContract.firstPaymentDate || existingMeta.nextPaymentDate,
+                creditContract: updatedContract,
+              };
+              await onSavePOSFinanceData({
+                ...posFinanceData,
+                creditAccountControls: {
+                  ...creditAccountControls,
+                  [selectedSaleForContract.id]: nextMeta,
+                },
+                updatedAt: Date.now(),
+              });
+              setSelectedSaleForContract((prev) =>
+                prev ? { ...prev, creditContract: updatedContract } : null
+              );
+              showToast('Contrato de Crédito actualizado y guardado en la cuenta.', 'success');
+            }}
+          />
+        )}
       </div>
     );
   }

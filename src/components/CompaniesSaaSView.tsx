@@ -11,6 +11,8 @@ import {
   SaaSDemoRequest,
   OFFICIAL_SAAS_DOMAIN,
   getOfficialAppBaseUrl,
+  isStoreCreditContractEnabled,
+  isStoreDigitalSignatureEnabled,
 } from '../types';
 import {
   normalizeCompanySlug,
@@ -75,6 +77,8 @@ import {
   Zap,
   Calendar,
   Video,
+  PenTool,
+  ScrollText,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
@@ -114,6 +118,8 @@ export const SAAS_PLAN_PRESETS: {
   maxUsers: number;
   modules: ActiveTab[];
   enableDvolada: boolean;
+  enableCreditContract: boolean;
+  enableDigitalSignature: boolean;
   desc: string;
 }[] = [
   {
@@ -126,6 +132,8 @@ export const SAAS_PLAN_PRESETS: {
     maxUsers: 2,
     modules: ['dashboard', 'sales', 'inventory', 'price-checker', 'settings'],
     enableDvolada: false,
+    enableCreditContract: false,
+    enableDigitalSignature: false,
     desc: 'Ideal para negocios pequeños: Inventario + Caja POS (Hasta 250 prod. y 2 colab.)',
   },
   {
@@ -150,6 +158,8 @@ export const SAAS_PLAN_PRESETS: {
       'settings',
     ],
     enableDvolada: false,
+    enableCreditContract: false,
+    enableDigitalSignature: false,
     desc: 'Incluye Ventas Online/Live, Bodegas, Catálogo QR, Compras y Proveedores (Hasta 1,500 prod. y 5 colab.)',
   },
   {
@@ -162,7 +172,9 @@ export const SAAS_PLAN_PRESETS: {
     maxUsers: 0,
     modules: [...ALL_COMPANY_MODULES],
     enableDvolada: true,
-    desc: 'Todos los módulos + Ventas Online/Live + Auditoría Física + Bitácora + D’Volada + Productos/Usuarios ilimitados',
+    enableCreditContract: true,
+    enableDigitalSignature: true,
+    desc: 'Todos los módulos + Contrato de Crédito + Firma Digital en Pantalla + Ventas Online/Live + D’Volada + Ilimitado',
   },
   {
     id: 'prueba15',
@@ -174,6 +186,8 @@ export const SAAS_PLAN_PRESETS: {
     maxUsers: 2,
     modules: [...ALL_COMPANY_MODULES],
     enableDvolada: false,
+    enableCreditContract: false,
+    enableDigitalSignature: false,
     desc: 'Acceso de demostración por 15 días con corte automático al vencer',
   },
 ];
@@ -640,6 +654,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [autoSuspendClient, setAutoSuspendClient] = useState<boolean>(true);
   const [allowedModules, setAllowedModules] = useState<ActiveTab[]>(ALL_COMPANY_MODULES);
   const [enableDeliveryDvolada, setEnableDeliveryDvolada] = useState<boolean>(false);
+  const [enableCreditContract, setEnableCreditContract] = useState<boolean>(false);
+  const [enableDigitalSignature, setEnableDigitalSignature] = useState<boolean>(false);
   const [maxProducts, setMaxProducts] = useState<string>('0'); // 0 = Ilimitado
   const [maxUsers, setMaxUsers] = useState<string>('0'); // 0 = Ilimitado
   const [initialStarterTemplate, setInitialStarterTemplate] = useState<string>('none');
@@ -648,6 +664,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [permissionsCompany, setPermissionsCompany] = useState<CompanyTenant | null>(null);
   const [permModules, setPermModules] = useState<ActiveTab[]>(ALL_COMPANY_MODULES);
   const [permDeliveryDvolada, setPermDeliveryDvolada] = useState<boolean>(false);
+  const [permCreditContract, setPermCreditContract] = useState<boolean>(false);
+  const [permDigitalSignature, setPermDigitalSignature] = useState<boolean>(false);
   const [permMaxProducts, setPermMaxProducts] = useState<string>('0');
   const [permMaxUsers, setPermMaxUsers] = useState<string>('0');
   const [isSavingPerms, setIsSavingPerms] = useState<boolean>(false);
@@ -746,6 +764,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setMaxUsers(String(preset.maxUsers));
     setAllowedModules([...preset.modules]);
     setEnableDeliveryDvolada(preset.enableDvolada);
+    setEnableCreditContract(preset.enableCreditContract);
+    setEnableDigitalSignature(preset.enableDigitalSignature);
     if (preset.plan === 'prueba') {
       const in15Days = new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0];
       setNextBillingDate(in15Days);
@@ -773,6 +793,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setAutoSuspendClient(true);
     setAllowedModules([...ALL_COMPANY_MODULES]);
     setEnableDeliveryDvolada(false);
+    setEnableCreditContract(false);
+    setEnableDigitalSignature(false);
     setMaxProducts('0');
     setMaxUsers('0');
     setInitialStarterTemplate('none');
@@ -808,6 +830,10 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setEnableDeliveryDvolada(
       comp.enableDeliveryDvolada !== undefined ? Boolean(comp.enableDeliveryDvolada) : comp.slug === 'gosen'
     );
+    const hasCreditContract = isStoreCreditContractEnabled(undefined, comp);
+    const hasDigitalSignature = isStoreDigitalSignatureEnabled(undefined, comp);
+    setEnableCreditContract(hasCreditContract);
+    setEnableDigitalSignature(hasDigitalSignature);
     setMaxProducts(String(comp.maxProducts || 0));
     setMaxUsers(String(comp.maxUsers || 0));
     setInitialStarterTemplate('none');
@@ -828,6 +854,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setPermDeliveryDvolada(
       comp.enableDeliveryDvolada !== undefined ? Boolean(comp.enableDeliveryDvolada) : comp.slug === 'gosen'
     );
+    setPermCreditContract(isStoreCreditContractEnabled(undefined, comp));
+    setPermDigitalSignature(isStoreDigitalSignatureEnabled(undefined, comp));
     setPermMaxProducts(String(comp.maxProducts || 0));
     setPermMaxUsers(String(comp.maxUsers || 0));
   };
@@ -873,11 +901,13 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         allowedModules: permModules,
         enableOnlineSales: hasOnlineSales,
         enableDeliveryDvolada: permDeliveryDvolada,
+        enableCreditContract: permCreditContract,
+        enableDigitalSignature: permCreditContract ? permDigitalSignature : false,
         maxProducts: Math.max(0, Number(permMaxProducts) || 0),
         maxUsers: Math.max(0, Number(permMaxUsers) || 0),
       });
       showToast(
-        `✅ Permisos y límites actualizados para "${permissionsCompany.name}"`,
+        `✅ Permisos y funciones actualizados para "${permissionsCompany.name}"`,
         'success'
       );
       setPermissionsCompany(null);
@@ -914,6 +944,48 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       );
     } catch (err: any) {
       showToast('Error al actualizar módulo Ventas Online: ' + (err?.message || 'desconocido'), 'error');
+    }
+  };
+
+  const handleQuickToggleCreditContractForClient = async (comp: CompanyTenant) => {
+    const currentlyActive = isStoreCreditContractEnabled(undefined, comp);
+    const nextState = !currentlyActive;
+    try {
+      await onSaveCompany({
+        ...comp,
+        enableCreditContract: nextState,
+        enableDigitalSignature: nextState
+          ? comp.enableDigitalSignature !== false
+          : false,
+      });
+      showToast(
+        nextState
+          ? `📜 Contrato de Crédito + Firma Digital ACTIVADO para "${comp.name}"`
+          : `⚪ Contrato de Crédito DESACTIVADO para "${comp.name}"`,
+        nextState ? 'success' : 'info'
+      );
+    } catch (err: any) {
+      showToast('Error al actualizar Contrato de Crédito: ' + (err?.message || 'desconocido'), 'error');
+    }
+  };
+
+  const handleQuickToggleDigitalSignatureForClient = async (comp: CompanyTenant) => {
+    const currentlyActive = isStoreDigitalSignatureEnabled(undefined, comp);
+    const nextState = !currentlyActive;
+    try {
+      await onSaveCompany({
+        ...comp,
+        enableCreditContract: nextState ? true : comp.enableCreditContract,
+        enableDigitalSignature: nextState,
+      });
+      showToast(
+        nextState
+          ? `✍️ Firma Digital en Pantalla ACTIVADA para "${comp.name}"`
+          : `⚪ Firma Digital en Pantalla DESACTIVADA para "${comp.name}"`,
+        nextState ? 'success' : 'info'
+      );
+    } catch (err: any) {
+      showToast('Error al actualizar Firma Digital: ' + (err?.message || 'desconocido'), 'error');
     }
   };
 
@@ -1353,6 +1425,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         allowedModules,
         enableOnlineSales: allowedModules.includes('online-sales'),
         enableDeliveryDvolada,
+        enableCreditContract,
+        enableDigitalSignature: enableCreditContract ? enableDigitalSignature : false,
         maxProducts: Math.max(0, Number(maxProducts) || 0),
         maxUsers: Math.max(0, Number(maxUsers) || 0),
         paymentHistory: editingCompany?.paymentHistory || [],
@@ -2477,6 +2551,42 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                           : 'Ventas Online / Live: OFF'}
                       </span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleQuickToggleCreditContractForClient(comp)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 border transition-colors cursor-pointer ${
+                        isStoreCreditContractEnabled(undefined, comp)
+                          ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
+                          : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                      }`}
+                      title="Activar o desactivar con 1 clic el Contrato de Crédito con Reserva de Dominio para este cliente"
+                    >
+                      <ScrollText className="w-3 h-3" />
+                      <span>
+                        {isStoreCreditContractEnabled(undefined, comp)
+                          ? 'Contrato Crédito: ON'
+                          : 'Contrato Crédito: OFF'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleQuickToggleDigitalSignatureForClient(comp)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 border transition-colors cursor-pointer ${
+                        isStoreDigitalSignatureEnabled(undefined, comp)
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200'
+                          : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                      }`}
+                      title="Activar o desactivar con 1 clic la Firma Digital en Pantalla en los Contratos de Crédito para este cliente"
+                    >
+                      <PenTool className="w-3 h-3" />
+                      <span>
+                        {isStoreDigitalSignatureEnabled(undefined, comp)
+                          ? 'Firma Digital Pantalla: ON'
+                          : 'Firma Digital Pantalla: OFF'}
+                      </span>
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
@@ -3284,6 +3394,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                           setPermMaxUsers(String(preset.maxUsers));
                           setPermModules([...preset.modules]);
                           setPermDeliveryDvolada(preset.enableDvolada);
+                          setPermCreditContract(preset.enableCreditContract);
+                          setPermDigitalSignature(preset.enableDigitalSignature);
                         }}
                         className="px-2.5 py-1 rounded-lg bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-extrabold cursor-pointer"
                       >
@@ -3462,6 +3574,88 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                     checked={permDeliveryDvolada}
                     onChange={(e) => setPermDeliveryDvolada(e.target.checked)}
                     className="rounded text-orange-600 focus:ring-orange-500 w-5 h-5 cursor-pointer shrink-0"
+                  />
+                </label>
+
+                <label
+                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
+                    permCreditContract
+                      ? 'bg-amber-50/80 border-amber-300 text-slate-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-500'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                        permCreditContract
+                          ? 'bg-amber-500 text-white'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <ScrollText className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="font-black text-xs text-slate-900">
+                        Contrato de Crédito con Reserva de Dominio (Ventas al Crédito y Cuentas por Cobrar)
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Habilita la generación automática del Contrato Legal de Arrendamiento con Reserva de Dominio y Precio al Crédito al facturar fiado.
+                      </p>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={permCreditContract}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setPermCreditContract(checked);
+                      if (checked && !permDigitalSignature) {
+                        setPermDigitalSignature(true);
+                      } else if (!checked) {
+                        setPermDigitalSignature(false);
+                      }
+                    }}
+                    className="rounded text-amber-600 focus:ring-amber-500 w-5 h-5 cursor-pointer shrink-0"
+                  />
+                </label>
+
+                <label
+                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
+                    permDigitalSignature && permCreditContract
+                      ? 'bg-emerald-50/80 border-emerald-300 text-slate-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-500'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                        permDigitalSignature && permCreditContract
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <PenTool className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="font-black text-xs text-slate-900">
+                        Firma Digital en Pantalla (Cliente y Arrendador firman en el Celular, Tablet o PC)
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Permite que el cliente firme directamente en la pantalla táctil y estampa su firma digital en el contrato impreso y PDF.
+                      </p>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={permDigitalSignature && permCreditContract}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setPermDigitalSignature(checked);
+                      if (checked) {
+                        setPermCreditContract(true);
+                      }
+                    }}
+                    className="rounded text-emerald-600 focus:ring-emerald-500 w-5 h-5 cursor-pointer shrink-0"
                   />
                 </label>
               </div>
@@ -4470,6 +4664,70 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                   </div>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
                     {enableDeliveryDvolada ? 'Activado' : 'Oculto'}
+                  </span>
+                </label>
+
+                {/* Contrato de Crédito con Reserva de Dominio toggle */}
+                <label
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none text-xs ${
+                    enableCreditContract
+                      ? 'bg-amber-50 border-amber-300 text-amber-950'
+                      : 'bg-white border-slate-200 text-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={enableCreditContract}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setEnableCreditContract(checked);
+                        if (checked && !enableDigitalSignature) {
+                          setEnableDigitalSignature(true);
+                        } else if (!checked) {
+                          setEnableDigitalSignature(false);
+                        }
+                      }}
+                      className="rounded text-amber-600 focus:ring-amber-500 w-3.5 h-3.5 cursor-pointer shrink-0"
+                    />
+                    <ScrollText className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span className="font-bold">
+                      Habilitar Contrato de Crédito con Reserva de Dominio (Ventas Fiadas y Cuentas por Cobrar)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
+                    {enableCreditContract ? 'Activado' : 'Oculto'}
+                  </span>
+                </label>
+
+                {/* Firma Digital en Pantalla toggle */}
+                <label
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none text-xs ${
+                    enableDigitalSignature && enableCreditContract
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                      : 'bg-white border-slate-200 text-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={enableDigitalSignature && enableCreditContract}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setEnableDigitalSignature(checked);
+                        if (checked) {
+                          setEnableCreditContract(true);
+                        }
+                      }}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer shrink-0"
+                    />
+                    <PenTool className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="font-bold">
+                      Habilitar Firma Digital en Pantalla para el Contrato de Crédito (Móvil / Tablet / PC)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
+                    {enableDigitalSignature && enableCreditContract ? 'Activado' : 'Oculto'}
                   </span>
                 </label>
               </div>

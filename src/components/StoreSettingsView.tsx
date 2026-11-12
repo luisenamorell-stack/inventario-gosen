@@ -164,6 +164,47 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
     setInvoiceTemplate(getEffectiveInvoiceTemplate(currentSettings));
   }, [currentSettings, isGosen, defaultPassword]);
 
+  const templateAutoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleTemplateAutoSave = (
+    nextTemplate: InvoiceTemplateConfig,
+    nextFooter: string
+  ) => {
+    if (templateAutoSaveTimerRef.current) {
+      clearTimeout(templateAutoSaveTimerRef.current);
+    }
+    templateAutoSaveTimerRef.current = setTimeout(() => {
+      const effectiveBanks = mergeBankAccountsWithPendingDraft(bankAccounts, pendingBankDraft);
+      onSaveSettings({
+        ...currentSettings,
+        storeName: storeName.trim() || currentSettings.storeName,
+        tagline: tagline.trim(),
+        logoUrl: logoUrl.trim(),
+        phone: phone.trim(),
+        address: address.trim(),
+        storeRtn: storeRtn.trim(),
+        defaultPrinterFormat,
+        receiptFooterText: nextFooter.trim(),
+        invoiceTemplate: nextTemplate,
+        accessPassword: accessPassword.trim() || defaultPassword,
+        showLocationsInCatalog,
+        storeLocations,
+        bankAccounts: effectiveBanks,
+        catalogAccentColor: catalogAccentColor.trim(),
+        catalogHeaderBg: catalogHeaderBg.trim(),
+        updatedAt: Date.now(),
+      }).catch(() => {});
+    }, 450);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (templateAutoSaveTimerRef.current) {
+        clearTimeout(templateAutoSaveTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleTemplateChange = (nextTemplate: InvoiceTemplateConfig) => {
     setInvoiceTemplate(nextTemplate);
     const activeSlug = currentSettings.companyId || 'gosen';
@@ -183,6 +224,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
       },
       activeSlug
     );
+    scheduleTemplateAutoSave(nextTemplate, receiptFooterText);
   };
 
   const handleReceiptFooterChange = (nextFooter: string) => {
@@ -197,6 +239,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
       },
       activeSlug
     );
+    scheduleTemplateAutoSave(invoiceTemplate, nextFooter);
   };
 
   const hasUnsavedChanges =

@@ -9,6 +9,8 @@ import {
   PrinterPaperFormat,
   InvoiceTemplateConfig,
   getEffectiveInvoiceTemplate,
+  isGenericSystemAdminIssuer,
+  resolveInvoiceIssuerName,
 } from '../types';
 import {
   getDefaultWarehousesForStore,
@@ -72,6 +74,7 @@ interface PurchasesViewProps {
   onRecordPurchase: (purchaseData: Omit<PurchaseInvoice, 'id'>) => Promise<PurchaseInvoice | void>;
   onCancelPurchase: (purchase: PurchaseInvoice) => Promise<void>;
   onSaveSupplier: (supplier: Supplier) => Promise<void>;
+  onSaveStoreSettings?: (settings: StoreSettings) => Promise<void>;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
@@ -84,6 +87,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
   onRecordPurchase,
   onCancelPurchase,
   onSaveSupplier,
+  onSaveStoreSettings,
   showToast,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'history'>('create');
@@ -176,6 +180,9 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
     const activeSlug = storeSettings.companyId || 'gosen';
     if (lastTemplateCompanyRef.current !== activeSlug) {
       lastTemplateCompanyRef.current = activeSlug;
+      setHasCustomReceiverTyped(false);
+    }
+    if (!showInvoiceTemplateModal) {
       setDraftInvoiceTemplate(getEffectiveInvoiceTemplate(storeSettings));
       setDraftReceiptFooterText(
         storeSettings.receiptFooterText !== undefined
@@ -183,10 +190,30 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
           : '¡Gracias por su compra! Vuelva pronto.'
       );
     }
-  }, [storeSettings]);
+  }, [storeSettings, showInvoiceTemplateModal]);
 
   const handleUpdateDraftTemplate = (nextTemplate: InvoiceTemplateConfig) => {
+    const prevDefaultIssuer = (draftInvoiceTemplate.defaultIssuerName || '').trim();
+    const nextDefaultIssuer = (nextTemplate.defaultIssuerName || '').trim();
+
     setDraftInvoiceTemplate(nextTemplate);
+
+    if (nextDefaultIssuer !== prevDefaultIssuer) {
+      setHasCustomReceiverTyped(false);
+      setReceivedByInput(nextDefaultIssuer || 'Administrador');
+      if (
+        selectedInvoiceForModal &&
+        nextDefaultIssuer &&
+        (isGenericSystemAdminIssuer(selectedInvoiceForModal.receivedBy) ||
+          (selectedInvoiceForModal.receivedBy || '').trim() === prevDefaultIssuer)
+      ) {
+        setSelectedInvoiceForModal({
+          ...selectedInvoiceForModal,
+          receivedBy: nextDefaultIssuer,
+        });
+      }
+    }
+
     const activeSlug = storeSettings.companyId || 'gosen';
     setCachedStoreSettings(
       {
@@ -486,10 +513,11 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
         total: invoiceGrandTotal,
         notes: invoiceNotes.trim() || undefined,
         status: 'completed',
-        receivedBy:
-          receivedByInput.trim() ||
-          effectivePurchaseTemplate.defaultIssuerName?.trim() ||
-          'Administrador',
+        receivedBy: resolveInvoiceIssuerName(
+          hasCustomReceiverTyped ? receivedByInput : receivedByInput || undefined,
+          effectivePurchaseTemplate.defaultIssuerName,
+          'Administrador'
+        ),
       };
 
       const result = await onRecordPurchase(purchasePayload);
@@ -1970,11 +1998,11 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
                       </span>
                       <input
                         type="text"
-                        value={
-                          selectedInvoiceForModal.receivedBy ||
-                          effectivePurchaseTemplate.defaultIssuerName ||
+                        value={resolveInvoiceIssuerName(
+                          selectedInvoiceForModal.receivedBy,
+                          effectivePurchaseTemplate.defaultIssuerName,
                           'Administrador'
-                        }
+                        )}
                         onChange={(e) => {
                           setSelectedInvoiceForModal({
                             ...selectedInvoiceForModal,
@@ -2439,16 +2467,34 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
               onQuickSave={async (nextTemplate, nextFooter) => {
                 handleUpdateDraftTemplate(nextTemplate);
                 handleUpdateDraftFooter(nextFooter);
-                await saveStoreSettingsToFirestore({
+                const nextSettings: StoreSettings = {
                   ...storeSettings,
                   invoiceTemplate: nextTemplate,
                   receiptFooterText: nextFooter.trim(),
                   updatedAt: Date.now(),
-                });
+                };
+                if (onSaveStoreSettings) {
+                  await onSaveStoreSettings(nextSettings);
+                } else {
+                  await saveStoreSettingsToFirestore(nextSettings);
+                }
               }}
               showToast={showToast}
               isModal
-              onCloseModal={() => setShowInvoiceTemplateModal(false)}
+              onCloseModal={() => {
+                setShowInvoiceTemplateModal(false);
+                const nextSettings: StoreSettings = {
+                  ...storeSettings,
+                  invoiceTemplate: draftInvoiceTemplate,
+                  receiptFooterText: draftReceiptFooterText.trim(),
+                  updatedAt: Date.now(),
+                };
+                if (onSaveStoreSettings) {
+                  onSaveStoreSettings(nextSettings).catch(() => {});
+                } else {
+                  saveStoreSettingsToFirestore(nextSettings).catch(() => {});
+                }
+              }}
             />
           </div>
         </div>

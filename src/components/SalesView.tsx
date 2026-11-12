@@ -17,6 +17,10 @@ import {
   LoyaltyTransactionLog,
   InvoiceTemplateConfig,
   getEffectiveInvoiceTemplate,
+  CreditContractData,
+  isStoreCreditContractEnabled,
+  isGenericSystemAdminIssuer,
+  resolveInvoiceIssuerName,
 } from '../types';
 import {
   getProductStockInWarehouse,
@@ -33,6 +37,9 @@ import {
   downloadSalePdf,
   buildSalesReportHtml,
   downloadSalesReportPdf,
+  resolveCreditContractData,
+  buildSaleAndCreditContractCombinedHtml,
+  downloadCreditContractPdf,
 } from '../utils/printPdfService';
 import {
   getBridgeConfig,
@@ -41,6 +48,7 @@ import {
 } from '../utils/universalPrintBridge';
 import { PrintFormatModal, PrinterConnectionManager } from './PrintFormatModal';
 import { InvoiceTemplateEditor } from './InvoiceTemplateEditor';
+import { CreditContractViewAndEditor } from './CreditContractModal';
 import { AdaptiveImage } from './AdaptiveImage';
 import { getProductColors, resolveColorSwatch } from '../utils/productColorUtils';
 import {
@@ -142,6 +150,7 @@ interface SalesViewProps {
   onRecordSale: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
   onUpdateSale?: (originalSale: SaleRecord, updatedSale: SaleRecord) => Promise<void>;
   onCancelSale: (sale: SaleRecord) => Promise<void>;
+  onSaveStoreSettings?: (settings: StoreSettings) => Promise<void>;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
@@ -160,6 +169,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   onRecordSale,
   onUpdateSale,
   onCancelSale,
+  onSaveStoreSettings,
   showToast,
 }) => {
   // Resolve granular Collaborator POS permissions (real-time from users list or session)
@@ -243,6 +253,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return !storeSettings.allowedModules || storeSettings.allowedModules.includes('warehouses');
   }, [storeSettings.allowedModules]);
 
+  const canUseCreditContract = useMemo(() => {
+    return isStoreCreditContractEnabled(storeSettings);
+  }, [storeSettings]);
+
   // Helper to get available stock of a product in the currently selected POS warehouse
   const getPosWarehouseStock = (product: Product | undefined, whIdOverride?: string): number => {
     if (!product) return 0;
@@ -278,6 +292,13 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [customerName, setCustomerName] = useState<string>('Consumidor Final');
   const [customerRtn, setCustomerRtn] = useState<string>('');
   const [customerPhone, setCustomerPhone] = useState<string>('');
+  const [customerAddressPos, setCustomerAddressPos] = useState<string>('');
+  const [creditTotalPriceInput, setCreditTotalPriceInput] = useState<string>('');
+  const [creditInstallmentsCount, setCreditInstallmentsCount] = useState<string>('6');
+  const [creditCustomQuota, setCreditCustomQuota] = useState<string>('');
+  const [creditArticleBrand, setCreditArticleBrand] = useState<string>('');
+  const [creditArticleModel, setCreditArticleModel] = useState<string>('');
+  const [receiptModalTab, setReceiptModalTab] = useState<'both' | 'ticket' | 'contract'>('both');
   const [showInvoiceTemplateModal, setShowInvoiceTemplateModal] = useState<boolean>(false);
   const [draftInvoiceTemplate, setDraftInvoiceTemplate] = useState<InvoiceTemplateConfig>(() =>
     getEffectiveInvoiceTemplate(storeSettings)
@@ -293,6 +314,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
     const activeSlug = storeSettings.companyId || 'gosen';
     if (lastTemplateCompanyRef.current !== activeSlug) {
       lastTemplateCompanyRef.current = activeSlug;
+      setHasCustomIssuerTyped(false);
+    }
+    if (!showInvoiceTemplateModal) {
       setDraftInvoiceTemplate(getEffectiveInvoiceTemplate(storeSettings));
       setDraftReceiptFooterText(
         storeSettings.receiptFooterText !== undefined
@@ -300,10 +324,36 @@ export const SalesView: React.FC<SalesViewProps> = ({
           : '¡Gracias por su compra! Vuelva pronto.'
       );
     }
-  }, [storeSettings]);
+  }, [storeSettings, showInvoiceTemplateModal]);
 
   const handleUpdateDraftTemplate = (nextTemplate: InvoiceTemplateConfig) => {
+    const prevDefaultIssuer = (draftInvoiceTemplate.defaultIssuerName || '').trim();
+    const nextDefaultIssuer = (nextTemplate.defaultIssuerName || '').trim();
+
     setDraftInvoiceTemplate(nextTemplate);
+
+    if (nextDefaultIssuer !== prevDefaultIssuer) {
+      setHasCustomIssuerTyped(false);
+      setInvoiceIssuerName(
+        resolveInvoiceIssuerName(userSession?.userName, nextDefaultIssuer, 'Administrador')
+      );
+      if (
+        completedSale &&
+        nextDefaultIssuer &&
+        (isGenericSystemAdminIssuer(completedSale.cashier) ||
+          (completedSale.cashier || '').trim() === prevDefaultIssuer)
+      ) {
+        const updatedSale: SaleRecord = {
+          ...completedSale,
+          cashier: nextDefaultIssuer,
+        };
+        setCompletedSale(updatedSale);
+        if (onUpdateSale) {
+          onUpdateSale(completedSale, updatedSale).catch(() => {});
+        }
+      }
+    }
+
     const activeSlug = storeSettings.companyId || 'gosen';
     setCachedStoreSettings(
       {
@@ -340,20 +390,23 @@ export const SalesView: React.FC<SalesViewProps> = ({
     [storeSettings, draftInvoiceTemplate, draftReceiptFooterText]
   );
 
-  const [invoiceIssuerName, setInvoiceIssuerName] = useState<string>(
-    () =>
-      getEffectiveInvoiceTemplate(storeSettings).defaultIssuerName?.trim() ||
-      userSession?.userName ||
+  const [invoiceIssuerName, setInvoiceIssuerName] = useState<string>(() =>
+    resolveInvoiceIssuerName(
+      userSession?.userName,
+      getEffectiveInvoiceTemplate(storeSettings).defaultIssuerName,
       'Administrador'
+    )
   );
   const [hasCustomIssuerTyped, setHasCustomIssuerTyped] = useState<boolean>(false);
 
   useEffect(() => {
     if (!hasCustomIssuerTyped) {
       setInvoiceIssuerName(
-        effectiveInvoiceTemplate.defaultIssuerName?.trim() ||
-          userSession?.userName ||
+        resolveInvoiceIssuerName(
+          userSession?.userName,
+          effectiveInvoiceTemplate.defaultIssuerName,
           'Administrador'
+        )
       );
     }
   }, [effectiveInvoiceTemplate.defaultIssuerName, userSession?.userName, hasCustomIssuerTyped]);
@@ -473,10 +526,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
       }
     }
 
-    const displayName =
-      rawCashier ||
-      effectiveInvoiceTemplate.defaultIssuerName?.trim() ||
-      (resolvedRole === 'admin' ? 'Administrador' : 'Colaborador');
+    const displayName = resolveInvoiceIssuerName(
+      rawCashier,
+      effectiveInvoiceTemplate.defaultIssuerName,
+      resolvedRole === 'admin' ? 'Administrador' : 'Colaborador'
+    );
 
     return {
       name: displayName,
@@ -486,12 +540,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
   };
 
   const getFormattedSaleIssuer = (sale: SaleRecord): string => {
-    const raw = (sale.cashier || '').trim() || effectiveInvoiceTemplate.defaultIssuerName?.trim() || '';
-    if (raw) {
-      return raw;
-    }
-    const info = getSaleSellerInfo(sale);
-    return info.name;
+    return resolveInvoiceIssuerName(
+      sale.cashier,
+      effectiveInvoiceTemplate.defaultIssuerName,
+      getSaleSellerInfo(sale).name
+    );
   };
 
   // Cancel & Edit sale dialog state
@@ -720,6 +773,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
             category: product.category,
             size: product.size,
             originalPrice: basePrice,
+            cashPrice: effectiveUnitPrice,
+            creditPrice:
+              product.creditPrice !== undefined && Number(product.creditPrice) > 0
+                ? Number(product.creditPrice)
+                : undefined,
             unitDiscount: assignedUnitDiscount,
             price: effectiveUnitPrice,
             cost: Number(product.cost) || 0,
@@ -786,6 +844,23 @@ export const SalesView: React.FC<SalesViewProps> = ({
         return item;
       })
     );
+  };
+
+  // Update per-unit credit price for a specific item in the cart when selling on credit
+  const updateCartItemCreditPrice = (code: string, rawCreditPrice: number) => {
+    const cleanCredit = Math.max(0, Number(rawCreditPrice) || 0);
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.code === code) {
+          return {
+            ...item,
+            creditPrice: cleanCredit > 0 ? cleanCredit : undefined,
+          };
+        }
+        return item;
+      })
+    );
+    setCreditTotalPriceInput('');
   };
 
   // Remove single item from cart
@@ -865,6 +940,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setCustomerName('Consumidor Final');
     setCustomerRtn('');
     setCustomerPhone('');
+    setCustomerAddressPos('');
+    setCreditTotalPriceInput('');
+    setCreditInstallmentsCount('6');
+    setCreditCustomQuota('');
+    setCreditArticleBrand('');
+    setCreditArticleModel('');
     setSaleNotes('');
     setSelectedLoyaltyCustomerId('');
     setRedeemLoyaltyPoints(false);
@@ -944,9 +1025,37 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return subtotalAfterDiscount + taxAmount;
   }, [subtotalAfterDiscount, taxAmount]);
 
+  // Default Credit Subtotal from per-item creditPrice (if defined in inventory or edited in cart)
+  const defaultCartCreditTotal = useMemo(() => {
+    const rawCreditSub = cart.reduce((sum, it) => {
+      const liveProd = inventory.find((p) => p.code === it.code);
+      const itemCreditUnit =
+        it.creditPrice !== undefined && Number(it.creditPrice) > 0
+          ? Number(it.creditPrice)
+          : liveProd?.creditPrice !== undefined && Number(liveProd.creditPrice) > 0
+          ? Number(liveProd.creditPrice)
+          : it.price;
+      return sum + itemCreditUnit * it.quantity;
+    }, 0);
+    const afterDisc = Math.max(0, rawCreditSub - discountAmount);
+    const withTax = applyTax ? afterDisc * 1.15 : afterDisc;
+    return Number(Math.max(cartTotal, withTax).toFixed(2));
+  }, [cart, inventory, discountAmount, applyTax, cartTotal]);
+
+  // Effective total when selling on credit (uses custom financed price if entered, or defaultCartCreditTotal)
+  const effectiveCreditTotal = useMemo(() => {
+    const parsedManual = parseFloat(creditTotalPriceInput);
+    if (!Number.isNaN(parsedManual) && parsedManual > 0) {
+      return Number(parsedManual.toFixed(2));
+    }
+    return defaultCartCreditTotal;
+  }, [creditTotalPriceInput, defaultCartCreditTotal]);
+
+  const activeCheckoutTotal = paymentMethod === 'credit' ? effectiveCreditTotal : cartTotal;
+
   // Points that will be earned on this sale
   const pointsEarnedOnCurrentCart = useMemo(() => {
-    if (!loyaltyConfig.enabled || cartTotal <= 0) return 0;
+    if (!loyaltyConfig.enabled || activeCheckoutTotal <= 0) return 0;
     const hasRealCustomer =
       Boolean(matchedLoyaltyCustomer) ||
       (customerName.trim() !== '' &&
@@ -954,9 +1063,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
       customerPhone.replace(/\D/g, '').length >= 7;
     if (!hasRealCustomer) return 0;
     return (
-      Math.floor(cartTotal / loyaltyConfig.amountPerPoint) * loyaltyConfig.pointsEarnedPerStep
+      Math.floor(activeCheckoutTotal / loyaltyConfig.amountPerPoint) * loyaltyConfig.pointsEarnedPerStep
     );
-  }, [loyaltyConfig, cartTotal, matchedLoyaltyCustomer, customerName, customerPhone]);
+  }, [loyaltyConfig, activeCheckoutTotal, matchedLoyaltyCustomer, customerName, customerPhone]);
 
   const totalCartItemsCount = useMemo(() => {
     return cart.reduce((sum, it) => sum + it.quantity, 0);
@@ -1027,11 +1136,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
       const saleNumber = `VTA-${now.getFullYear().toString().slice(-2)}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
 
       const isCredit = paymentMethod === 'credit';
+      const finalSaleTotal = isCredit ? effectiveCreditTotal : cartTotal;
       const initialDeposit = isCredit
-        ? Math.min(cartTotal, Math.max(0, parseFloat(creditInitialDeposit) || 0))
+        ? Math.min(finalSaleTotal, Math.max(0, parseFloat(creditInitialDeposit) || 0))
         : 0;
       const computedBalanceDue = isCredit
-        ? Math.max(0, Number((cartTotal - initialDeposit).toFixed(2)))
+        ? Math.max(0, Number((finalSaleTotal - initialDeposit).toFixed(2)))
         : 0;
       const initialPaymentsList: CreditPaymentAbone[] =
         isCredit && initialDeposit > 0
@@ -1061,7 +1171,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
       const ptsRedeemed = isLoyaltyEligible ? loyaltyRedemptionCalc.pointsRedeemed : 0;
       const ptsDiscountLps = isLoyaltyEligible ? loyaltyRedemptionCalc.discountLps : 0;
       const ptsEarned = isLoyaltyEligible
-        ? Math.floor(cartTotal / loyaltyConfig.amountPerPoint) * loyaltyConfig.pointsEarnedPerStep
+        ? Math.floor(finalSaleTotal / loyaltyConfig.amountPerPoint) * loyaltyConfig.pointsEarnedPerStep
         : 0;
 
       const prevPtsBalance = matchedLoyaltyCustomer
@@ -1075,23 +1185,70 @@ export const SalesView: React.FC<SalesViewProps> = ({
         matchedLoyaltyCustomer?.id ||
         (isLoyaltyEligible ? `vip_${Date.now()}` : undefined);
 
-      const saleData: Omit<SaleRecord, 'id'> = {
+      const cleanCustAddress = customerAddressPos.trim();
+      const parsedInstallments = Math.max(1, parseInt(creditInstallmentsCount, 10) || 6);
+      const defaultQuota =
+        parsedInstallments > 0
+          ? Number((computedBalanceDue / parsedInstallments).toFixed(2))
+          : computedBalanceDue;
+      const effectiveQuota =
+        parseFloat(creditCustomQuota) > 0 ? Number(parseFloat(creditCustomQuota).toFixed(2)) : defaultQuota;
+
+      // When selling on credit with a different financed price (effectiveCreditTotal !== cartTotal),
+      // adjust the recorded items' unit price & subtotal to reflect the financed credit price while preserving cashPrice
+      const finalItemsForSale: SaleItem[] = isCredit
+        ? (() => {
+            const ratio = cartSubtotal > 0 ? finalSaleTotal / cartSubtotal : 1;
+            return cart.map((it) => {
+              const liveProd = inventory.find((p) => p.code === it.code);
+              const explicitCreditUnit =
+                it.creditPrice !== undefined && Number(it.creditPrice) > 0
+                  ? Number(it.creditPrice)
+                  : liveProd?.creditPrice !== undefined && Number(liveProd.creditPrice) > 0
+                  ? Number(liveProd.creditPrice)
+                  : undefined;
+
+              const creditUnitPrice =
+                parseFloat(creditTotalPriceInput) > 0
+                  ? Number((it.price * ratio).toFixed(2))
+                  : explicitCreditUnit !== undefined
+                  ? explicitCreditUnit
+                  : Number((it.price * ratio).toFixed(2));
+
+              return {
+                ...it,
+                cashPrice: it.price,
+                creditPrice: creditUnitPrice,
+                price: creditUnitPrice,
+                subtotal: Number((creditUnitPrice * it.quantity).toFixed(2)),
+              };
+            });
+          })()
+        : cart;
+
+      const finalSubtotalForSale = isCredit
+        ? Number(finalItemsForSale.reduce((sum, it) => sum + it.subtotal, 0).toFixed(2))
+        : cartSubtotal;
+
+      // Build temporary sale snapshot to resolve initial CreditContractData when paymentMethod === 'credit'
+      const baseSaleData: Omit<SaleRecord, 'id'> = {
         saleNumber,
         timestamp: Date.now(),
         date: dateFormatted,
-        items: cart,
+        items: finalItemsForSale,
         totalItems: totalCartItemsCount,
-        subtotal: cartSubtotal,
-        discount: discountAmount,
-        tax: taxAmount,
-        total: cartTotal,
+        subtotal: finalSubtotalForSale,
+        discount: isCredit ? 0 : discountAmount,
+        tax: isCredit ? 0 : taxAmount,
+        total: finalSaleTotal,
+        cashPriceTotal: isCredit ? cartTotal : undefined,
         paymentMethod,
         amountPaid:
           paymentMethod === 'cash'
             ? numericCashGiven
             : paymentMethod === 'credit'
             ? initialDeposit
-            : cartTotal,
+            : finalSaleTotal,
         change: paymentMethod === 'cash' ? cashChange : 0,
         balanceDue: computedBalanceDue,
         creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
@@ -1100,21 +1257,56 @@ export const SalesView: React.FC<SalesViewProps> = ({
         customerName: cleanCustName,
         customerRtn: cleanCustRtn || undefined,
         customerPhone: cleanCustPhone || undefined,
+        customerAddress: cleanCustAddress || undefined,
         notes: saleNotes.trim() || undefined,
         status: 'completed',
         warehouseId: selectedWarehouse.id,
         warehouseName: selectedWarehouse.name,
-        cashier:
-          invoiceIssuerName.trim() ||
-          effectiveInvoiceTemplate.defaultIssuerName?.trim() ||
-          userSession?.userName ||
-          'Administrador',
+        cashier: resolveInvoiceIssuerName(
+          hasCustomIssuerTyped ? invoiceIssuerName : invoiceIssuerName || userSession?.userName,
+          effectiveInvoiceTemplate.defaultIssuerName,
+          userSession?.userName || 'Administrador'
+        ),
         cashierRole: userSession?.role || 'admin',
         loyaltyCustomerId: targetLoyaltyId,
         loyaltyPointsEarned: ptsEarned > 0 ? ptsEarned : undefined,
         loyaltyPointsRedeemed: ptsRedeemed > 0 ? ptsRedeemed : undefined,
         loyaltyDiscountAmount: ptsDiscountLps > 0 ? ptsDiscountLps : undefined,
         loyaltyPointsBalanceAfter: nextPtsBalance,
+      };
+
+      let initialCreditContract: CreditContractData | undefined = undefined;
+      if (isCredit) {
+        const resolved = resolveCreditContractData(
+          { id: 'temp', ...baseSaleData },
+          storeSettings,
+          {
+            saleId: 'temp',
+            numberOfInstallments: parsedInstallments,
+            installmentAmount: effectiveQuota,
+            nextPaymentDate: creditDueDate || undefined,
+          },
+          inventory
+        );
+        initialCreditContract = {
+          ...resolved,
+          creditTotalValue: finalSaleTotal,
+          downPaymentValue: initialDeposit,
+          financedBalance: computedBalanceDue,
+          customerAddress: cleanCustAddress || resolved.customerAddress,
+          installationAddress: cleanCustAddress || resolved.installationAddress,
+          articleBrand: creditArticleBrand.trim() || resolved.articleBrand,
+          articleModel: creditArticleModel.trim() || resolved.articleModel,
+          numberOfInstallments: parsedInstallments,
+          termMonths: parsedInstallments,
+          installmentValue: effectiveQuota,
+          updatedAt: Date.now(),
+        };
+      }
+
+      const saleData: Omit<SaleRecord, 'id'> = {
+        ...baseSaleData,
+        creditContract: initialCreditContract,
       };
 
       const result = await onRecordSale(saleData);
@@ -1124,109 +1316,127 @@ export const SalesView: React.FC<SalesViewProps> = ({
         ...saleData,
       };
 
-      // Update or auto-enroll Frequent Customer profile in POSFinanceStoreData
-      if (isLoyaltyEligible && onSavePOSFinanceData && posFinanceData) {
+      // Update or auto-enroll Frequent Customer profile and/or Credit Contract Control Meta in POSFinanceStoreData
+      if ((isLoyaltyEligible || isCredit) && onSavePOSFinanceData && posFinanceData) {
         const nowMs = Date.now();
-        const newLogs: LoyaltyTransactionLog[] = [];
-        let runningBal = matchedLoyaltyCustomer
-          ? Number(matchedLoyaltyCustomer.currentPoints) || 0
-          : 0;
+        let updatedCustomersList: LoyaltyCustomerProfile[] = loyaltyCustomers;
 
-        if (!matchedLoyaltyCustomer && loyaltyConfig.welcomeBonusPoints > 0) {
-          runningBal += loyaltyConfig.welcomeBonusPoints;
-          newLogs.push({
-            id: `log_wel_${nowMs}`,
-            timestamp: nowMs,
-            dateFormatted,
-            type: 'bonus',
-            points: loyaltyConfig.welcomeBonusPoints,
-            balanceAfter: runningBal,
-            notes: 'Bono de bienvenida al inscribirse en caja',
-            registeredBy: userSession?.userName || 'Administrador',
-          });
+        if (isLoyaltyEligible) {
+          const newLogs: LoyaltyTransactionLog[] = [];
+          let runningBal = matchedLoyaltyCustomer
+            ? Number(matchedLoyaltyCustomer.currentPoints) || 0
+            : 0;
+
+          if (!matchedLoyaltyCustomer && loyaltyConfig.welcomeBonusPoints > 0) {
+            runningBal += loyaltyConfig.welcomeBonusPoints;
+            newLogs.push({
+              id: `log_wel_${nowMs}`,
+              timestamp: nowMs,
+              dateFormatted,
+              type: 'bonus',
+              points: loyaltyConfig.welcomeBonusPoints,
+              balanceAfter: runningBal,
+              notes: 'Bono de bienvenida al inscribirse en caja',
+              registeredBy: userSession?.userName || 'Administrador',
+            });
+          }
+
+          if (ptsRedeemed > 0) {
+            runningBal = Math.max(0, runningBal - ptsRedeemed);
+            newLogs.push({
+              id: `log_red_${nowMs}`,
+              timestamp: nowMs,
+              dateFormatted,
+              type: 'redeem',
+              points: -ptsRedeemed,
+              balanceAfter: runningBal,
+              saleNumber,
+              saleTotal: cartTotal,
+              discountApplied: ptsDiscountLps,
+              notes: `Canje de ${ptsRedeemed} pts (-L. ${ptsDiscountLps.toFixed(2)}) en ${saleNumber}`,
+              registeredBy: userSession?.userName || 'Administrador',
+            });
+          }
+
+          if (ptsEarned > 0) {
+            runningBal += ptsEarned;
+            newLogs.push({
+              id: `log_earn_${nowMs}`,
+              timestamp: nowMs + 1,
+              dateFormatted,
+              type: 'earn',
+              points: ptsEarned,
+              balanceAfter: runningBal,
+              saleNumber,
+              saleTotal: cartTotal,
+              notes: `Puntos ganados en compra ${saleNumber} (L. ${cartTotal.toFixed(2)})`,
+              registeredBy: userSession?.userName || 'Administrador',
+            });
+          }
+
+          if (matchedLoyaltyCustomer) {
+            updatedCustomersList = loyaltyCustomers.map((c) =>
+              c.id === matchedLoyaltyCustomer.id
+                ? {
+                    ...c,
+                    name: cleanCustName || c.name,
+                    phone: cleanCustPhone || c.phone,
+                    rtn: cleanCustRtn || c.rtn,
+                    currentPoints: runningBal,
+                    totalPointsEarned: (c.totalPointsEarned || 0) + ptsEarned,
+                    totalPointsRedeemed: (c.totalPointsRedeemed || 0) + ptsRedeemed,
+                    totalPurchasesAmount: (c.totalPurchasesAmount || 0) + cartTotal,
+                    purchasesCount: (c.purchasesCount || 0) + 1,
+                    history: [...newLogs.reverse(), ...(c.history || [])].slice(0, 80),
+                    updatedAt: nowMs,
+                  }
+                : c
+            );
+          } else {
+            const nextCode = `VIP-${1001 + loyaltyCustomers.length}`;
+            const newProfile: LoyaltyCustomerProfile = {
+              id: targetLoyaltyId || `vip_${nowMs}`,
+              code: nextCode,
+              name: cleanCustName,
+              phone: cleanCustPhone,
+              rtn: cleanCustRtn || undefined,
+              currentPoints: runningBal,
+              totalPointsEarned:
+                (loyaltyConfig.welcomeBonusPoints || 0) + ptsEarned,
+              totalPointsRedeemed: ptsRedeemed,
+              totalPurchasesAmount: cartTotal,
+              purchasesCount: 1,
+              history: newLogs.reverse(),
+              createdAt: nowMs,
+              updatedAt: nowMs,
+            };
+            updatedCustomersList = [newProfile, ...loyaltyCustomers];
+          }
         }
 
-        if (ptsRedeemed > 0) {
-          runningBal = Math.max(0, runningBal - ptsRedeemed);
-          newLogs.push({
-            id: `log_red_${nowMs}`,
-            timestamp: nowMs,
-            dateFormatted,
-            type: 'redeem',
-            points: -ptsRedeemed,
-            balanceAfter: runningBal,
-            saleNumber,
-            saleTotal: cartTotal,
-            discountApplied: ptsDiscountLps,
-            notes: `Canje de ${ptsRedeemed} pts (-L. ${ptsDiscountLps.toFixed(2)}) en ${saleNumber}`,
-            registeredBy: userSession?.userName || 'Administrador',
-          });
-        }
-
-        if (ptsEarned > 0) {
-          runningBal += ptsEarned;
-          newLogs.push({
-            id: `log_earn_${nowMs}`,
-            timestamp: nowMs + 1,
-            dateFormatted,
-            type: 'earn',
-            points: ptsEarned,
-            balanceAfter: runningBal,
-            saleNumber,
-            saleTotal: cartTotal,
-            notes: `Puntos ganados en compra ${saleNumber} (L. ${cartTotal.toFixed(2)})`,
-            registeredBy: userSession?.userName || 'Administrador',
-          });
-        }
-
-        let updatedCustomersList: LoyaltyCustomerProfile[];
-        if (matchedLoyaltyCustomer) {
-          updatedCustomersList = loyaltyCustomers.map((c) =>
-            c.id === matchedLoyaltyCustomer.id
-              ? {
-                  ...c,
-                  name: cleanCustName || c.name,
-                  phone: cleanCustPhone || c.phone,
-                  rtn: cleanCustRtn || c.rtn,
-                  currentPoints: runningBal,
-                  totalPointsEarned: (c.totalPointsEarned || 0) + ptsEarned,
-                  totalPointsRedeemed: (c.totalPointsRedeemed || 0) + ptsRedeemed,
-                  totalPurchasesAmount: (c.totalPurchasesAmount || 0) + cartTotal,
-                  purchasesCount: (c.purchasesCount || 0) + 1,
-                  history: [...newLogs.reverse(), ...(c.history || [])].slice(0, 80),
-                  updatedAt: nowMs,
-                }
-              : c
-          );
-        } else {
-          const nextCode = `VIP-${1001 + loyaltyCustomers.length}`;
-          const newProfile: LoyaltyCustomerProfile = {
-            id: targetLoyaltyId || `vip_${nowMs}`,
-            code: nextCode,
-            name: cleanCustName,
-            phone: cleanCustPhone,
-            rtn: cleanCustRtn || undefined,
-            currentPoints: runningBal,
-            totalPointsEarned:
-              (loyaltyConfig.welcomeBonusPoints || 0) + ptsEarned,
-            totalPointsRedeemed: ptsRedeemed,
-            totalPurchasesAmount: cartTotal,
-            purchasesCount: 1,
-            history: newLogs.reverse(),
-            createdAt: nowMs,
-            updatedAt: nowMs,
+        const nextControls = { ...(posFinanceData.creditAccountControls || {}) };
+        if (isCredit && initialCreditContract) {
+          nextControls[recorded.id] = {
+            ...(nextControls[recorded.id] || {}),
+            saleId: recorded.id,
+            installmentAmount: initialCreditContract.installmentValue,
+            numberOfInstallments: initialCreditContract.numberOfInstallments,
+            nextPaymentDate: initialCreditContract.firstPaymentDate,
+            paymentFrequency: 'monthly',
+            creditContract: initialCreditContract,
           };
-          updatedCustomersList = [newProfile, ...loyaltyCustomers];
         }
 
         await onSavePOSFinanceData({
           ...posFinanceData,
           loyaltyCustomers: updatedCustomersList,
+          creditAccountControls: nextControls,
           updatedAt: nowMs,
         });
       }
 
       setCompletedSale(recorded);
+      setReceiptModalTab(isCredit && canUseCreditContract ? 'both' : 'ticket');
       setShowReceiptModal(true);
       clearCart();
       showToast(
@@ -2650,30 +2860,65 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             </span>
                           )}
                           <span className="font-extrabold text-sm text-emerald-700 tabular-nums block">
-                            L. {item.subtotal.toFixed(2)}
+                            L.{' '}
+                            {(paymentMethod === 'credit' &&
+                            ((item.creditPrice && item.creditPrice > 0) ||
+                              (productInStore?.creditPrice && productInStore.creditPrice > 0))
+                              ? (Number(item.creditPrice || productInStore?.creditPrice || item.price) *
+                                item.quantity)
+                              : item.subtotal
+                            ).toFixed(2)}
                           </span>
                         </div>
                       </div>
 
-                      {/* Row 2: Compact Unit Discount + Well-Spaced Quantity Buttons & Remove */}
+                      {/* Row 2: Compact Unit Discount (or Credit Unit Price) + Well-Spaced Quantity Buttons & Remove */}
                       <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
                         <div className="flex items-center gap-1 text-[11px]">
-                          <Tag className="w-3 h-3 text-rose-500 shrink-0" />
-                          <span className="text-slate-500 font-medium">Desc. L:</span>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min="0"
-                            max={basePrice}
-                            step="any"
-                            value={unitDisc > 0 ? unitDisc : ''}
-                            placeholder="0"
-                            onChange={(e) =>
-                              updateCartItemDiscount(item.code, parseFloat(e.target.value) || 0)
-                            }
-                            className="w-20 px-2 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-xs font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right tabular-nums"
-                            title="Descuento por unidad en Lempiras"
-                          />
+                          {paymentMethod === 'credit' ? (
+                            <>
+                              <DollarSign className="w-3 h-3 text-amber-600 shrink-0" />
+                              <span className="text-amber-900 font-bold">Precio Créd. L:</span>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min="0"
+                                step="any"
+                                value={
+                                  item.creditPrice !== undefined && item.creditPrice > 0
+                                    ? item.creditPrice
+                                    : productInStore?.creditPrice && productInStore.creditPrice > 0
+                                    ? productInStore.creditPrice
+                                    : ''
+                                }
+                                placeholder={item.price.toFixed(2)}
+                                onChange={(e) =>
+                                  updateCartItemCreditPrice(item.code, parseFloat(e.target.value) || 0)
+                                }
+                                className="w-22 px-2 py-0.5 bg-amber-50 border border-amber-300 rounded-md text-xs font-black text-amber-900 focus:outline-none focus:ring-1 focus:ring-amber-500 text-right tabular-nums"
+                                title="Precio unitario de este artículo al Crédito / Fiado"
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <Tag className="w-3 h-3 text-rose-500 shrink-0" />
+                              <span className="text-slate-500 font-medium">Desc. L:</span>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min="0"
+                                max={basePrice}
+                                step="any"
+                                value={unitDisc > 0 ? unitDisc : ''}
+                                placeholder="0"
+                                onChange={(e) =>
+                                  updateCartItemDiscount(item.code, parseFloat(e.target.value) || 0)
+                                }
+                                className="w-20 px-2 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-xs font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right tabular-nums"
+                                title="Descuento por unidad en Lempiras"
+                              />
+                            </>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1.5 sm:gap-2">
@@ -2803,17 +3048,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     <div className="grid grid-cols-2 gap-1.5">
                       <input
                         type="text"
-                        placeholder="Nombre del Cliente"
+                        placeholder="Nombre del Cliente *"
                         value={customerName}
                         onChange={(e) => {
                           setCustomerName(e.target.value);
                           if (selectedLoyaltyCustomerId) setSelectedLoyaltyCustomerId('');
                         }}
-                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs font-semibold"
                       />
                       <input
                         type="text"
-                        placeholder="RTN / DNI (Opcional)"
+                        placeholder="Identidad / RTN"
                         value={customerRtn}
                         onChange={(e) => setCustomerRtn(e.target.value)}
                         className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono text-xs"
@@ -2822,7 +3067,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     <div className="relative">
                       <input
                         type="tel"
-                        placeholder="WhatsApp / Teléfono para ticket y puntos VIP"
+                        placeholder="WhatsApp / Teléfono para ticket y contrato"
                         value={customerPhone}
                         onChange={(e) => {
                           setCustomerPhone(e.target.value);
@@ -2832,6 +3077,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       />
                       <WhatsAppIcon className="w-3.5 h-3.5 text-emerald-600 absolute left-2 top-2" />
                     </div>
+                    {paymentMethod === 'credit' && (
+                      <input
+                        type="text"
+                        placeholder="Domicilio / Dirección de instalación del cliente (Contrato)"
+                        value={customerAddressPos}
+                        onChange={(e) => setCustomerAddressPos(e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 text-xs text-slate-800"
+                      />
+                    )}
                   </div>
                 )}
 
@@ -2936,28 +3190,161 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </button>
               </div>
 
-              {/* Compact Credit / Fiado Box */}
+              {/* Compact Credit / Fiado Box + Contract Parameters */}
               {paymentMethod === 'credit' && cart.length > 0 && (
-                <div className="p-2 bg-amber-50 border border-amber-300 rounded-xl space-y-1.5 text-xs">
-                  <div className="grid grid-cols-2 gap-2">
+                <div className="p-2.5 bg-amber-50 border-2 border-amber-300 rounded-xl space-y-2 text-xs shadow-2xs">
+                  <div className="flex items-center justify-between border-b border-amber-200/80 pb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-900 flex items-center gap-1">
+                      <FileText className="w-3.5 h-3.5 text-amber-700" />
+                      Cuenta Fiada • Precio al Crédito + Contrato
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded-md border border-amber-200">
+                      Precio Contado: <strong>L. {cartTotal.toFixed(2)}</strong>
+                    </span>
+                  </div>
+
+                  {/* Highlighted Financed Article Price Input (Precio al Crédito vs Contado) */}
+                  <div className="p-2 bg-white border border-amber-300 rounded-xl space-y-1.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                      <div className="min-w-0">
+                        <label className="block text-[11px] font-black text-amber-950 uppercase tracking-tight">
+                          (A) Precio / Valor del Artículo al Crédito (L.) *
+                        </label>
+                        <span className="text-[10px] text-slate-500 block leading-tight">
+                          Ingresa el valor financiado al crédito (distinto al precio de contado)
+                        </span>
+                      </div>
+                      <div className="relative sm:w-44 shrink-0">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-amber-800 font-black text-xs pointer-events-none">
+                          L.
+                        </span>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          step="0.01"
+                          min="0"
+                          placeholder={defaultCartCreditTotal.toFixed(2)}
+                          value={creditTotalPriceInput}
+                          onChange={(e) => {
+                            setCreditTotalPriceInput(e.target.value);
+                            setCreditCustomQuota('');
+                          }}
+                          className="w-full pl-7 pr-2.5 py-1.5 bg-amber-50/70 border-2 border-amber-400 rounded-lg text-sm font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white tabular-nums"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick Credit Price Markup Buttons over Cash Price */}
+                    <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                      <span className="text-[10px] font-bold text-slate-500 mr-0.5">
+                        Calcular sobre contado:
+                      </span>
+                      {[15, 20, 25, 30, 40, 50].map((pct) => {
+                        const calcVal = Number((cartTotal * (1 + pct / 100)).toFixed(2));
+                        const isActive = Math.abs(effectiveCreditTotal - calcVal) < 0.05;
+                        return (
+                          <button
+                            key={pct}
+                            type="button"
+                            onClick={() => {
+                              setCreditTotalPriceInput(calcVal.toFixed(2));
+                              setCreditCustomQuota('');
+                            }}
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border transition-all cursor-pointer ${
+                              isActive
+                                ? 'bg-amber-600 text-white border-amber-600'
+                                : 'bg-amber-50/80 text-amber-900 border-amber-200 hover:bg-amber-100'
+                            }`}
+                          >
+                            +{pct}% (L.{calcVal.toFixed(0)})
+                          </button>
+                        );
+                      })}
+                      {creditTotalPriceInput !== '' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCreditTotalPriceInput('');
+                            setCreditCustomQuota('');
+                          }}
+                          className="px-1.5 py-0.5 rounded-md text-[10px] font-bold text-slate-500 hover:text-rose-600 cursor-pointer ml-auto"
+                        >
+                          Restaurar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                     <div>
                       <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
-                        Prima / Abono Hoy (L.)
+                        (B) Prima / Abono (L.)
                       </label>
                       <input
                         type="number"
                         step="0.01"
                         min="0"
-                        max={cartTotal}
+                        max={effectiveCreditTotal}
                         placeholder="0.00"
                         value={creditInitialDeposit}
-                        onChange={(e) => setCreditInitialDeposit(e.target.value)}
+                        onChange={(e) => {
+                          setCreditInitialDeposit(e.target.value);
+                          setCreditCustomQuota('');
+                        }}
                         className="w-full px-2 py-1 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-900"
                       />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
-                        Fecha Promesa Pago
+                        (D) N° Cuotas (Meses)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="60"
+                        placeholder="6"
+                        value={creditInstallmentsCount}
+                        onChange={(e) => {
+                          setCreditInstallmentsCount(e.target.value);
+                          setCreditCustomQuota('');
+                        }}
+                        className="w-full px-2 py-1 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
+                        (C) Valor Cuota (L.)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder={(() => {
+                          const fin = Math.max(
+                            0,
+                            effectiveCreditTotal - (parseFloat(creditInitialDeposit) || 0)
+                          );
+                          const cnt = Math.max(1, parseInt(creditInstallmentsCount, 10) || 6);
+                          return (fin / cnt).toFixed(2);
+                        })()}
+                        value={creditCustomQuota}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCreditCustomQuota(val);
+                          const numQuota = parseFloat(val);
+                          if (numQuota > 0) {
+                            const cnt = Math.max(1, parseInt(creditInstallmentsCount, 10) || 6);
+                            const prima = Math.max(0, parseFloat(creditInitialDeposit) || 0);
+                            const impliedTotal = Number((prima + numQuota * cnt).toFixed(2));
+                            setCreditTotalPriceInput(impliedTotal.toFixed(2));
+                          }
+                        }}
+                        className="w-full px-2 py-1 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
+                        Inicio / 1er Pago
                       </label>
                       <input
                         type="date"
@@ -2967,10 +3354,58 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       />
                     </div>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] font-bold text-amber-950">
-                    <span>Saldo Pendiente:</span>
-                    <span className="font-black text-amber-800">
-                      L. {Math.max(0, cartTotal - (parseFloat(creditInitialDeposit) || 0)).toFixed(2)}
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <input
+                      type="text"
+                      placeholder="Marca Artículo (Opcional, ej. Mabe)"
+                      value={creditArticleBrand}
+                      onChange={(e) => setCreditArticleBrand(e.target.value)}
+                      className="w-full px-2 py-1 bg-white border border-amber-200 rounded-lg text-[11px] text-slate-800"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Modelo / Serie (Opcional)"
+                      value={creditArticleModel}
+                      onChange={(e) => setCreditArticleModel(e.target.value)}
+                      className="w-full px-2 py-1 bg-white border border-amber-200 rounded-lg text-[11px] text-slate-800"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold text-amber-950 pt-1 border-t border-amber-200/80">
+                    <span>
+                      (A) Valor Crédito:{' '}
+                      <strong className="font-black text-slate-900">
+                        L. {effectiveCreditTotal.toFixed(2)}
+                      </strong>
+                    </span>
+                    <span>
+                      (E) Saldo a Financiar:{' '}
+                      <strong className="font-black text-rose-700">
+                        L.{' '}
+                        {Math.max(
+                          0,
+                          effectiveCreditTotal - (parseFloat(creditInitialDeposit) || 0)
+                        ).toFixed(2)}
+                      </strong>
+                    </span>
+                    <span>
+                      Cuota:{' '}
+                      <strong className="font-black text-emerald-800">
+                        L.{' '}
+                        {(() => {
+                          if (parseFloat(creditCustomQuota) > 0) {
+                            return parseFloat(creditCustomQuota).toFixed(2);
+                          }
+                          const fin = Math.max(
+                            0,
+                            effectiveCreditTotal - (parseFloat(creditInitialDeposit) || 0)
+                          );
+                          const cnt = Math.max(1, parseInt(creditInstallmentsCount, 10) || 6);
+                          return (fin / cnt).toFixed(2);
+                        })()}{' '}
+                        × {Math.max(1, parseInt(creditInstallmentsCount, 10) || 6)}m
+                      </strong>
                     </span>
                   </div>
                 </div>
@@ -3136,10 +3571,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     <>
                       <span className="flex items-center gap-2">
                         <CheckCircle2 className="w-5 h-5 shrink-0" />
-                        <span>Cobrar y Facturar</span>
+                        <span>
+                          {paymentMethod === 'credit'
+                            ? 'Registrar Crédito + Contrato'
+                            : 'Cobrar y Facturar'}
+                        </span>
                       </span>
                       <span className="text-base sm:text-lg font-black bg-black/20 px-3 py-1 rounded-xl tabular-nums">
-                        L. {cartTotal.toFixed(2)}
+                        L. {activeCheckoutTotal.toFixed(2)}
                       </span>
                     </>
                   )}
@@ -3695,13 +4134,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               type="button"
                               onClick={() => {
                                 setCompletedSale(sale);
+                                setReceiptModalTab(sale.paymentMethod === 'credit' ? 'both' : 'ticket');
                                 setShowReceiptModal(true);
                               }}
                               className="min-h-[40px] px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs"
                             >
                               <Printer className="w-4 h-4 text-emerald-600 shrink-0" />
-                              <span>Ver Ticket</span>
+                              <span>{sale.paymentMethod === 'credit' ? 'Ticket + Contrato' : 'Ver Ticket'}</span>
                             </button>
+                            {sale.paymentMethod === 'credit' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCompletedSale(sale);
+                                  setReceiptModalTab('contract');
+                                  setShowReceiptModal(true);
+                                }}
+                                className="min-h-[40px] px-3 py-2 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs"
+                              >
+                                <FileText className="w-4 h-4 text-amber-700 shrink-0" />
+                                <span>Contrato Crédito</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => handleDownloadSalePdf('letter', sale)}
@@ -3899,13 +4353,37 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 type="button"
                                 onClick={() => {
                                   setCompletedSale(sale);
+                                  setReceiptModalTab(
+                                    sale.paymentMethod === 'credit' && canUseCreditContract
+                                      ? 'both'
+                                      : 'ticket'
+                                  );
                                   setShowReceiptModal(true);
                                 }}
                                 className="p-1.5 text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
-                                title="Ver comprobante / Elegir Impresora"
+                                title={
+                                  sale.paymentMethod === 'credit' && canUseCreditContract
+                                    ? 'Ver Ticket + Contrato de Crédito'
+                                    : 'Ver comprobante / Elegir Impresora'
+                                }
                               >
                                 <Printer className="w-4 h-4" />
                               </button>
+
+                              {sale.paymentMethod === 'credit' && canUseCreditContract && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCompletedSale(sale);
+                                    setReceiptModalTab('contract');
+                                    setShowReceiptModal(true);
+                                  }}
+                                  className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Abrir Contrato de Arrendamiento con Reserva de Dominio"
+                                >
+                                  <FileText className="w-4 h-4" />
+                                </button>
+                              )}
 
                               {/* Direct PDF download */}
                               <button
@@ -4012,20 +4490,32 @@ export const SalesView: React.FC<SalesViewProps> = ({
         </div>
       )}
 
-      {/* ==================== TICKET / RECEIPT MODAL ==================== */}
+      {/* ==================== TICKET / RECEIPT + CREDIT CONTRACT MODAL ==================== */}
       {showReceiptModal && completedSale && (
         <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-[120] animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col max-h-[92dvh] sm:max-h-[90vh]">
+          <div
+            className={`bg-white rounded-2xl shadow-2xl w-full overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[92vh] transition-all ${
+              completedSale.paymentMethod === 'credit' &&
+              canUseCreditContract &&
+              receiptModalTab !== 'ticket'
+                ? 'max-w-5xl'
+                : 'max-w-md'
+            }`}
+          >
             {/* Modal Header */}
-            <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0 gap-2">
+            <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 border-b border-slate-100 flex flex-wrap items-center justify-between bg-slate-50 shrink-0 gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0">
                   ✓
                 </div>
                 <div className="min-w-0">
-                  <h3 className="font-bold text-slate-900 text-xs sm:text-sm truncate">Comprobante de Venta</h3>
+                  <h3 className="font-bold text-slate-900 text-xs sm:text-sm truncate">
+                    {completedSale.paymentMethod === 'credit' && canUseCreditContract
+                      ? 'Ticket de Venta + Contrato de Crédito con Reserva de Dominio'
+                      : 'Comprobante de Venta'}
+                  </h3>
                   <span className="text-[11px] text-slate-500 font-mono block truncate">
-                    {completedSale.saleNumber}
+                    {completedSale.saleNumber} • {completedSale.customerName || 'Consumidor Final'}
                   </span>
                 </div>
               </div>
@@ -4048,12 +4538,110 @@ export const SalesView: React.FC<SalesViewProps> = ({
               </div>
             </div>
 
-            {/* Printable Receipt Body */}
-            <div className="flex-1 min-h-0 overflow-y-auto scroll-container p-2.5 sm:p-5 space-y-3">
+            {/* Credit Sale Switcher Bar: Ticket + Contrato | Solo Ticket | Solo Contrato */}
+            {completedSale.paymentMethod === 'credit' && canUseCreditContract && (
+              <div className="px-3.5 py-2 bg-amber-50 border-b border-amber-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-amber-200">
+                  {(
+                    [
+                      { id: 'both', label: '🧾 Ticket + 📜 Contrato (Ambos)' },
+                      { id: 'ticket', label: '🧾 Solo Ticket' },
+                      { id: 'contract', label: '📜 Solo Contrato de Crédito' },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setReceiptModalTab(tab.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-black transition-all cursor-pointer ${
+                        receiptModalTab === tab.id
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-amber-900 hover:bg-amber-100/60'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const html = buildSaleAndCreditContractCombinedHtml(
+                        completedSale,
+                        {
+                          ...storeSettings,
+                          invoiceTemplate: effectiveInvoiceTemplate,
+                          receiptFooterText: draftReceiptFooterText,
+                        },
+                        receiptPrinterFormat,
+                        getFormattedSaleIssuer(completedSale),
+                        completedSale.creditContract,
+                        posFinanceData?.creditAccountControls?.[completedSale.id],
+                        inventory
+                      );
+                      printHtmlDocument(
+                        html,
+                        `Ticket y Contrato - ${completedSale.saleNumber}`,
+                        receiptPrinterFormat,
+                        storeSettings
+                      );
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white font-black text-[11px] flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5 shrink-0" />
+                    <span>Imprimir Ticket + Contrato Juntos</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadCreditContractPdf(
+                        completedSale,
+                        storeSettings,
+                        completedSale.creditContract,
+                        posFinanceData?.creditAccountControls?.[completedSale.id],
+                        inventory
+                      )
+                    }
+                    className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 shrink-0" />
+                    <span>PDF Contrato</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Printable Receipt & Credit Contract Body */}
+            <div className="flex-1 min-h-0 overflow-y-auto scroll-container p-2.5 sm:p-5">
               <div
-                ref={receiptPrintRef}
-                className="p-3 sm:p-4 bg-white border border-dashed border-slate-300 rounded-xl font-mono text-xs text-slate-800 space-y-3 shadow-inner"
+                className={
+                  completedSale.paymentMethod === 'credit' &&
+                  canUseCreditContract &&
+                  receiptModalTab === 'both'
+                    ? 'grid grid-cols-1 lg:grid-cols-12 gap-5 items-start'
+                    : 'space-y-3'
+                }
               >
+                {/* LEFT / TICKET COLUMN */}
+                {(completedSale.paymentMethod !== 'credit' ||
+                  !canUseCreditContract ||
+                  receiptModalTab !== 'contract') && (
+                  <div
+                    className={
+                      completedSale.paymentMethod === 'credit' &&
+                      canUseCreditContract &&
+                      receiptModalTab === 'both'
+                        ? 'lg:col-span-5 space-y-3'
+                        : 'space-y-3'
+                    }
+                  >
+                    <div
+                      ref={receiptPrintRef}
+                      className="p-3 sm:p-4 bg-white border border-dashed border-slate-300 rounded-xl font-mono text-xs text-slate-800 space-y-3 shadow-inner"
+                    >
                 {/* Store Branding Header */}
                 <div className="text-center space-y-1 pb-2 border-b border-dashed border-slate-300">
                   {effectiveInvoiceTemplate.showLogo && (storeSettings.logoUrl || '/store-logo.jpg') && (
@@ -4143,7 +4731,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       </span>
                       <input
                         type="text"
-                        value={completedSale.cashier || effectiveInvoiceTemplate.defaultIssuerName || 'Administrador'}
+                        value={resolveInvoiceIssuerName(
+                          completedSale.cashier,
+                          effectiveInvoiceTemplate.defaultIssuerName,
+                          'Administrador'
+                        )}
                         onChange={(e) => {
                           const nextCashier = e.target.value;
                           const updated: SaleRecord = {
@@ -4233,21 +4825,58 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     </div>
                   )}
                   <div className="flex justify-between font-bold text-sm border-t border-dashed border-slate-300 pt-1.5 text-slate-900">
-                    <span>TOTAL PAGADO:</span>
+                    <span>
+                      {completedSale.paymentMethod === 'credit'
+                        ? 'VALOR TOTAL AL CRÉDITO:'
+                        : 'TOTAL PAGADO:'}
+                    </span>
                     <span className="text-emerald-800">L. {completedSale.total.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-[10px] text-slate-600 pt-1">
                     <span>Método de Pago:</span>
-                    <span className="capitalize">
+                    <span className="capitalize font-bold">
                       {completedSale.paymentMethod === 'cash'
                         ? 'Efectivo'
                         : completedSale.paymentMethod === 'card'
                         ? 'Tarjeta'
                         : completedSale.paymentMethod === 'credit'
-                        ? 'Crédito'
+                        ? 'Crédito / Fiado'
                         : 'Transferencia'}
                     </span>
                   </div>
+                  {completedSale.paymentMethod === 'credit' && (
+                    <div className="mt-1 p-2 rounded-lg bg-amber-50 border border-amber-200 space-y-0.5 text-[10.5px]">
+                      <div className="flex justify-between">
+                        <span className="text-amber-900 font-semibold">(B) Prima / Abono Inicial:</span>
+                        <span className="font-bold text-emerald-800">
+                          L. {(Number(completedSale.amountPaid) || 0).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-amber-950 font-black">(E) Saldo a Financiar:</span>
+                        <span className="font-black text-rose-700">
+                          L.{' '}
+                          {(
+                            completedSale.balanceDue !== undefined
+                              ? Number(completedSale.balanceDue)
+                              : Math.max(
+                                  0,
+                                  Number(completedSale.total) - Number(completedSale.amountPaid || 0)
+                                )
+                          ).toFixed(2)}
+                        </span>
+                      </div>
+                      {completedSale.creditContract && (
+                        <div className="flex justify-between pt-0.5 border-t border-amber-200/70">
+                          <span className="text-amber-900 font-semibold">Plan de Pago:</span>
+                          <span className="font-bold text-slate-900">
+                            {completedSale.creditContract.numberOfInstallments} cuotas de L.{' '}
+                            {Number(completedSale.creditContract.installmentValue || 0).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {completedSale.paymentMethod === 'cash' && (
                     <>
                       <div className="flex justify-between text-[10px]">
@@ -4386,6 +5015,89 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     );
                   })}
                 </div>
+              </div>
+                  </div>
+                )}
+
+                {/* RIGHT / CREDIT CONTRACT COLUMN */}
+                {completedSale.paymentMethod === 'credit' &&
+                  canUseCreditContract &&
+                  receiptModalTab !== 'ticket' && (
+                  <div
+                    className={
+                      receiptModalTab === 'both' ? 'lg:col-span-7' : 'w-full'
+                    }
+                  >
+                    <CreditContractViewAndEditor
+                      sale={completedSale}
+                      storeSettings={storeSettings}
+                      controlMeta={posFinanceData?.creditAccountControls?.[completedSale.id]}
+                      inventory={inventory}
+                      compact={receiptModalTab === 'both'}
+                      onSaveContract={async (updatedContract) => {
+                        const newCreditTotal =
+                          Number(updatedContract.creditTotalValue) > 0
+                            ? Number(updatedContract.creditTotalValue)
+                            : completedSale.total;
+                        const newDownPayment =
+                          updatedContract.downPaymentValue !== undefined
+                            ? Math.max(0, Number(updatedContract.downPaymentValue))
+                            : completedSale.amountPaid;
+                        const newFinancedBalance =
+                          updatedContract.financedBalance !== undefined
+                            ? Math.max(0, Number(updatedContract.financedBalance))
+                            : Math.max(0, Number((newCreditTotal - newDownPayment).toFixed(2)));
+
+                        const ratio =
+                          completedSale.subtotal > 0 ? newCreditTotal / completedSale.subtotal : 1;
+                        const updatedItems = completedSale.items.map((it) => {
+                          const newPrice = Number((it.price * ratio).toFixed(2));
+                          return {
+                            ...it,
+                            creditPrice: newPrice,
+                            price: newPrice,
+                            subtotal: Number((newPrice * it.quantity).toFixed(2)),
+                          };
+                        });
+
+                        const updatedSale: SaleRecord = {
+                          ...completedSale,
+                          items: updatedItems,
+                          subtotal: newCreditTotal,
+                          total: newCreditTotal,
+                          amountPaid: newDownPayment,
+                          balanceDue: newFinancedBalance,
+                          customerName: updatedContract.customerName || completedSale.customerName,
+                          customerRtn: updatedContract.customerIdentity || completedSale.customerRtn,
+                          customerPhone: updatedContract.customerPhone || completedSale.customerPhone,
+                          customerAddress: updatedContract.customerAddress || completedSale.customerAddress,
+                          creditDueDate: updatedContract.firstPaymentDate || completedSale.creditDueDate,
+                          creditContract: updatedContract,
+                        };
+                        setCompletedSale(updatedSale);
+                        if (onUpdateSale) {
+                          await onUpdateSale(completedSale, updatedSale).catch(() => {});
+                        }
+                        if (onSavePOSFinanceData && posFinanceData) {
+                          const nextControls = { ...(posFinanceData.creditAccountControls || {}) };
+                          nextControls[completedSale.id] = {
+                            ...(nextControls[completedSale.id] || {}),
+                            saleId: completedSale.id,
+                            installmentAmount: updatedContract.installmentValue,
+                            numberOfInstallments: updatedContract.numberOfInstallments,
+                            nextPaymentDate: updatedContract.firstPaymentDate,
+                            creditContract: updatedContract,
+                          };
+                          await onSavePOSFinanceData({
+                            ...posFinanceData,
+                            creditAccountControls: nextControls,
+                            updatedAt: Date.now(),
+                          });
+                        }
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -4541,16 +5253,34 @@ export const SalesView: React.FC<SalesViewProps> = ({
               onQuickSave={async (nextTemplate, nextFooter) => {
                 handleUpdateDraftTemplate(nextTemplate);
                 handleUpdateDraftFooter(nextFooter);
-                await saveStoreSettingsToFirestore({
+                const nextSettings: StoreSettings = {
                   ...storeSettings,
                   invoiceTemplate: nextTemplate,
                   receiptFooterText: nextFooter.trim(),
                   updatedAt: Date.now(),
-                });
+                };
+                if (onSaveStoreSettings) {
+                  await onSaveStoreSettings(nextSettings);
+                } else {
+                  await saveStoreSettingsToFirestore(nextSettings);
+                }
               }}
               showToast={showToast}
               isModal
-              onCloseModal={() => setShowInvoiceTemplateModal(false)}
+              onCloseModal={() => {
+                setShowInvoiceTemplateModal(false);
+                const nextSettings: StoreSettings = {
+                  ...storeSettings,
+                  invoiceTemplate: draftInvoiceTemplate,
+                  receiptFooterText: draftReceiptFooterText.trim(),
+                  updatedAt: Date.now(),
+                };
+                if (onSaveStoreSettings) {
+                  onSaveStoreSettings(nextSettings).catch(() => {});
+                } else {
+                  saveStoreSettingsToFirestore(nextSettings).catch(() => {});
+                }
+              }}
             />
           </div>
         </div>

@@ -4,6 +4,7 @@ import {
   SaleItem,
   Product,
   StoreSettings,
+  resolveInvoiceIssuerName,
 } from '../types';
 import {
   X,
@@ -71,10 +72,11 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
       setCustomerRtn(sale.customerRtn || '');
       setCustomerPhone(sale.customerPhone || '');
       setCashierName(
-        sale.cashier ||
-          storeSettings.invoiceTemplate?.defaultIssuerName ||
-          userName ||
-          'Administrador'
+        resolveInvoiceIssuerName(
+          sale.cashier,
+          storeSettings.invoiceTemplate?.defaultIssuerName,
+          userName || 'Administrador'
+        )
       );
       setPaymentMethod(sale.paymentMethod || 'cash');
       setAmountPaid(String(sale.amountPaid ?? sale.total ?? 0));

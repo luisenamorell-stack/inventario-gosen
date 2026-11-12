@@ -16,7 +16,10 @@ import {
   WarehouseTransferRecord,
   UserAccount,
   SaaSGlobalConfig,
+  CreditContractData,
+  CreditAccountControlMeta,
   getEffectiveInvoiceTemplate,
+  resolveInvoiceIssuerName,
 } from '../types';
 import { getProductStockInWarehouse } from '../firebase/firestoreService';
 import {
@@ -1156,6 +1159,11 @@ export function buildSaleDocumentHtml(
   const activeBanks = (storeSettings.bankAccounts || []).filter(
     (b) => b.isActive !== false && b.accountNumber
   );
+  const resolvedSeller = resolveInvoiceIssuerName(
+    sellerLabel || sale.cashier,
+    tpl.defaultIssuerName,
+    'Administrador'
+  );
 
   if (isThermal) {
     return `
@@ -1183,7 +1191,7 @@ export function buildSaleDocumentHtml(
         <div style="display:flex;justify-content:space-between;"><span>Cliente:</span><strong>${sale.customerName || 'Consumidor Final'}</strong></div>
         ${tpl.showCustomerRtn && sale.customerRtn ? `<div style="display:flex;justify-content:space-between;"><span>RTN / DNI:</span><span>${sale.customerRtn}</span></div>` : ''}
         ${tpl.showCustomerPhone && sale.customerPhone ? `<div style="display:flex;justify-content:space-between;"><span>Teléfono:</span><span>${sale.customerPhone}</span></div>` : ''}
-        ${tpl.showSellerName ? `<div style="display:flex;justify-content:space-between;"><span>${tpl.issuerLabel || 'Atendido por'}:</span><span>${sellerLabel || sale.cashier || tpl.defaultIssuerName || 'Administrador'}</span></div>` : ''}
+        ${tpl.showSellerName ? `<div style="display:flex;justify-content:space-between;"><span>${tpl.issuerLabel || 'Atendido por'}:</span><span>${resolvedSeller}</span></div>` : ''}
         ${sale.status === 'cancelled' ? `<div style="text-align:center;font-weight:900;border:1px solid #000;padding:3px;margin-top:4px;">*** VENTA ANULADA ***</div>` : ''}
       </div>
       <div class="dashed-line"></div>
@@ -1342,7 +1350,7 @@ export function buildSaleDocumentHtml(
         <div style="text-align:right;">
           <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#64748b;margin-bottom:3px;">CONDICIONES DE LA TRANSACCIÓN</div>
           <div><span style="color:#64748b;">Modalidad de Pago:</span> <strong>${getPaymentMethodLabel(sale.paymentMethod)}</strong></div>
-          ${tpl.showSellerName ? `<div><span style="color:#64748b;">${tpl.issuerLabel || 'Atendido por'}:</span> <strong>${sellerLabel || sale.cashier || tpl.defaultIssuerName || 'Administrador'}</strong></div>` : ''}
+          ${tpl.showSellerName ? `<div><span style="color:#64748b;">${tpl.issuerLabel || 'Atendido por'}:</span> <strong>${resolvedSeller}</strong></div>` : ''}
           <div><span style="color:#64748b;">Fecha Vencimiento:</span> <strong>${sale.creditDueDate || 'Inmediato (Contado)'}</strong></div>
         </div>
       </div>
@@ -1593,7 +1601,11 @@ export async function downloadSalePdf(
     }
     if (tpl.showSellerName) {
       const issuerTag = (tpl.issuerLabel || 'Atendido por').slice(0, 16);
-      const issuerVal = (sellerLabel || sale.cashier || tpl.defaultIssuerName || 'Admin').slice(0, 26);
+      const issuerVal = resolveInvoiceIssuerName(
+        sellerLabel || sale.cashier,
+        tpl.defaultIssuerName,
+        'Admin'
+      ).slice(0, 26);
       doc.text(`${issuerTag}: ${issuerVal}`, marginX, y);
       y += 3.4;
     }
@@ -1774,8 +1786,13 @@ export async function downloadSalePdf(
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(51, 65, 85);
   if (tpl.showSellerName) {
+    const resolvedPdfSeller = resolveInvoiceIssuerName(
+      sellerLabel || sale.cashier,
+      tpl.defaultIssuerName,
+      'Administrador'
+    );
     doc.text(
-      `${tpl.issuerLabel || 'Atendido por'}: ${sellerLabel || sale.cashier || tpl.defaultIssuerName || 'Administrador'}`,
+      `${tpl.issuerLabel || 'Atendido por'}: ${resolvedPdfSeller}`,
       midX + 4,
       y + 14.2
     );
@@ -2039,6 +2056,7 @@ export function buildPurchaseInvoiceHtml(
         <div style="display:flex;justify-content:space-between;"><span>Bodega Destino:</span><strong>${invoice.warehouseName || 'Tienda Principal'}</strong></div>
         <div style="display:flex;justify-content:space-between;"><span>Fecha:</span><span>${invoice.date}</span></div>
         <div style="display:flex;justify-content:space-between;"><span>Condición:</span><span>${invoice.paymentCondition === 'credit' ? 'Crédito' : 'Contado'}</span></div>
+        ${tpl.showSellerName ? `<div style="display:flex;justify-content:space-between;"><span>${tpl.issuerLabel || 'Recibido por'}:</span><strong>${resolveInvoiceIssuerName(invoice.receivedBy, tpl.defaultIssuerName, 'Administrador')}</strong></div>` : ''}
       </div>
       <div class="dashed-line"></div>
       <table style="font-size:10px;">
@@ -2095,7 +2113,7 @@ export function buildPurchaseInvoiceHtml(
         <div>
           <div><span style="color:#64748b;">Proveedor Comercial:</span> <strong>${invoice.supplierName}</strong></div>
           <div><span style="color:#64748b;">Bodega Destino de Artículos:</span> <strong style="color:${accentHex};">${invoice.warehouseName || 'Tienda Principal'}</strong></div>
-          ${tpl.showSellerName ? `<div><span style="color:#64748b;">${tpl.issuerLabel || 'Recibido en Bodega por'}:</span> <strong>${invoice.receivedBy || tpl.defaultIssuerName || 'Administrador'}</strong></div>` : ''}
+          ${tpl.showSellerName ? `<div><span style="color:#64748b;">${tpl.issuerLabel || 'Recibido en Bodega por'}:</span> <strong>${resolveInvoiceIssuerName(invoice.receivedBy, tpl.defaultIssuerName, 'Administrador')}</strong></div>` : ''}
         </div>
         <div style="text-align:right;">
           <div><span style="color:#64748b;">Condición de Pago:</span> <strong>${invoice.paymentCondition === 'credit' ? 'CRÉDITO PROVEEDOR' : 'CONTADO PAGADO'}</strong></div>
@@ -2212,7 +2230,7 @@ export async function downloadPurchaseInvoicePdf(
   doc.setTextColor(71, 85, 105);
   if (tpl.showSellerName) {
     doc.text(
-      `${tpl.issuerLabel || 'Recibido en Inventario por'}: ${invoice.receivedBy || tpl.defaultIssuerName || 'Administrador'}`,
+      `${tpl.issuerLabel || 'Recibido en Inventario por'}: ${resolveInvoiceIssuerName(invoice.receivedBy, tpl.defaultIssuerName, 'Administrador')}`,
       18,
       y + 17.5
     );
@@ -5202,6 +5220,852 @@ export async function downloadClientAppKeysDossierPdf(
   drawPdfPageFooters(doc, headerSettings, `Expediente de Llaves ${company.slug.toUpperCase()}`);
   doc.save(`Entrega_Llaves_Y_Accesos_${company.slug}_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
+
+// ============================================================================
+// 11. CONTRATO DE CRÉDITO / ARRENDAMIENTO CON RESERVA DE DOMINIO
+// ============================================================================
+const SPANISH_MONTHS = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre',
+];
+
+export const CREDIT_CONTRACT_GENERAL_CONDITIONS: string[] = [
+  'El Arrendatario deposita en poder del Arrendador la cantidad citada en la cláusula #2, en concepto de prima o pago inicial, que servirá para garantizar el buen cuidado y administración del objeto en arrendamiento.',
+  'Las cuotas serán pagadas sin necesidad de requerimiento previo. El Arrendador se reserva el derecho de conceder un lugar diferente de pago en caso de cambio de domicilio del Arrendatario.',
+  'La mora en el pago de una cuota o el incumplimiento de cualquiera de las cláusulas de este contrato dará derecho al Arrendador a darlo por terminado, pudiendo a su elección recoger —aun en poder de terceros— el objeto arrendado sin necesidad de intervención judicial o indemnización por su parte, o a exigir el pago del saldo de la obligación consignada en el contrato más los intereses pactados. Este contrato tiene fuerza legal para pedir la entrega del objeto del lugar donde se encuentre y del poder de la persona que lo tenga. Toda divergencia o reclamación no aplazará los términos de los pagos pactados.',
+  'En caso de incumplimiento, los valores recibidos en concepto de prima y cuotas quedarán a favor de la empresa en concepto de daños y perjuicios, sin ninguna obligación de devolver cantidad alguna.',
+  'La mora o falta de pago de una cuota (que se producirá sin ningún requerimiento del Arrendador) devengará un interés moratorio de 0.66% diario por cuota en mora, más LPS. 100.00 de gastos administrativos por cuota, sin perjuicio de lo pactado en el inciso #3.',
+  'El Arrendatario declara haber recibido el artículo en perfecto estado de funcionamiento y a su entera satisfacción, obligándose a conservarlo en el mismo estado. Los riesgos del mueble quedan a su cargo desde la fecha del contrato, siendo responsable de pérdida, destrucción, deterioro o daños que cause, aun por caso fortuito o fuerza mayor.',
+  'Al Arrendatario le queda terminantemente prohibido subarrendar, enajenar, vender, permutar, donar, prestar, dar en prenda el mueble arrendado, así como trasladarlo a un lugar distinto del declarado en la cláusula #4 sin el consentimiento previo y escrito del Arrendador.',
+  'El Arrendatario renuncia a su domicilio y se somete expresamente al juzgado que el Arrendador señale para los efectos de la ejecución del presente contrato.',
+  'El Arrendatario queda igualmente obligado al pago de los gastos que origine cualquier procedimiento judicial o extrajudicial necesario para la ejecución de este contrato.',
+  'Al cumplirse totalmente este contrato, el Arrendador conviene en traspasar al Arrendatario el dominio pleno de los bienes muebles objeto del mismo.',
+  'Ambos contratantes manifiestan que aceptan todas y cada una de las cláusulas anteriores y se obligan a su estricto cumplimiento.',
+  'El Arrendatario tiene derecho a pagar anticipadamente el crédito con la consiguiente reducción de intereses.',
+  'En todo lo no previsto en este contrato se estará sujeto a lo dispuesto en el Código de Comercio y a la Ley de Protección al Consumidor.',
+];
+
+export function resolveCreditContractData(
+  sale: SaleRecord,
+  storeSettings: StoreSettings,
+  controlMeta?: CreditAccountControlMeta,
+  inventory?: Product[]
+): CreditContractData {
+  const saved = controlMeta?.creditContract || sale.creditContract;
+  const saleDateObj = new Date(sale.timestamp || Date.now());
+  const defaultDay = String(saleDateObj.getDate()).padStart(2, '0');
+  const defaultMonth = SPANISH_MONTHS[saleDateObj.getMonth()] || 'enero';
+  const defaultYear = String(saleDateObj.getFullYear());
+
+  // Determine Lessor Name (ARRENDADOR)
+  const rawStoreName = (storeSettings.storeName || '').trim();
+  const defaultLessor =
+    rawStoreName && rawStoreName.toLowerCase() !== 'tienda gosén'
+      ? rawStoreName.toUpperCase()
+      : (storeSettings.companyId || '').toLowerCase().includes('gyg')
+      ? 'COMERCIALGYG'
+      : (rawStoreName || 'COMERCIALGYG').toUpperCase();
+
+  // Article description, brand, model
+  const items = sale.items || [];
+  const defaultArticleDesc =
+    items.map((it) => `${it.quantity}x ${it.name}`).join(', ') || 'Artículo al crédito';
+
+  let defaultBrand = 'ESTÁNDAR';
+  let defaultModel = 'S/M';
+  if (items.length > 0) {
+    const firstItem = items[0];
+    const matchedProd = inventory?.find(
+      (p) => p.code.trim().toLowerCase() === (firstItem.code || '').trim().toLowerCase()
+    );
+    if (matchedProd?.supplier && matchedProd.supplier.trim()) {
+      defaultBrand = matchedProd.supplier.trim().toUpperCase();
+    } else if (firstItem.category && firstItem.category.trim()) {
+      defaultBrand = firstItem.category.trim().toUpperCase();
+    }
+    const modelParts = items
+      .map((it) => it.size || it.code)
+      .filter(Boolean)
+      .join(', ');
+    if (modelParts) {
+      defaultModel = modelParts;
+    }
+  }
+
+  const inventoryCreditSum = items.reduce((sum, it) => {
+    const matchedProd = inventory?.find(
+      (p) => p.code.trim().toLowerCase() === (it.code || '').trim().toLowerCase()
+    );
+    const unitCred =
+      it.creditPrice !== undefined && Number(it.creditPrice) > 0
+        ? Number(it.creditPrice)
+        : matchedProd?.creditPrice !== undefined && Number(matchedProd.creditPrice) > 0
+        ? Number(matchedProd.creditPrice)
+        : Number(it.price) || 0;
+    return sum + unitCred * (Number(it.quantity) || 1);
+  }, 0);
+
+  const totalCreditVal =
+    saved?.creditTotalValue !== undefined && saved.creditTotalValue > 0
+      ? Number(saved.creditTotalValue)
+      : inventoryCreditSum > (Number(sale.total) || 0)
+      ? Number(inventoryCreditSum.toFixed(2))
+      : Number(sale.total) || 0;
+
+  // Initial prima / down payment
+  const firstAbone =
+    Array.isArray(sale.creditPayments) && sale.creditPayments.length > 0
+      ? sale.creditPayments[0]
+      : null;
+  const inferredPrima =
+    firstAbone && /prima|inicial/i.test(firstAbone.notes || '')
+      ? Number(firstAbone.amount) || 0
+      : Array.isArray(sale.creditPayments) && sale.creditPayments.length <= 1
+      ? Number(sale.amountPaid) || 0
+      : firstAbone
+      ? Number(firstAbone.amount) || 0
+      : 0;
+
+  const downPaymentVal =
+    saved?.downPaymentValue !== undefined
+      ? Math.max(0, Number(saved.downPaymentValue))
+      : Math.max(0, inferredPrima);
+
+  const financedBalanceVal =
+    saved?.financedBalance !== undefined
+      ? Math.max(0, Number(saved.financedBalance))
+      : Math.max(0, Number((totalCreditVal - downPaymentVal).toFixed(2)));
+
+  const numInstallments =
+    saved?.numberOfInstallments && saved.numberOfInstallments > 0
+      ? Math.round(Number(saved.numberOfInstallments))
+      : controlMeta?.numberOfInstallments && controlMeta.numberOfInstallments > 0
+      ? Math.round(Number(controlMeta.numberOfInstallments))
+      : 6;
+
+  const termMonths =
+    saved?.termMonths && saved.termMonths > 0
+      ? Math.round(Number(saved.termMonths))
+      : numInstallments;
+
+  const computedQuota =
+    numInstallments > 0 ? Number((financedBalanceVal / numInstallments).toFixed(2)) : financedBalanceVal;
+
+  const installmentVal =
+    saved?.installmentValue !== undefined && saved.installmentValue > 0
+      ? Number(saved.installmentValue)
+      : controlMeta?.installmentAmount && controlMeta.installmentAmount > 0
+      ? Number(controlMeta.installmentAmount)
+      : computedQuota;
+
+  // First payment date & day of month
+  const nextMonthDate = new Date(sale.timestamp || Date.now());
+  nextMonthDate.setMonth(nextMonthDate.getMonth() + 1);
+  const defaultFirstPayIso = nextMonthDate.toISOString().slice(0, 10);
+
+  const rawFirstPayDate =
+    saved?.firstPaymentDate?.trim() ||
+    controlMeta?.nextPaymentDate?.trim() ||
+    sale.creditDueDate?.trim() ||
+    defaultFirstPayIso;
+
+  let extractedDay = defaultDay;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawFirstPayDate)) {
+    extractedDay = String(parseInt(rawFirstPayDate.split('-')[2], 10));
+  }
+
+  const custAddr =
+    saved?.customerAddress?.trim() ||
+    sale.customerAddress?.trim() ||
+    sale.onlineOrder?.shippingAddress?.trim() ||
+    'Domicilio registrado del cliente';
+
+  const installAddr =
+    saved?.installationAddress?.trim() ||
+    custAddr;
+
+  const signLoc =
+    saved?.signLocation?.trim() ||
+    storeSettings.address?.trim() ||
+    'Honduras';
+
+  return {
+    lessorName: saved?.lessorName?.trim() || defaultLessor,
+    customerName: (saved?.customerName?.trim() || sale.customerName || 'CLIENTE').toUpperCase(),
+    customerIdentity: saved?.customerIdentity?.trim() || sale.customerRtn?.trim() || 'S/N',
+    customerPhone: saved?.customerPhone?.trim() || sale.customerPhone?.trim() || 'S/N',
+    customerAddress: custAddr,
+    installationAddress: installAddr,
+    articleDescription: saved?.articleDescription?.trim() || defaultArticleDesc,
+    articleBrand: saved?.articleBrand?.trim() || defaultBrand,
+    articleModel: saved?.articleModel?.trim() || defaultModel,
+    creditTotalValue: totalCreditVal,
+    downPaymentValue: downPaymentVal,
+    financedBalance: financedBalanceVal,
+    numberOfInstallments: numInstallments,
+    termMonths,
+    installmentValue: installmentVal,
+    paymentDayOfMonth: saved?.paymentDayOfMonth?.trim() || extractedDay,
+    firstPaymentDate: rawFirstPayDate,
+    signLocation: signLoc,
+    signDay: saved?.signDay?.trim() || defaultDay,
+    signMonth: saved?.signMonth?.trim() || defaultMonth,
+    signYear: saved?.signYear?.trim() || defaultYear,
+    customWarrantyNote: saved?.customWarrantyNote,
+    customerSignatureDataUrl: saved?.customerSignatureDataUrl,
+    customerSignedAt: saved?.customerSignedAt,
+    lessorSignatureDataUrl: saved?.lessorSignatureDataUrl,
+    lessorSignedAt: saved?.lessorSignedAt,
+    updatedAt: saved?.updatedAt,
+  };
+}
+
+export function buildCreditContractHtml(
+  sale: SaleRecord,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat = 'letter',
+  contractOverride?: CreditContractData,
+  controlMeta?: CreditAccountControlMeta,
+  inventory?: Product[]
+): string {
+  const c = contractOverride || resolveCreditContractData(sale, storeSettings, controlMeta, inventory);
+  const isThermal = format === '80mm' || format === '58mm';
+  const tpl = getEffectiveInvoiceTemplate(storeSettings);
+  const accentHex = tpl.accentColor || '#047857';
+
+  const fmtNum = (n: number) =>
+    (Number(n) || 0).toLocaleString('es-HN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+  if (isThermal) {
+    return `
+      <div style="font-size:${format === '58mm' ? '10px' : '11px'};line-height:1.38;">
+        <div class="text-center" style="margin-bottom:6px;">
+          ${
+            tpl.showLogo && storeSettings.logoUrl
+              ? `<img src="${storeSettings.logoUrl}" alt="${c.lessorName}" style="width:44px;height:44px;object-fit:contain;margin:0 auto 4px;display:block;border-radius:6px;" />`
+              : ''
+          }
+          <div style="font-size:13px;font-weight:900;text-transform:uppercase;">CONTRATO DE ARRENDAMIENTO CON RESERVA DE DOMINIO</div>
+          <div style="font-size:10px;font-weight:700;">Ref. Factura: ${sale.saleNumber}</div>
+        </div>
+        <div class="dashed-line"></div>
+        <p style="margin:4px 0;"><strong>ARRENDADOR:</strong> ${c.lessorName}</p>
+        <p style="margin:4px 0;text-align:justify;">
+          <strong>ARRENDATARIO:</strong> <strong>${c.customerName}</strong>, mayor de edad, hondureño(a), con domicilio en <strong>${c.customerAddress}</strong>, con número de teléfono <strong>${c.customerPhone}</strong> y Tarjeta de Identidad / RTN número: <strong>${c.customerIdentity}</strong>.
+        </p>
+        <p style="margin:4px 0;">Por medio del presente documento se celebra un <strong>CONTRATO DE ARRENDAMIENTO</strong> del siguiente bien:</p>
+        <div style="border:1px solid #000;padding:5px;border-radius:4px;margin:4px 0;">
+          <div>• <strong>Artículo:</strong> ${c.articleDescription} (Marca: ${c.articleBrand}, Modelo: ${c.articleModel})</div>
+          <div>• <strong>Valor al Crédito:</strong> LPS. ${fmtNum(c.creditTotalValue)}</div>
+        </div>
+        <div class="dashed-line"></div>
+        <div style="font-weight:900;text-transform:uppercase;margin:4px 0;">CLÁUSULAS PRINCIPALES</div>
+        <p style="margin:4px 0;text-align:justify;">
+          <strong>SEGUNDA:</strong> El ARRENDADOR da en arrendamiento con reserva de dominio al ARRENDATARIO el o los objetos detallados anteriormente, bajo las siguientes condiciones:
+        </p>
+        <div style="padding-left:4px;margin:4px 0;">
+          <div>- <strong>(A) Valor al crédito:</strong> LPS. ${fmtNum(c.creditTotalValue)}</div>
+          <div>- <strong>(B) Valor de la prima:</strong> LPS. ${fmtNum(c.downPaymentValue)}</div>
+          <div>- <strong>(C) Valor de la cuota:</strong> LPS. ${fmtNum(c.installmentValue)}</div>
+          <div>- <strong>(D) Número de cuotas:</strong> ${c.numberOfInstallments}, las cuales se pagarán mensualmente.</div>
+          <div>- <strong>(E) Saldo a financiar:</strong> LPS. ${fmtNum(c.financedBalance)}</div>
+        </div>
+        <p style="margin:4px 0;text-align:justify;">
+          <strong>TERCERA:</strong> El plazo del contrato es de <strong>${c.termMonths}</strong> meses a partir de la fecha. Las cuotas que incluyen capital e interés calculados sobre el saldo adecuado serán pagadas en la tienda arriba mencionada el día <strong>${c.paymentDayOfMonth}</strong> de cada mes, comenzando el <strong>${c.firstPaymentDate}</strong>. El monto financiado en caso de pagar puntualmente será de LPS. <strong>${fmtNum(c.financedBalance)}</strong>.
+        </p>
+        <p style="margin:4px 0;text-align:justify;">
+          <strong>CUARTA:</strong> El ARRENDATARIO declara que el o los artículos objeto de contrato permanecerán en la siguiente dirección: <strong>${c.installationAddress}</strong>.
+        </p>
+        <p style="margin:4px 0;text-align:justify;">
+          <strong>QUINTA:</strong> Forman parte de este contrato las condiciones generales impresas al dorso del presente documento y el certificado de garantía contenido en este mismo, el cual le sirve al ARRENDATARIO para asegurar el buen funcionamiento del producto. El ARRENDADOR se compromete a su reparación durante el tiempo que dure la garantía, exceptuando daños ocasionados por uso indebido. La garantía empieza a contar a partir de la fecha de entrega del artículo.
+        </p>
+        <p style="margin:4px 0;text-align:justify;">
+          <strong>SEXTA:</strong> Expresamente se conviene que este contrato de arrendamiento con reserva de dominio no puede calificarse ni interpretarse de otra manera; por lo que los contratantes renuncian a toda acción o excepción que no se derive de este documento.
+        </p>
+        <p style="margin:6px 0;font-weight:700;">
+          Firmado en <strong>${c.signLocation}</strong> el día <strong>${c.signDay}</strong>, <strong>${c.signMonth}</strong> de <strong>${c.signYear}</strong>.
+        </p>
+        <div style="margin-top:16px;text-align:center;">
+          ${
+            c.customerSignatureDataUrl
+              ? `<img src="${c.customerSignatureDataUrl}" alt="Firma Arrendatario" style="max-width:170px;max-height:58px;object-fit:contain;margin:0 auto 2px;display:block;" />`
+              : `<div style="height:28px;"></div>`
+          }
+          <div style="border-top:1px solid #000;width:85%;margin:0 auto;padding-top:3px;font-weight:800;">FIRMA ARRENDATARIO (CLIENTE)</div>
+          <div style="font-size:9.5px;">${c.customerName} • ID: ${c.customerIdentity}</div>
+          ${c.customerSignedAt ? `<div style="font-size:8.5px;color:#334155;">Firmado digitalmente: ${c.customerSignedAt}</div>` : ''}
+        </div>
+        <div style="margin-top:16px;text-align:center;">
+          ${
+            c.lessorSignatureDataUrl
+              ? `<img src="${c.lessorSignatureDataUrl}" alt="Firma Arrendador" style="max-width:170px;max-height:58px;object-fit:contain;margin:0 auto 2px;display:block;" />`
+              : `<div style="height:24px;"></div>`
+          }
+          <div style="border-top:1px solid #000;width:85%;margin:0 auto;padding-top:3px;font-weight:800;">FIRMA ARRENDADOR</div>
+          <div style="font-size:9.5px;">${c.lessorName}</div>
+          ${c.lessorSignedAt ? `<div style="font-size:8.5px;color:#334155;">Firmado digitalmente: ${c.lessorSignedAt}</div>` : ''}
+        </div>
+        <div class="dashed-line"></div>
+        <div style="font-weight:900;text-transform:uppercase;margin:4px 0;">CONDICIONES GENERALES</div>
+        <ol style="padding-left:14px;margin:4px 0;font-size:9.5px;text-align:justify;">
+          ${CREDIT_CONTRACT_GENERAL_CONDITIONS.map((cond) => `<li style="margin-bottom:3px;">${cond}</li>`).join('')}
+        </ol>
+        <div class="dashed-line"></div>
+        <div style="font-weight:900;text-transform:uppercase;margin:4px 0;">CONDICIONES ESPECIALES DE GARANTÍA</div>
+        <div style="font-size:9.5px;">
+          <div><strong>Plazos de Garantía por Producto:</strong></div>
+          <div>• Lavadora: 2 meses de garantía</div>
+          <div>• Estufa: 3 meses de garantía</div>
+          <div>• Oasis: 2 meses de garantía</div>
+          <div>• Refrigeradora: 2 meses de garantía</div>
+          <div style="margin-top:4px;"><strong>Exclusiones de Garantía:</strong> Quedan excluidas de garantía todas las fallas ocasionadas por mal uso y/o tratamiento no apropiado, fallas de energía, alto o bajo voltaje, instalaciones eléctricas defectuosas, enchufar en voltaje diferente, daños ocasionados por el medio ambiente o plagas/animales.</div>
+          <div>• <strong>Estufas:</strong> Resistencias, empaques, platos de estufa, parrillas, cables de energía, perillas.</div>
+          <div>• <strong>Refrigeradoras y Freezers:</strong> Bisagras, empaques, gavetas, llamadores/tiradores, rodos, parrillas, cables de energía.</div>
+          <div>• <strong>Lavadoras y Secadoras:</strong> Perillas, cables de energía, switch de tapadera de seguridad.</div>
+          <div style="margin-top:4px;text-align:justify;">La garantía no cubre defectos ocasionados por revisión o manipulación de personas no autorizadas por <strong>${c.lessorName}</strong>. Para hacer efectiva la garantía, deberá presentar únicamente este documento en la tienda donde realizó la compra o en las oficinas principales en <strong>${c.signLocation}</strong>.</div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;line-height:1.45;font-size:11.5px;">
+      <!-- Encabezado Corporativo del Contrato -->
+      <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid ${accentHex};padding-bottom:10px;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          ${
+            tpl.showLogo && storeSettings.logoUrl
+              ? `<img src="${storeSettings.logoUrl}" alt="${c.lessorName}" style="width:54px;height:54px;object-fit:contain;border-radius:10px;border:1px solid #cbd5e1;padding:3px;background:#fff;" />`
+              : ''
+          }
+          <div>
+            <div style="font-size:18px;font-weight:900;text-transform:uppercase;color:#0f172a;letter-spacing:-0.3px;">
+              ${c.lessorName}
+            </div>
+            ${storeSettings.address ? `<div style="font-size:10.5px;color:#475569;">${storeSettings.address}</div>` : ''}
+            ${storeSettings.phone ? `<div style="font-size:10.5px;color:#475569;">Tel / WhatsApp: ${storeSettings.phone}${storeSettings.storeRtn ? ` • RTN: ${storeSettings.storeRtn}` : ''}</div>` : ''}
+          </div>
+        </div>
+        <div style="text-align:right;background:#f8fafc;border:1.5px solid #cbd5e1;border-radius:10px;padding:8px 12px;">
+          <div style="font-size:10px;font-weight:900;text-transform:uppercase;color:${accentHex};">
+            CONTRATO DE CRÉDITO OFICIAL
+          </div>
+          <div style="font-family:monospace;font-size:13px;font-weight:900;color:#0f172a;">
+            Ref: ${sale.saleNumber}
+          </div>
+          <div style="font-size:10px;color:#64748b;">Fecha: ${sale.date}</div>
+        </div>
+      </div>
+
+      <div style="text-align:center;background:#0f172a;color:#ffffff;padding:7px 12px;border-radius:8px;font-size:13.5px;font-weight:900;letter-spacing:0.4px;text-transform:uppercase;margin-bottom:12px;">
+        CONTRATO DE ARRENDAMIENTO CON RESERVA DE DOMINIO
+      </div>
+
+      <!-- Identificación de las Partes -->
+      <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;margin-bottom:12px;text-align:justify;">
+        <div style="margin-bottom:5px;">
+          <strong>ARRENDADOR:</strong> <span style="font-weight:900;color:#0f172a;">${c.lessorName}</span>
+        </div>
+        <div>
+          <strong>ARRENDATARIO:</strong> <strong style="text-decoration:underline;">${c.customerName}</strong>, mayor de edad, hondureño(a), con domicilio en <strong style="text-decoration:underline;">${c.customerAddress}</strong>, con número de teléfono <strong style="text-decoration:underline;">${c.customerPhone}</strong> y Tarjeta de Identidad / RTN número: <strong style="text-decoration:underline;">${c.customerIdentity}</strong>.
+        </div>
+      </div>
+
+      <!-- Objeto del Contrato -->
+      <div style="margin-bottom:12px;">
+        <p style="margin:0 0 6px 0;">
+          Por medio del presente documento se celebra un <strong>CONTRATO DE ARRENDAMIENTO</strong> del siguiente bien:
+        </p>
+        <div style="border:1.5px solid #0f172a;border-radius:8px;padding:9px 14px;background:#ffffff;">
+          <div style="margin-bottom:4px;">
+            • <strong>Artículo:</strong> <strong>${c.articleDescription}</strong> (Marca: <strong>${c.articleBrand}</strong>, Modelo: <strong>${c.articleModel}</strong>)
+          </div>
+          <div>
+            • <strong>Valor al Crédito:</strong> <strong style="color:${accentHex};font-size:13px;">LPS. ${fmtNum(c.creditTotalValue)}</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cláusulas Principales -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:12px;font-weight:900;text-transform:uppercase;color:#0f172a;border-bottom:1.5px solid #cbd5e1;padding-bottom:4px;margin-bottom:8px;">
+          CLÁUSULAS PRINCIPALES
+        </div>
+
+        <p style="margin:0 0 6px 0;text-align:justify;">
+          <strong>SEGUNDA:</strong> El ARRENDADOR da en arrendamiento con reserva de dominio al ARRENDATARIO el o los objetos detallados anteriormente, bajo las siguientes condiciones:
+        </p>
+
+        <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:6px 16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:8px 14px;margin-bottom:8px;font-size:11px;">
+          <div>• <strong>(A) Valor al crédito:</strong> LPS. ${fmtNum(c.creditTotalValue)}</div>
+          <div>• <strong>(B) Valor de la prima:</strong> LPS. ${fmtNum(c.downPaymentValue)}</div>
+          <div>• <strong>(C) Valor de la cuota:</strong> LPS. ${fmtNum(c.installmentValue)}</div>
+          <div>• <strong>(D) Número de cuotas:</strong> ${c.numberOfInstallments}, las cuales se pagarán mensualmente.</div>
+          <div style="grid-column:span 2;border-top:1px dashed #cbd5e1;padding-top:4px;font-size:12px;">
+            • <strong>(E) Saldo a financiar:</strong> <strong style="color:#b45309;">LPS. ${fmtNum(c.financedBalance)}</strong>
+          </div>
+        </div>
+
+        <p style="margin:0 0 7px 0;text-align:justify;">
+          <strong>TERCERA:</strong> El plazo del contrato es de <strong>${c.termMonths}</strong> meses a partir de la fecha. Las cuotas que incluyen capital e interés calculados sobre el saldo adecuado serán pagadas en la tienda arriba mencionada el día <strong>${c.paymentDayOfMonth}</strong> de cada mes, comenzando el <strong>${c.firstPaymentDate}</strong>. El monto financiado en caso de pagar puntualmente será de <strong>LPS. ${fmtNum(c.financedBalance)}</strong>.
+        </p>
+
+        <p style="margin:0 0 7px 0;text-align:justify;">
+          <strong>CUARTA:</strong> El ARRENDATARIO declara que el o los artículos objeto de contrato permanecerán en la siguiente dirección: <strong style="text-decoration:underline;">${c.installationAddress}</strong>.
+        </p>
+
+        <p style="margin:0 0 7px 0;text-align:justify;">
+          <strong>QUINTA:</strong> Forman parte de este contrato las condiciones generales impresas al dorso del presente documento y el certificado de garantía contenido en este mismo, el cual le sirve al ARRENDATARIO para asegurar el buen funcionamiento del producto. El ARRENDADOR se compromete a su reparación durante el tiempo que dure la garantía, exceptuando daños ocasionados por uso indebido. La garantía empieza a contar a partir de la fecha de entrega del artículo.
+        </p>
+
+        <p style="margin:0 0 10px 0;text-align:justify;">
+          <strong>SEXTA:</strong> Expresamente se conviene que este contrato de arrendamiento con reserva de dominio no puede calificarse ni interpretarse de otra manera; por lo que los contratantes renuncian a toda acción o excepción que no se derive de este documento.
+        </p>
+
+        <p style="margin:8px 0 16px 0;font-weight:700;">
+          Firmado en <strong>${c.signLocation}</strong> el día <strong>${c.signDay}</strong>, <strong>${c.signMonth}</strong> de <strong>${c.signYear}</strong>.
+        </p>
+
+        <!-- Bloques de Firmas -->
+        <div class="signatures" style="margin-top:16px;margin-bottom:16px;">
+          <div class="sig-block" style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;">
+            ${
+              c.customerSignatureDataUrl
+                ? `<img src="${c.customerSignatureDataUrl}" alt="Firma Cliente" style="max-width:190px;max-height:62px;object-fit:contain;margin-bottom:2px;" />`
+                : `<div style="height:44px;"></div>`
+            }
+            <div class="sig-line" style="width:100%;"></div>
+            <div style="font-size:11px;font-weight:900;">FIRMA ARRENDATARIO (CLIENTE)</div>
+            <div style="font-size:10px;color:#475569;">${c.customerName}</div>
+            <div style="font-size:9.5px;color:#64748b;">Identidad / RTN: ${c.customerIdentity}</div>
+            ${c.customerSignedAt ? `<div style="font-size:8.5px;color:#047857;font-weight:700;">Firmado digitalmente: ${c.customerSignedAt}</div>` : ''}
+          </div>
+          <div class="sig-block" style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;">
+            ${
+              c.lessorSignatureDataUrl
+                ? `<img src="${c.lessorSignatureDataUrl}" alt="Firma Arrendador" style="max-width:190px;max-height:62px;object-fit:contain;margin-bottom:2px;" />`
+                : `<div style="height:44px;"></div>`
+            }
+            <div class="sig-line" style="width:100%;"></div>
+            <div style="font-size:11px;font-weight:900;">FIRMA ARRENDADOR</div>
+            <div style="font-size:10px;color:#475569;">${c.lessorName}</div>
+            ${c.lessorSignedAt ? `<div style="font-size:8.5px;color:#047857;font-weight:700;">Firmado digitalmente: ${c.lessorSignedAt}</div>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <hr style="border:none;border-top:1.5px dashed #94a3b8;margin:14px 0;" />
+
+      <!-- Condiciones Generales -->
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11.5px;font-weight:900;text-transform:uppercase;color:#0f172a;margin-bottom:6px;">
+          CONDICIONES GENERALES
+        </div>
+        <ol style="margin:0;padding-left:16px;font-size:9.8px;line-height:1.42;color:#1e293b;text-align:justify;">
+          ${CREDIT_CONTRACT_GENERAL_CONDITIONS.map(
+            (cond) => `<li style="margin-bottom:3.5px;">${cond}</li>`
+          ).join('')}
+        </ol>
+      </div>
+
+      <!-- Condiciones Especiales de Garantía -->
+      <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;font-size:10px;line-height:1.42;">
+        <div style="font-size:11.5px;font-weight:900;text-transform:uppercase;color:#0f172a;margin-bottom:6px;">
+          CONDICIONES ESPECIALES DE GARANTÍA
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;">
+          <div>
+            <div style="font-weight:800;margin-bottom:4px;color:#0f172a;">Plazos de Garantía por Producto:</div>
+            <ul style="margin:0;padding-left:15px;">
+              <li><strong>Lavadora:</strong> 2 meses de garantía</li>
+              <li><strong>Estufa:</strong> 3 meses de garantía</li>
+              <li><strong>Oasis:</strong> 2 meses de garantía</li>
+              <li><strong>Refrigeradora:</strong> 2 meses de garantía</li>
+            </ul>
+          </div>
+          <div style="text-align:justify;">
+            <div style="font-weight:800;margin-bottom:3px;color:#0f172a;">Exclusiones de Garantía:</div>
+            <p style="margin:0 0 4px 0;">
+              Quedan excluidas de garantía todas las fallas ocasionadas por mal uso y/o tratamiento no apropiado, fallas de energía, alto o bajo voltaje, instalaciones eléctricas defectuosas, enchufar en voltaje diferente, daños ocasionados por el medio ambiente o plagas/animales.
+            </p>
+            <ul style="margin:0;padding-left:15px;">
+              <li><strong>Estufas:</strong> Resistencias, empaques, platos de estufa, parrillas, cables de energía, perillas.</li>
+              <li><strong>Refrigeradoras y Freezers:</strong> Bisagras, empaques, gavetas, llamadores/tiradores, rodos, parrillas, cables de energía.</li>
+              <li><strong>Lavadoras y Secadoras:</strong> Perillas, cables de energía, switch de tapadera de seguridad.</li>
+            </ul>
+          </div>
+        </div>
+        <p style="margin:7px 0 0 0;border-top:1px solid #e2e8f0;padding-top:6px;text-align:justify;">
+          La garantía no cubre defectos ocasionados por revisión o manipulación de personas no autorizadas por <strong>${c.lessorName}</strong>. Para hacer efectiva la garantía, deberá presentar únicamente este documento en la tienda donde realizó la compra o en las oficinas principales en <strong>${c.signLocation}</strong>.
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+export function buildSaleAndCreditContractCombinedHtml(
+  sale: SaleRecord,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat = 'letter',
+  sellerLabel?: string,
+  contractOverride?: CreditContractData,
+  controlMeta?: CreditAccountControlMeta,
+  inventory?: Product[]
+): string {
+  const saleHtml = buildSaleDocumentHtml(sale, storeSettings, format, sellerLabel);
+  const contractHtml = buildCreditContractHtml(
+    sale,
+    storeSettings,
+    format,
+    contractOverride,
+    controlMeta,
+    inventory
+  );
+  const isThermal = format === '80mm' || format === '58mm';
+
+  if (isThermal) {
+    return `
+      ${saleHtml}
+      <div style="border-top:2px dashed #000;margin:14px 0;padding-top:10px;"></div>
+      ${contractHtml}
+    `;
+  }
+
+  return `
+    <div>
+      ${saleHtml}
+      <div style="page-break-before:always;break-before:page;margin-top:24px;"></div>
+      ${contractHtml}
+    </div>
+  `;
+}
+
+export async function downloadCreditContractPdf(
+  sale: SaleRecord,
+  storeSettings: StoreSettings,
+  contractOverride?: CreditContractData,
+  controlMeta?: CreditAccountControlMeta,
+  inventory?: Product[]
+): Promise<void> {
+  await preloadStoreLogoForPdf(storeSettings.logoUrl);
+  const c = contractOverride || resolveCreditContractData(sale, storeSettings, controlMeta, inventory);
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const tpl = getEffectiveInvoiceTemplate(storeSettings);
+  const accent = hexToRgbTuple(tpl.accentColor, [4, 120, 87]);
+
+  const fmtNum = (n: number) =>
+    (Number(n) || 0).toLocaleString('es-HN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+  let y = drawExecutivePdfHeader(doc, {
+    storeSettings: {
+      ...storeSettings,
+      storeName: c.lessorName,
+    },
+    documentTitle: 'CONTRATO DE CRÉDITO',
+    documentNumber: sale.saleNumber,
+    dateLabel: `Fecha: ${sale.date}`,
+    accentRgb: accent,
+    statusBadge: {
+      text: 'RESERVA DE DOMINIO',
+      bgRgb: [254, 243, 199],
+      textRgb: [180, 83, 9],
+    },
+  });
+
+  // Main Contract Title Banner
+  doc.setFillColor(15, 23, 42);
+  doc.roundedRect(14, y, pageWidth - 28, 8, 1.8, 1.8, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('CONTRATO DE ARRENDAMIENTO CON RESERVA DE DOMINIO', pageWidth / 2, y + 5.3, {
+    align: 'center',
+  });
+  y += 11;
+
+  // Parties Block
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  const partiesText = `ARRENDADOR: ${c.lessorName}\nARRENDATARIO: ${c.customerName}, mayor de edad, hondureño(a), con domicilio en ${c.customerAddress}, con número de teléfono ${c.customerPhone} y Tarjeta de Identidad / RTN número: ${c.customerIdentity}.`;
+  const splitParties = doc.splitTextToSize(partiesText, pageWidth - 34);
+  const partiesBoxH = splitParties.length * 4.2 + 5;
+  doc.roundedRect(14, y, pageWidth - 28, partiesBoxH, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.8);
+  doc.setTextColor(15, 23, 42);
+  doc.text(splitParties, 17, y + 4.8);
+  y += partiesBoxH + 4;
+
+  // Object of Contract Table
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.8);
+  doc.setTextColor(30, 41, 59);
+  doc.text(
+    'Por medio del presente documento se celebra un CONTRATO DE ARRENDAMIENTO del siguiente bien:',
+    14,
+    y + 3
+  );
+  y += 5;
+
+  autoTable(doc, {
+    startY: y,
+    head: [['DESCRIPCIÓN DEL ARTÍCULO ARRENDADO', 'MARCA', 'MODELO / CÓDIGO', 'VALOR AL CRÉDITO']],
+    body: [
+      [
+        c.articleDescription,
+        c.articleBrand,
+        c.articleModel,
+        `LPS. ${fmtNum(c.creditTotalValue)}`,
+      ],
+    ],
+    theme: 'grid',
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontSize: 8, cellPadding: 2.3 },
+    bodyStyles: { fontSize: 8.5, cellPadding: 2.5, fontStyle: 'bold' },
+    columnStyles: {
+      0: { cellWidth: 85 },
+      1: { cellWidth: 32 },
+      2: { cellWidth: 35 },
+      3: { cellWidth: 'auto', halign: 'right', textColor: accent },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  y = (doc as any).lastAutoTable.finalY + 5;
+
+  // CLÁUSULAS PRINCIPALES
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('CLÁUSULAS PRINCIPALES', 14, y);
+  y += 2;
+
+  autoTable(doc, {
+    startY: y,
+    head: [
+      [
+        '(A) VALOR AL CRÉDITO',
+        '(B) VALOR DE LA PRIMA',
+        '(C) VALOR DE LA CUOTA',
+        '(D) NÚMERO DE CUOTAS',
+        '(E) SALDO A FINANCIAR',
+      ],
+    ],
+    body: [
+      [
+        `LPS. ${fmtNum(c.creditTotalValue)}`,
+        `LPS. ${fmtNum(c.downPaymentValue)}`,
+        `LPS. ${fmtNum(c.installmentValue)}`,
+        `${c.numberOfInstallments} mensuales`,
+        `LPS. ${fmtNum(c.financedBalance)}`,
+      ],
+    ],
+    theme: 'grid',
+    headStyles: { fillColor: accent, textColor: 255, fontSize: 7.5, cellPadding: 2.2, halign: 'center' },
+    bodyStyles: { fontSize: 8.5, cellPadding: 2.4, fontStyle: 'bold', halign: 'center' },
+    margin: { left: 14, right: 14 },
+  });
+
+  y = (doc as any).lastAutoTable.finalY + 4.5;
+
+  const principalClauses = [
+    `SEGUNDA: El ARRENDADOR da en arrendamiento con reserva de dominio al ARRENDATARIO el o los objetos detallados anteriormente, bajo las condiciones financieras estipuladas en los incisos (A) al (E) de la tabla superior, pagaderas mensualmente.`,
+    `TERCERA: El plazo del contrato es de ${c.termMonths} meses a partir de la fecha. Las cuotas que incluyen capital e interés calculados sobre el saldo adecuado serán pagadas en la tienda arriba mencionada el día ${c.paymentDayOfMonth} de cada mes, comenzando el ${c.firstPaymentDate}. El monto financiado en caso de pagar puntualmente será de LPS. ${fmtNum(c.financedBalance)}.`,
+    `CUARTA: El ARRENDATARIO declara que el o los artículos objeto de contrato permanecerán en la siguiente dirección: ${c.installationAddress}.`,
+    `QUINTA: Forman parte de este contrato las condiciones generales impresas al dorso del presente documento y el certificado de garantía contenido en este mismo, el cual le sirve al ARRENDATARIO para asegurar el buen funcionamiento del producto. El ARRENDADOR se compromete a su reparación durante el tiempo que dure la garantía, exceptuando daños ocasionados por uso indebido. La garantía empieza a contar a partir de la fecha de entrega del artículo.`,
+    `SEXTA: Expresamente se conviene que este contrato de arrendamiento con reserva de dominio no puede calificarse ni interpretarse de otra manera; por lo que los contratantes renuncian a toda acción o excepción que no se derive de este documento.`,
+  ];
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.2);
+  doc.setTextColor(30, 41, 59);
+
+  for (const clause of principalClauses) {
+    const lines = doc.splitTextToSize(clause, pageWidth - 28);
+    doc.text(lines, 14, y);
+    y += lines.length * 3.7 + 1.8;
+  }
+
+  y += 1.5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.6);
+  doc.setTextColor(15, 23, 42);
+  doc.text(
+    `Firmado en ${c.signLocation} el día ${c.signDay}, ${c.signMonth} de ${c.signYear}.`,
+    14,
+    y
+  );
+
+  // Signatures on Page 1
+  y += 18;
+  if (c.customerSignatureDataUrl) {
+    try {
+      doc.addImage(c.customerSignatureDataUrl, 'PNG', 32, y - 14.5, 56, 14);
+    } catch {
+      // ignore invalid image
+    }
+  }
+  if (c.lessorSignatureDataUrl) {
+    try {
+      doc.addImage(c.lessorSignatureDataUrl, 'PNG', 128, y - 14.5, 56, 14);
+    } catch {
+      // ignore invalid image
+    }
+  }
+  doc.setDrawColor(51, 65, 85);
+  doc.setLineWidth(0.35);
+  doc.line(24, y, 96, y);
+  doc.line(120, y, 192, y);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('FIRMA ARRENDATARIO (CLIENTE)', 60, y + 4.5, { align: 'center' });
+  doc.text('FIRMA ARRENDADOR', 156, y + 4.5, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`${c.customerName} — ID/RTN: ${c.customerIdentity}`, 60, y + 8.3, { align: 'center' });
+  doc.text(c.lessorName, 156, y + 8.3, { align: 'center' });
+
+  y += 13;
+
+  // Check if General Conditions + Warranty fit or if we add a clean section/page
+  if (y > pageHeight - 95) {
+    doc.addPage();
+    y = 16;
+  } else {
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.3);
+    doc.line(14, y, pageWidth - 14, y);
+    y += 5;
+  }
+
+  // CONDICIONES GENERALES
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(15, 23, 42);
+  doc.text('CONDICIONES GENERALES DEL CONTRATO', 14, y);
+  y += 4;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.3);
+  doc.setTextColor(30, 41, 59);
+
+  CREDIT_CONTRACT_GENERAL_CONDITIONS.forEach((cond, idx) => {
+    const numbered = `${idx + 1}. ${cond}`;
+    const wrapped = doc.splitTextToSize(numbered, pageWidth - 28);
+    if (y + wrapped.length * 3.1 > pageHeight - 16) {
+      doc.addPage();
+      y = 16;
+    }
+    doc.text(wrapped, 14, y);
+    y += wrapped.length * 3.1 + 1.1;
+  });
+
+  y += 3;
+  if (y > pageHeight - 52) {
+    doc.addPage();
+    y = 16;
+  }
+
+  // CONDICIONES ESPECIALES DE GARANTÍA
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  const warrantyBoxTop = y;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.8);
+  doc.setTextColor(15, 23, 42);
+  doc.text('CONDICIONES ESPECIALES DE GARANTÍA', 14, y + 4);
+  y += 8;
+
+  const warrantyLines = [
+    'Plazos de Garantía por Producto:  • Lavadora: 2 meses de garantía   • Estufa: 3 meses de garantía   • Oasis: 2 meses de garantía   • Refrigeradora: 2 meses de garantía',
+    'Exclusiones de Garantía: Quedan excluidas de garantía todas las fallas ocasionadas por mal uso y/o tratamiento no apropiado, fallas de energía, alto o bajo voltaje, instalaciones eléctricas defectuosas, enchufar en voltaje diferente, daños ocasionados por el medio ambiente o plagas/animales.',
+    '• Estufas: Resistencias, empaques, platos de estufa, parrillas, cables de energía, perillas.',
+    '• Refrigeradoras y Freezers: Bisagras, empaques, gavetas, llamadores/tiradores, rodos, parrillas, cables de energía.',
+    '• Lavadoras y Secadoras: Perillas, cables de energía, switch de tapadera de seguridad.',
+    `La garantía no cubre defectos ocasionados por revisión o manipulación de personas no autorizadas por ${c.lessorName}. Para hacer efectiva la garantía, deberá presentar únicamente este documento en la tienda donde realizó la compra o en las oficinas principales en ${c.signLocation}.`,
+  ];
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.3);
+  doc.setTextColor(30, 41, 59);
+  for (const wl of warrantyLines) {
+    const wrapped = doc.splitTextToSize(wl, pageWidth - 32);
+    doc.text(wrapped, 16, y);
+    y += wrapped.length * 3.2 + 1.2;
+  }
+
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(14, warrantyBoxTop - 1, pageWidth - 28, y - warrantyBoxTop + 2, 2, 2, 'D');
+
+  drawPdfPageFooters(doc, storeSettings, `Contrato de Crédito ${sale.saleNumber}`);
+  const cleanCust = (c.customerName || 'Cliente').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
+  doc.save(`Contrato_Credito_${sale.saleNumber}_${cleanCust}.pdf`);
+}
+
+export function formatCreditContractWhatsAppMessage(
+  sale: SaleRecord,
+  storeSettings: StoreSettings,
+  contractOverride?: CreditContractData,
+  controlMeta?: CreditAccountControlMeta,
+  inventory?: Product[]
+): string {
+  const c = contractOverride || resolveCreditContractData(sale, storeSettings, controlMeta, inventory);
+  const fmtNum = (n: number) =>
+    (Number(n) || 0).toLocaleString('es-HN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+  let msg = `📜 *CONTRATO DE ARRENDAMIENTO CON RESERVA DE DOMINIO*\n`;
+  msg += `*Ref. Factura:* ${sale.saleNumber}\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `*ARRENDADOR:* ${c.lessorName}\n`;
+  msg += `*ARRENDATARIO:* ${c.customerName}, mayor de edad, hondureño(a), con domicilio en ${c.customerAddress}, con número de teléfono ${c.customerPhone} y Tarjeta de Identidad / RTN número: ${c.customerIdentity}.\n\n`;
+  msg += `Por medio del presente documento se celebra un *CONTRATO DE ARRENDAMIENTO* del siguiente bien:\n`;
+  msg += `• *Artículo:* ${c.articleDescription} (Marca: ${c.articleBrand}, Modelo: ${c.articleModel})\n`;
+  msg += `• *Valor al Crédito:* LPS. ${fmtNum(c.creditTotalValue)}\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `📌 *CLÁUSULAS PRINCIPALES*\n\n`;
+  msg += `*SEGUNDA:* El ARRENDADOR da en arrendamiento con reserva de dominio al ARRENDATARIO el o los objetos detallados anteriormente, bajo las siguientes condiciones:\n`;
+  msg += `• *(A) Valor al crédito:* LPS. ${fmtNum(c.creditTotalValue)}\n`;
+  msg += `• *(B) Valor de la prima:* LPS. ${fmtNum(c.downPaymentValue)}\n`;
+  msg += `• *(C) Valor de la cuota:* LPS. ${fmtNum(c.installmentValue)}\n`;
+  msg += `• *(D) Número de cuotas:* ${c.numberOfInstallments}, las cuales se pagarán mensualmente.\n`;
+  msg += `• *(E) Saldo a financiar:* LPS. ${fmtNum(c.financedBalance)}\n\n`;
+  msg += `*TERCERA:* El plazo del contrato es de *${c.termMonths}* meses a partir de la fecha. Las cuotas que incluyen capital e interés calculados sobre el saldo adecuado serán pagadas en la tienda arriba mencionada el día *${c.paymentDayOfMonth}* de cada mes, comenzando el *${c.firstPaymentDate}*. El monto financiado en caso de pagar puntualmente será de *LPS. ${fmtNum(c.financedBalance)}*.\n\n`;
+  msg += `*CUARTA:* El ARRENDATARIO declara que el o los artículos objeto de contrato permanecerán en la siguiente dirección: *${c.installationAddress}*.\n\n`;
+  msg += `*QUINTA:* Forman parte de este contrato las condiciones generales y el certificado de garantía contenido en este mismo, el cual le sirve al ARRENDATARIO para asegurar el buen funcionamiento del producto (Lavadora: 2 meses, Estufa: 3 meses, Oasis: 2 meses, Refrigeradora: 2 meses). La garantía empieza a contar a partir de la fecha de entrega del artículo.\n\n`;
+  msg += `*SEXTA:* Expresamente se conviene que este contrato de arrendamiento con reserva de dominio no puede calificarse ni interpretarse de otra manera.\n\n`;
+  msg += `Firmado en *${c.signLocation}* el día *${c.signDay}*, *${c.signMonth}* de *${c.signYear}*.\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `✍️ *FIRMA ARRENDATARIO:* ${c.customerName}${c.customerSignatureDataUrl ? ' (✅ Firmado digitalmente en pantalla)' : ''}\n`;
+  msg += `✍️ *FIRMA ARRENDADOR:* ${c.lessorName}${c.lessorSignatureDataUrl ? ' (✅ Firmado digitalmente)' : ''}`;
+
+  return msg;
+}
+
 
 
 
