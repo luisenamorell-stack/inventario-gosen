@@ -45,9 +45,8 @@ export const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({
     (storeSettings?.storeName || '').trim() ||
     (isGosen ? 'Tienda Gosén' : companyId.toUpperCase());
 
-  const [previewIconUrl, setPreviewIconUrl] = useState<string>(() =>
-    storeSettings?.logoUrl ||
-    (isGosen ? '/pwa-512x512.png' : generateMonogramIconDataUrl(storeName, 256))
+  const [previewIconUrl, setPreviewIconUrl] = useState<string>(
+    '/pwa-512x512.png?v=miapphn3'
   );
 
   useEffect(() => {
@@ -147,23 +146,21 @@ export const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({
             <X className="w-5 h-5" />
           </button>
 
-          {/* App Logo Display (Exact Home Screen Icon Preview) */}
+          {/* App Logo Display (Official MIAPPHN Home Screen Icon Preview) */}
           <div className="mx-auto w-24 h-24 rounded-2xl bg-slate-900 p-1.5 shadow-xl border-2 border-emerald-500/40 flex items-center justify-center overflow-hidden mb-3">
             <img
               src={previewIconUrl}
-              alt={storeName}
+              alt="MIAPPHN"
               className="w-full h-full object-contain rounded-xl"
               onError={(e) => {
-                (e.target as HTMLImageElement).src = isGosen
-                  ? '/pwa-192x192.png'
-                  : generateMonogramIconDataUrl(storeName, 192);
+                (e.target as HTMLImageElement).src = '/pwa-192x192.png?v=miapphn3';
               }}
             />
           </div>
 
-          <h3 className="text-xl font-bold tracking-tight">{storeName}</h3>
+          <h3 className="text-xl font-bold tracking-tight">MIAPPHN</h3>
           <p className="text-xs text-emerald-400 font-medium mt-0.5">
-            Icono y Acceso Directo Exclusivo para Móvil
+            App Oficial de Punto de Venta e Inventario ({storeName})
           </p>
         </div>
 

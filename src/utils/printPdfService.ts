@@ -1265,7 +1265,14 @@ export function buildSaleDocumentHtml(
           : ''
       }
       ${
-        tpl.warrantyPolicyText
+        sale.warrantyInfo?.enabled
+          ? `<div class="dashed-line"></div>
+             <div style="font-size:9.5px;border:1px solid #000;padding:4px;border-radius:4px;margin-top:2px;">
+               <div style="font-weight:900;text-align:center;text-transform:uppercase;">🛡️ CERTIFICADO DE GARANTÍA: ${sale.warrantyInfo.durationLabel || '30 Días'}</div>
+               ${sale.warrantyInfo.serialOrModelNotes ? `<div style="margin-top:2px;"><strong>Serie / Modelo:</strong> ${sale.warrantyInfo.serialOrModelNotes}</div>` : ''}
+               <div style="margin-top:2px;text-align:justify;">${sale.warrantyInfo.coverageTerms || tpl.warrantyPolicyText || 'Garantía válida por defectos de fábrica presentando este comprobante original.'}</div>
+             </div>`
+          : tpl.warrantyPolicyText
           ? `<div class="dashed-line"></div><div style="font-size:9.5px;text-align:center;"><strong>${tpl.warrantyTitle}:</strong> ${tpl.warrantyPolicyText}</div>`
           : ''
       }
@@ -1410,7 +1417,16 @@ export function buildSaleDocumentHtml(
           <div><strong>Total Unidades Facturadas:</strong> ${sale.totalItems} ${sale.totalItems === 1 ? 'unidad' : 'unidades'} (${(sale.items || []).length} líneas)</div>
           ${sale.notes ? `<div style="margin-top:6px;padding:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;"><strong>Observaciones:</strong> ${sale.notes}</div>` : ''}
           ${
-            tpl.warrantyPolicyText
+            sale.warrantyInfo?.enabled
+              ? `<div style="margin-top:6px;padding:9px 12px;background:#ecfdf5;border:1.5px solid #059669;border-radius:8px;font-size:10.5px;color:#064e3b;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px;">
+                    <strong style="color:#065f46;text-transform:uppercase;font-size:11px;">🛡️ CERTIFICADO DE GARANTÍA DE PRODUCTO</strong>
+                    <span style="background:#059669;color:#ffffff;padding:1.5px 8px;border-radius:999px;font-weight:900;font-size:10px;">PLAZO: ${(sale.warrantyInfo.durationLabel || '30 Días').toUpperCase()}</span>
+                  </div>
+                  ${sale.warrantyInfo.serialOrModelNotes ? `<div style="margin-bottom:2px;"><strong>Serie / Modelo / Referencia:</strong> ${sale.warrantyInfo.serialOrModelNotes}</div>` : ''}
+                  <div>${sale.warrantyInfo.coverageTerms || tpl.warrantyPolicyText || 'Garantía válida por defectos de fábrica presentando esta factura original.'}</div>
+                </div>`
+              : tpl.warrantyPolicyText
               ? `<div style="margin-top:6px;padding:8px 10px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;font-size:10.5px;">
                   <strong style="display:block;color:#0f172a;text-transform:uppercase;">${tpl.warrantyTitle}:</strong>
                   ${tpl.warrantyPolicyText}
@@ -1701,7 +1717,27 @@ export async function downloadSalePdf(
       y += 22;
     }
 
-    if (tpl.warrantyPolicyText) {
+    if (sale.warrantyInfo?.enabled) {
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(7);
+      const wHeader = `GARANTIA: ${(sale.warrantyInfo.durationLabel || '30 Dias').toUpperCase()}`;
+      doc.text(wHeader, pageWidth / 2, y, { align: 'center' });
+      y += 3.2;
+      doc.setFont('courier', 'normal');
+      doc.setFontSize(6.5);
+      if (sale.warrantyInfo.serialOrModelNotes) {
+        const sLines = doc.splitTextToSize(`Serie/Mod: ${sale.warrantyInfo.serialOrModelNotes}`, contentWidth);
+        doc.text(sLines, pageWidth / 2, y, { align: 'center' });
+        y += sLines.length * 2.8;
+      }
+      const wBody =
+        sale.warrantyInfo.coverageTerms ||
+        tpl.warrantyPolicyText ||
+        'Garantia valida por defectos de fabrica presentando este ticket original.';
+      const wLines = doc.splitTextToSize(wBody, contentWidth);
+      doc.text(wLines, pageWidth / 2, y, { align: 'center' });
+      y += wLines.length * 2.8 + 1.8;
+    } else if (tpl.warrantyPolicyText) {
       doc.setFont('courier', 'normal');
       doc.setFontSize(6.5);
       const wLines = doc.splitTextToSize(`${tpl.warrantyTitle}: ${tpl.warrantyPolicyText}`, contentWidth);
@@ -1987,6 +2023,46 @@ export async function downloadSalePdf(
 
   let afterSummaryY = summaryY + 42;
 
+  // Dedicated Warranty Certificate Box in Letter / Half-Letter PDF when enabled
+  if (sale.warrantyInfo?.enabled && afterSummaryY + 24 < pageHeight - 20) {
+    const wBoxTerms =
+      sale.warrantyInfo.coverageTerms ||
+      tpl.warrantyPolicyText ||
+      'Garantía válida por defectos de fábrica presentando esta factura original.';
+    const wrappedTerms = doc.splitTextToSize(wBoxTerms, pageWidth - 36);
+    const boxH = Math.max(18, 10 + wrappedTerms.length * 3.6 + (sale.warrantyInfo.serialOrModelNotes ? 4 : 0));
+
+    doc.setFillColor(236, 253, 245);
+    doc.setDrawColor(5, 150, 105);
+    doc.setLineWidth(0.4);
+    doc.roundedRect(14, afterSummaryY, pageWidth - 28, boxH, 2, 2, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(6, 95, 70);
+    doc.text(
+      `CERTIFICADO DE GARANTÍA — PLAZO: ${(sale.warrantyInfo.durationLabel || '30 DÍAS').toUpperCase()}`,
+      18,
+      afterSummaryY + 5.5
+    );
+
+    let wy = afterSummaryY + 10;
+    if (sale.warrantyInfo.serialOrModelNotes) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`Serie / Modelo / Detalle: ${sale.warrantyInfo.serialOrModelNotes}`, 18, wy);
+      wy += 4.2;
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(6, 78, 59);
+    doc.text(wrappedTerms, 18, wy);
+
+    afterSummaryY += boxH + 6;
+  }
+
   // If Credit Sale has installment payments, show table of abonos
   if (isCredit && (sale.creditPayments || []).length > 0) {
     autoTable(doc, {
@@ -2027,6 +2103,201 @@ export async function downloadSalePdf(
 
   drawPdfPageFooters(doc, storeSettings, `Factura ${sale.saleNumber}`);
   doc.save(`Factura_${sale.saleNumber}.pdf`);
+}
+
+// ============================================================================
+// 1.B CERTIFICADO DE GARANTÍA DE PRODUCTO (HTML + PDF EJECUTIVO / TÉRMICO)
+// ============================================================================
+export function buildWarrantyCertificateHtml(
+  sale: SaleRecord,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat,
+  sellerDisplay?: string
+): string {
+  const storeName = storeSettings.storeName || 'Tienda Gosén';
+  const isThermal = format === '80mm' || format === '58mm';
+  const tpl = getEffectiveInvoiceTemplate(storeSettings);
+  const accentHex = tpl.accentColor || '#047857';
+  const effectiveIssuer = resolveInvoiceIssuerName(
+    sellerDisplay || sale.cashier,
+    tpl.defaultIssuerName,
+    'Administrador'
+  );
+  const durationLabel = sale.warrantyInfo?.durationLabel || '30 Días';
+  const serialNotes = sale.warrantyInfo?.serialOrModelNotes || '';
+  const coverageTerms =
+    sale.warrantyInfo?.coverageTerms ||
+    tpl.warrantyPolicyText ||
+    'Garantía válida por defectos de fábrica presentando esta factura o certificado original. No cubre daños por mal uso, golpes, humedad o variaciones de voltaje.';
+
+  if (isThermal) {
+    const itemsHtml = (sale.items || [])
+      .map(
+        (it) => `
+        <div style="margin-bottom:4px; padding-bottom:3px; border-bottom:1px dotted #cbd5e1;">
+          <div style="font-weight:800;">${it.quantity}x ${it.name}</div>
+          <div style="font-size:0.88em; color:#334155;">Código: ${it.code} • Valor: ${formatCurrencyL(it.subtotal)}</div>
+        </div>`
+      )
+      .join('');
+
+    return `
+      <div class="text-center">
+        ${
+          tpl.showLogo && storeSettings.logoUrl
+            ? `<img src="${storeSettings.logoUrl}" alt="${storeName}" style="width:48px;height:48px;object-fit:contain;margin:0 auto 4px;display:block;border-radius:6px;" />`
+            : ''
+        }
+        <div style="font-size:${format === '58mm' ? '13px' : '15px'};font-weight:900;text-transform:uppercase;">${storeName}</div>
+        ${tpl.showStoreRtn && storeSettings.storeRtn ? `<div style="font-size:10px;font-weight:700;">RTN: ${storeSettings.storeRtn}</div>` : ''}
+        ${storeSettings.address ? `<div style="font-size:10px;">${storeSettings.address}</div>` : ''}
+        ${storeSettings.phone ? `<div style="font-size:10px;">Tel: ${storeSettings.phone}</div>` : ''}
+        <div style="font-size:11px;font-weight:900;margin-top:4px;text-transform:uppercase;">🛡️ CERTIFICADO DE GARANTÍA</div>
+      </div>
+      <div class="dashed-line"></div>
+      <div style="font-size:${format === '58mm' ? '10px' : '11px'};">
+        <div style="display:flex;justify-content:space-between;"><span>Factura / Ticket:</span><strong>${sale.saleNumber}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Fecha Compra:</span><span>${sale.date}</span></div>
+        <div style="display:flex;justify-content:space-between;"><span>Cliente:</span><strong>${sale.customerName || 'Consumidor Final'}</strong></div>
+        ${sale.customerRtn ? `<div style="display:flex;justify-content:space-between;"><span>RTN / DNI:</span><span>${sale.customerRtn}</span></div>` : ''}
+        ${sale.customerPhone ? `<div style="display:flex;justify-content:space-between;"><span>Teléfono:</span><span>${sale.customerPhone}</span></div>` : ''}
+        <div style="display:flex;justify-content:space-between;"><span>Emitido por:</span><span>${effectiveIssuer}</span></div>
+      </div>
+
+      <div style="margin:6px 0; padding:6px; border:1.5px solid #000; border-radius:4px; text-align:center;">
+        <div style="font-weight:900; font-size:1.05em; text-transform:uppercase;">🛡️ PLAZO DE GARANTÍA</div>
+        <div style="font-weight:900; font-size:1.2em; margin-top:2px;">${durationLabel.toUpperCase()}</div>
+        ${serialNotes ? `<div style="font-size:0.88em; margin-top:3px;"><strong>Serie / Modelo:</strong> ${serialNotes}</div>` : ''}
+      </div>
+
+      <div style="font-weight:800; font-size:0.9em; text-transform:uppercase; margin:4px 0 3px;">Artículos Cubiertos:</div>
+      <div>${itemsHtml}</div>
+
+      <div style="margin-top:6px; padding:6px; border:1px dashed #000; border-radius:4px; font-size:0.86em; line-height:1.35; text-align:justify;">
+        <div style="font-weight:900; text-align:center; text-transform:uppercase; margin-bottom:3px;">Condiciones de Garantía</div>
+        <div>${coverageTerms}</div>
+      </div>
+
+      <div class="dashed-line"></div>
+      <div class="text-center" style="font-size:10px;margin-top:6px;">
+        <strong>Conserve este Certificado de Garantía junto a su factura ${sale.saleNumber}.</strong>
+      </div>
+    `;
+  }
+
+  const rowsHtml = (sale.items || [])
+    .map(
+      (it, idx) => `
+      <tr style="border-bottom:1px solid #e2e8f0;">
+        <td class="text-center" style="font-family:monospace;">${idx + 1}</td>
+        <td style="font-family:monospace;font-weight:700;">${it.code}</td>
+        <td><strong>${it.name}</strong>${it.size ? ` (${it.size})` : ''}</td>
+        <td class="text-center font-bold">${it.quantity}</td>
+        <td class="text-right">${formatCurrencyL(it.price)}</td>
+        <td class="text-right font-bold">${formatCurrencyL(it.subtotal)}</td>
+      </tr>`
+    )
+    .join('');
+
+  return `
+    <div style="border:2px solid ${accentHex};border-radius:12px;padding:${format === 'half-letter' ? '16px' : '24px'};background:#ffffff;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:14px;gap:16px;">
+        <div>
+          <h1 style="margin:0;font-size:21px;font-weight:900;text-transform:uppercase;color:#0f172a;">${storeName}</h1>
+          ${storeSettings.storeRtn ? `<div style="font-size:11px;color:#0f172a;margin-top:2px;">RTN: <strong>${storeSettings.storeRtn}</strong></div>` : ''}
+          <div style="font-size:11px;color:#475569;">
+            ${[storeSettings.address, storeSettings.phone ? `Tel: ${storeSettings.phone}` : ''].filter(Boolean).join('  •  ')}
+          </div>
+        </div>
+        <div style="text-align:right;min-width:210px;background:#ecfdf5;border:1.5px solid #059669;border-radius:10px;padding:10px 14px;">
+          <div style="font-size:11px;font-weight:900;text-transform:uppercase;color:#047857;">🛡️ CERTIFICADO DE GARANTÍA</div>
+          <div style="font-size:16px;font-weight:900;font-family:monospace;margin-top:3px;color:#0f172a;">Factura ${sale.saleNumber}</div>
+          <div style="font-size:11px;font-weight:800;color:#065f46;margin-top:2px;">Plazo: ${durationLabel.toUpperCase()}</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:11.5px;">
+        <div>
+          <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#64748b;margin-bottom:3px;">DATOS DEL CLIENTE</div>
+          <div>Nombre: <strong>${sale.customerName || 'Consumidor Final'}</strong></div>
+          <div>RTN / Identidad: <strong>${sale.customerRtn || 'N/A'}</strong> &nbsp;|&nbsp; Teléfono: <strong>${sale.customerPhone || 'N/A'}</strong></div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#64748b;margin-bottom:3px;">REGISTRO DE EMISIÓN</div>
+          <div>Fecha de Compra: <strong>${sale.date}</strong></div>
+          <div>Emitido por: <strong>${effectiveIssuer}</strong></div>
+        </div>
+      </div>
+
+      ${
+        serialNotes
+          ? `<div style="margin-bottom:12px; padding:10px 14px; background:#ecfdf5; border:1px solid #10b981; border-radius:8px; font-size:12px; color:#064e3b;">
+              <strong>Serie / Modelo / Identificación del Producto:</strong> ${serialNotes}
+            </div>`
+          : ''
+      }
+
+      <table style="border:1px solid #cbd5e1;font-size:11px;margin-bottom:14px;">
+        <thead>
+          <tr style="background:${accentHex};color:#ffffff;">
+            <th class="text-center" style="width:45px;">#</th>
+            <th style="width:110px;">Código</th>
+            <th>Descripción del Artículo Garantizado</th>
+            <th class="text-center" style="width:75px;">Cant.</th>
+            <th class="text-right" style="width:110px;">Precio Unit.</th>
+            <th class="text-right" style="width:115px;">Valor Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+
+      <div style="margin-top:14px; padding:14px; background:#f8fafc; border:1.5px solid #047857; border-radius:10px;">
+        <div style="font-size:12px; font-weight:900; color:#065f46; text-transform:uppercase; margin-bottom:6px;">
+          🛡️ Términos, Cobertura y Condiciones de Garantía (${durationLabel})
+        </div>
+        <div style="font-size:11.5px; color:#1e293b; line-height:1.55; white-space:pre-line;">
+          ${coverageTerms}
+        </div>
+        <div style="font-size:10.5px; color:#475569; margin-top:8px; border-top:1px dashed #cbd5e1; padding-top:6px;">
+          Para hacer efectiva esta garantía es indispensable presentar este Certificado o la Factura original N° <strong>${sale.saleNumber}</strong> en <strong>${storeName}</strong>.
+        </div>
+      </div>
+
+      <div class="signatures" style="margin-top:28px;">
+        <div class="sig-block">
+          <div class="sig-line"></div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#475569;">SELLO Y FIRMA AUTORIZADA (${storeName.toUpperCase()})</div>
+        </div>
+        <div class="sig-block">
+          <div class="sig-line"></div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#475569;">FIRMA DE CONFORMIDAD DEL CLIENTE</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+export async function downloadWarrantyCertificatePdf(
+  sale: SaleRecord,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat = 'letter',
+  sellerDisplay?: string
+): Promise<void> {
+  const saleWithWarranty: SaleRecord = {
+    ...sale,
+    warrantyInfo: {
+      enabled: true,
+      durationLabel: sale.warrantyInfo?.durationLabel || '30 Días',
+      serialOrModelNotes: sale.warrantyInfo?.serialOrModelNotes || '',
+      coverageTerms:
+        sale.warrantyInfo?.coverageTerms ||
+        getEffectiveInvoiceTemplate(storeSettings).warrantyPolicyText ||
+        'Garantía válida por defectos de fábrica presentando su factura original. No cubre daños por mal uso, golpes, humedad o variaciones de voltaje.',
+    },
+  };
+  await downloadSalePdf(saleWithWarranty, storeSettings, format, sellerDisplay);
 }
 
 // ============================================================================

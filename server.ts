@@ -1059,14 +1059,33 @@ async function startServer() {
     );
   }
 
+  // Bind port 3000 immediately so the platform health check never times out during cold start
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`StockMaster Server listening on http://0.0.0.0:${port}`);
+  });
+
   if (!isProd) {
-    // In dev, mount Vite middleware
-    const { createServer } = await import('vite');
-    const vite = await createServer({
-      server: { middlewareMode: true, hmr: false },
-      appType: 'spa',
+    // In dev, mount Vite middleware asynchronously via readiness promise
+    let viteMiddleware: any = null;
+    const viteReady = (async () => {
+      const { createServer } = await import('vite');
+      const vite = await createServer({
+        server: { middlewareMode: true, hmr: false, ws: false },
+        appType: 'spa',
+      });
+      viteMiddleware = vite.middlewares;
+    })();
+
+    app.use(async (req, res, next) => {
+      try {
+        if (!viteMiddleware) {
+          await viteReady;
+        }
+        return viteMiddleware(req, res, next);
+      } catch (err) {
+        return next(err);
+      }
     });
-    app.use(vite.middlewares);
   } else {
     // In prod, serve static dist with optimal cache policy
     const distPath = path.resolve(__dirname, 'dist');
@@ -1091,10 +1110,6 @@ async function startServer() {
       });
     }
   }
-
-  app.listen(port, '0.0.0.0', () => {
-    console.log(`StockMaster Server listening on http://0.0.0.0:${port}`);
-  });
 }
 
 startServer().catch((err) => {

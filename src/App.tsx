@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import {
   Product,
   Supplier,
@@ -18,60 +18,28 @@ import {
   CreditPaymentAbone,
   StoreWarehousesData,
   resolveInvoiceIssuerName,
+  doesSaleBelongToCollaborator,
 } from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
 import { SaaSLandingPage } from './components/SaaSLandingPage';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
-import type { SalesSubTab } from './components/SalesView';
-
-// Code-split heavy authenticated POS & SaaS modules so the Landing Page and Login load with minimal JS
-const DashboardView = lazy(() =>
-  import('./components/DashboardView').then((m) => ({ default: m.DashboardView }))
-);
-const InventoryView = lazy(() =>
-  import('./components/InventoryView').then((m) => ({ default: m.InventoryView }))
-);
-const WarehousesView = lazy(() =>
-  import('./components/WarehousesView').then((m) => ({ default: m.WarehousesView }))
-);
-const AuditView = lazy(() =>
-  import('./components/AuditView').then((m) => ({ default: m.AuditView }))
-);
-const PriceCheckerTab = lazy(() =>
-  import('./components/PriceCheckerTab').then((m) => ({ default: m.PriceCheckerTab }))
-);
-const SuppliersView = lazy(() =>
-  import('./components/SuppliersView').then((m) => ({ default: m.SuppliersView }))
-);
-const SalesView = lazy(() =>
-  import('./components/SalesView').then((m) => ({ default: m.SalesView }))
-);
-const OnlineSalesView = lazy(() =>
-  import('./components/OnlineSalesView').then((m) => ({ default: m.OnlineSalesView }))
-);
-const PurchasesView = lazy(() =>
-  import('./components/PurchasesView').then((m) => ({ default: m.PurchasesView }))
-);
-const StoreSettingsView = lazy(() =>
-  import('./components/StoreSettingsView').then((m) => ({ default: m.StoreSettingsView }))
-);
-const DigitalCatalogView = lazy(() =>
-  import('./components/DigitalCatalogView').then((m) => ({ default: m.DigitalCatalogView }))
-);
-const PublicCatalogView = lazy(() =>
-  import('./components/PublicCatalogView').then((m) => ({ default: m.PublicCatalogView }))
-);
-const UserManagementView = lazy(() =>
-  import('./components/UserManagementView').then((m) => ({ default: m.UserManagementView }))
-);
-const ActivityLogView = lazy(() =>
-  import('./components/ActivityLogView').then((m) => ({ default: m.ActivityLogView }))
-);
-const CompaniesSaaSView = lazy(() =>
-  import('./components/CompaniesSaaSView').then((m) => ({ default: m.CompaniesSaaSView }))
-);
+import { SalesView, type SalesSubTab } from './components/SalesView';
+import { DashboardView } from './components/DashboardView';
+import { InventoryView } from './components/InventoryView';
+import { WarehousesView } from './components/WarehousesView';
+import { AuditView } from './components/AuditView';
+import { PriceCheckerTab } from './components/PriceCheckerTab';
+import { SuppliersView } from './components/SuppliersView';
+import { OnlineSalesView } from './components/OnlineSalesView';
+import { PurchasesView } from './components/PurchasesView';
+import { StoreSettingsView } from './components/StoreSettingsView';
+import { DigitalCatalogView } from './components/DigitalCatalogView';
+import { PublicCatalogView } from './components/PublicCatalogView';
+import { UserManagementView } from './components/UserManagementView';
+import { ActivityLogView } from './components/ActivityLogView';
+import { CompaniesSaaSView } from './components/CompaniesSaaSView';
 
 const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
@@ -1100,6 +1068,10 @@ export const App: React.FC = () => {
             loadedModulesRef.current[`audit${keySuffix}`] = true;
             fetchAuditHistoryOnce(false, activeCompanyId).then(setAuditHistory).catch(console.warn);
           }
+          if (!loadedModulesRef.current[`users${keySuffix}`]) {
+            loadedModulesRef.current[`users${keySuffix}`] = true;
+            fetchUsersOnce(false, activeCompanyId).then(setUsers).catch(console.warn);
+          }
         } else if (activeTab === 'sales' || activeTab === 'online-sales') {
           if (!loadedModulesRef.current[`sales${keySuffix}`]) {
             loadedModulesRef.current[`sales${keySuffix}`] = true;
@@ -1112,6 +1084,10 @@ export const App: React.FC = () => {
           if (!loadedModulesRef.current[`warehouses${keySuffix}`]) {
             loadedModulesRef.current[`warehouses${keySuffix}`] = true;
             fetchStoreWarehousesOnce(activeCompanyId).then(setWarehousesData).catch(console.warn);
+          }
+          if (!loadedModulesRef.current[`users${keySuffix}`]) {
+            loadedModulesRef.current[`users${keySuffix}`] = true;
+            fetchUsersOnce(false, activeCompanyId).then(setUsers).catch(console.warn);
           }
         } else if (activeTab === 'inventory') {
           if (!loadedModulesRef.current[`suppliers${keySuffix}`]) {
@@ -1163,6 +1139,10 @@ export const App: React.FC = () => {
           if (!loadedModulesRef.current[`users${keySuffix}`]) {
             loadedModulesRef.current[`users${keySuffix}`] = true;
             fetchUsersOnce(false, activeCompanyId).then(setUsers).catch(console.warn);
+          }
+          if (!loadedModulesRef.current[`warehouses${keySuffix}`]) {
+            loadedModulesRef.current[`warehouses${keySuffix}`] = true;
+            fetchStoreWarehousesOnce(activeCompanyId).then(setWarehousesData).catch(console.warn);
           }
         } else if (activeTab === 'activity') {
           if (!loadedModulesRef.current[`activity${keySuffix}`]) {
@@ -1876,6 +1856,12 @@ export const App: React.FC = () => {
         ...saleData,
         cashier: activeCashier,
         cashierRole: activeCashierRole,
+        cashierUserId:
+          saleData.cashierUserId ||
+          (userSession?.role === 'collaborator' ? userSession.userId : undefined),
+        cashierUsername:
+          saleData.cashierUsername ||
+          (userSession?.role === 'collaborator' ? userSession.username : undefined),
       };
 
       // Pre-compute target updated products from the pre-await inventory snapshot so onSnapshot cannot double-deduct
@@ -2021,17 +2007,21 @@ export const App: React.FC = () => {
       const baseInventory = inventory;
       const savedSale = await updateSaleInFirestore(originalSale, updatedSale, baseInventory, activeCompanyId);
 
-      // Update local inventory stock if item quantities changed (computed from baseInventory)
+      // Update local inventory stock if item quantities or status changed (computed from baseInventory)
       const oldQtyByCode = new Map<string, number>();
-      for (const it of originalSale.items || []) {
-        const k = it.code.trim().toLowerCase();
-        if (k) oldQtyByCode.set(k, (oldQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+      if (originalSale.status !== 'cancelled') {
+        for (const it of originalSale.items || []) {
+          const k = it.code.trim().toLowerCase();
+          if (k) oldQtyByCode.set(k, (oldQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+        }
       }
 
       const newQtyByCode = new Map<string, number>();
-      for (const it of savedSale.items || []) {
-        const k = it.code.trim().toLowerCase();
-        if (k) newQtyByCode.set(k, (newQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+      if (savedSale.status !== 'cancelled') {
+        for (const it of savedSale.items || []) {
+          const k = it.code.trim().toLowerCase();
+          if (k) newQtyByCode.set(k, (newQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+        }
       }
 
       const targetWhId = updatedSale.warehouseId || originalSale.warehouseId;
@@ -3132,72 +3122,96 @@ export const App: React.FC = () => {
               </div>
             }
           >
-            {activeTabToRender === 'dashboard' && allowedTabsList.includes('dashboard') && (
-              <DashboardView
-                inventory={inventory}
-                auditHistory={auditHistory}
-                sales={sales}
-                expenses={posFinanceData.expenses}
-                isLoading={isInventoryLoading}
-                onOpenNewProduct={() => {
-                  handleTabChange('inventory');
-                  setOpenProductModalTrigger(true);
-                }}
-                onStartAudit={() => handleTabChange('audit')}
-                onNavigateToSales={() => {
-                  setSalesSubTab('pos');
-                  handleTabChange('sales');
-                }}
-                onNavigateToPurchases={() => handleTabChange('purchases')}
-                onNavigateToExpenses={() => {
-                  setSalesSubTab('expenses');
-                  handleTabChange('sales');
-                }}
-                onNavigateToCredits={() => {
-                  setSalesSubTab('credits');
-                  handleTabChange('sales');
-                }}
-                onFilterInventoryByCode={handleFilterInventoryByCode}
-                onNavigateToAudit={() => handleTabChange('audit')}
-              />
-            )}
+            {(() => {
+              const matchedCollabForSession =
+                userSession && userSession.role === 'collaborator'
+                  ? users.find(
+                      (u) =>
+                        u.id === userSession.userId ||
+                        u.username.trim().toLowerCase() ===
+                          (userSession.username || '').trim().toLowerCase()
+                    )
+                  : undefined;
 
-            {activeTabToRender === 'sales' && allowedTabsList.includes('sales') && (
-              <SalesView
-                inventory={inventory}
-                sales={sales}
-                storeSettings={storeSettings}
-                warehousesData={warehousesData}
-                userSession={userSession}
-                users={users}
-                isLoading={isInventoryLoading}
-                initialSubTab={salesSubTab}
-                posFinanceData={posFinanceData}
-                onRecordSale={handleRecordSale}
-                onUpdateSale={handleUpdateSale}
-                onCancelSale={handleCancelSale}
-                onSavePOSFinanceData={handleSavePOSFinanceData}
-                onRecordCreditPayment={handleRecordCreditPayment}
-                onSaveStoreSettings={handleSaveStoreSettings}
-                showToast={showToast}
-              />
-            )}
+              const visibleSalesForSession =
+                !userSession || userSession.role === 'admin'
+                  ? sales
+                  : sales.filter((s) =>
+                      doesSaleBelongToCollaborator(s, userSession, matchedCollabForSession)
+                    );
 
-            {activeTabToRender === 'online-sales' && allowedTabsList.includes('online-sales') && (
-              <OnlineSalesView
-                inventory={inventory}
-                sales={sales}
-                storeSettings={storeSettings}
-                warehousesData={warehousesData}
-                userSession={userSession}
-                posFinanceData={posFinanceData}
-                onRecordSale={handleRecordSale}
-                onUpdateSale={handleUpdateSale}
-                onCancelSale={handleCancelSale}
-                onSavePOSFinanceData={handleSavePOSFinanceData}
-                showToast={showToast}
-              />
-            )}
+              return (
+                <>
+                  {activeTabToRender === 'dashboard' && allowedTabsList.includes('dashboard') && (
+                    <DashboardView
+                      inventory={inventory}
+                      auditHistory={auditHistory}
+                      sales={visibleSalesForSession}
+                      expenses={posFinanceData.expenses}
+                      isLoading={isInventoryLoading}
+                      onOpenNewProduct={() => {
+                        handleTabChange('inventory');
+                        setOpenProductModalTrigger(true);
+                      }}
+                      onStartAudit={() => handleTabChange('audit')}
+                      onNavigateToSales={() => {
+                        setSalesSubTab('pos');
+                        handleTabChange('sales');
+                      }}
+                      onNavigateToPurchases={() => handleTabChange('purchases')}
+                      onNavigateToExpenses={() => {
+                        setSalesSubTab('expenses');
+                        handleTabChange('sales');
+                      }}
+                      onNavigateToCredits={() => {
+                        setSalesSubTab('credits');
+                        handleTabChange('sales');
+                      }}
+                      onFilterInventoryByCode={handleFilterInventoryByCode}
+                      onNavigateToAudit={() => handleTabChange('audit')}
+                    />
+                  )}
+
+                  {activeTabToRender === 'sales' && allowedTabsList.includes('sales') && (
+                    <SalesView
+                      inventory={inventory}
+                      sales={visibleSalesForSession}
+                      storeSettings={storeSettings}
+                      warehousesData={warehousesData}
+                      userSession={userSession}
+                      users={users}
+                      isLoading={isInventoryLoading}
+                      initialSubTab={salesSubTab}
+                      posFinanceData={posFinanceData}
+                      onRecordSale={handleRecordSale}
+                      onUpdateSale={handleUpdateSale}
+                      onCancelSale={handleCancelSale}
+                      onSavePOSFinanceData={handleSavePOSFinanceData}
+                      onRecordCreditPayment={handleRecordCreditPayment}
+                      onSaveStoreSettings={handleSaveStoreSettings}
+                      showToast={showToast}
+                    />
+                  )}
+
+                  {activeTabToRender === 'online-sales' &&
+                    allowedTabsList.includes('online-sales') && (
+                      <OnlineSalesView
+                        inventory={inventory}
+                        sales={visibleSalesForSession}
+                        storeSettings={storeSettings}
+                        warehousesData={warehousesData}
+                        userSession={userSession}
+                        posFinanceData={posFinanceData}
+                        onRecordSale={handleRecordSale}
+                        onUpdateSale={handleUpdateSale}
+                        onCancelSale={handleCancelSale}
+                        onSavePOSFinanceData={handleSavePOSFinanceData}
+                        showToast={showToast}
+                      />
+                    )}
+                </>
+              );
+            })()}
 
             {activeTabToRender === 'inventory' && allowedTabsList.includes('inventory') && (
               <InventoryView
@@ -3252,6 +3266,7 @@ export const App: React.FC = () => {
               <DigitalCatalogView
                 storeSettings={storeSettings}
                 inventory={inventory}
+                userSession={userSession}
                 onSaveSettings={handleSaveStoreSettings}
                 onOpenPreview={() => setIsAdminPreviewMode(true)}
                 showToast={showToast}
@@ -3298,6 +3313,7 @@ export const App: React.FC = () => {
               <UserManagementView
                 users={users}
                 storeSettings={storeSettings}
+                warehousesData={warehousesData}
                 companyAllowedModules={companyAllowedModules}
                 maxUsers={companyMaxUsers}
                 onSaveUser={handleSaveUser}

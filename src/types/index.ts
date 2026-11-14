@@ -273,6 +273,7 @@ export interface CollaboratorSalesPermissions {
   canEditSales?: boolean;
   canCancelSales?: boolean;
   canViewCostsAndProfits?: boolean;
+  allowedWarehouseIds?: string[];
 }
 
 export interface UserAccount {
@@ -284,6 +285,7 @@ export interface UserAccount {
   role: UserRole;
   isActive: boolean;
   allowedTabs: ActiveTab[];
+  allowedWarehouseIds?: string[];
   salesPermissions?: CollaboratorSalesPermissions;
   createdAt: number;
   lastLoginAt?: number;
@@ -299,6 +301,7 @@ export interface UserSession {
   username: string;
   role: UserRole;
   allowedTabs: ActiveTab[];
+  allowedWarehouseIds?: string[];
   salesPermissions?: CollaboratorSalesPermissions;
 }
 
@@ -469,6 +472,13 @@ export interface CreditContractData {
   updatedAt?: number;
 }
 
+export interface SaleWarrantyInfo {
+  enabled: boolean;
+  durationLabel: string; // e.g. '30 Días', '2 Meses', '3 Meses', '6 Meses', '1 Año'
+  coverageTerms: string;
+  serialOrModelNotes?: string;
+}
+
 export interface SaleRecord {
   id: string;
   companyId?: string;
@@ -490,6 +500,7 @@ export interface SaleRecord {
   creditDueDate?: string;
   creditPayments?: CreditPaymentAbone[];
   creditContract?: CreditContractData;
+  warrantyInfo?: SaleWarrantyInfo;
   customerName?: string;
   customerPhone?: string;
   customerRtn?: string;
@@ -501,6 +512,8 @@ export interface SaleRecord {
   onlineOrder?: OnlineOrderMeta;
   cashier?: string;
   cashierRole?: UserRole;
+  cashierUserId?: string;
+  cashierUsername?: string;
   lastEditedBy?: string;
   lastEditedAt?: string;
   loyaltyCustomerId?: string;
@@ -991,6 +1004,48 @@ export function resolveInvoiceIssuerName(
     return rawCashier;
   }
   return tplIssuer || fallback;
+}
+
+/**
+ * Determines whether a sale record belongs to the currently logged-in collaborator.
+ * Administrators always have access to all global store sales (returns true).
+ * Collaborators only see sales that they personally generated.
+ */
+export function doesSaleBelongToCollaborator(
+  sale: SaleRecord,
+  userSession?: UserSession | null,
+  collabAccount?: UserAccount
+): boolean {
+  if (!userSession || userSession.role === 'admin') {
+    return true;
+  }
+
+  const sessionUserId = (userSession.userId || collabAccount?.id || '').trim().toLowerCase();
+  const sessionUsername = (userSession.username || collabAccount?.username || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '');
+  const sessionName = (userSession.userName || '').trim().toLowerCase();
+  const collabName = (collabAccount?.name || '').trim().toLowerCase();
+
+  const saleUserId = (sale.cashierUserId || '').trim().toLowerCase();
+  if (saleUserId) {
+    return Boolean(sessionUserId && saleUserId === sessionUserId);
+  }
+
+  const saleUsername = (sale.cashierUsername || '').trim().toLowerCase().replace(/^@+/, '');
+  if (saleUsername) {
+    return Boolean(sessionUsername && saleUsername === sessionUsername);
+  }
+
+  const rawCashier = (sale.cashier || '').trim().toLowerCase().replace(/^@+/, '');
+  if (!rawCashier) return false;
+
+  if (sessionUsername && rawCashier === sessionUsername) return true;
+  if (sessionName && rawCashier === sessionName) return true;
+  if (collabName && rawCashier === collabName) return true;
+
+  return false;
 }
 
 export interface ToastMessage {

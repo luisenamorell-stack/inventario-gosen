@@ -893,28 +893,20 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   <div className="relative group">
                     <div className="w-20 h-20 rounded-2xl bg-slate-900 border-2 border-emerald-500/50 shadow-xl overflow-hidden p-1.5 flex items-center justify-center">
                       <img
-                        src={
-                          logoUrl
-                            ? logoUrl
-                            : isGosen
-                            ? '/pwa-512x512.png'
-                            : generateMonogramIconDataUrl(storeName || 'Mi Tienda', 256)
-                        }
-                        alt={storeName}
+                        src="/pwa-512x512.png?v=miapphn3"
+                        alt="MIAPPHN"
                         className="w-full h-full object-contain rounded-xl"
                         onError={(e) => {
-                          (e.target as HTMLImageElement).src = isGosen
-                            ? '/pwa-192x192.png'
-                            : generateMonogramIconDataUrl(storeName || 'Mi Tienda', 192);
+                          (e.target as HTMLImageElement).src = '/pwa-192x192.png?v=miapphn3';
                         }}
                       />
                     </div>
                   </div>
                   <span className="mt-2.5 font-bold text-xs text-slate-200 truncate max-w-[140px]">
-                    {storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda')}
+                    MIAPPHN
                   </span>
                   <span className="text-[10px] text-emerald-400 font-medium">
-                    App Móvil Exclusiva
+                    App Móvil Oficial
                   </span>
                 </div>
 
@@ -923,7 +915,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   <div className="flex items-start gap-2.5 bg-white/5 p-3 rounded-xl border border-white/5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                     <p>
-                      <strong className="text-white">Icono y Nombre Propio por Empresa:</strong> Al agregar la app al inicio en Android o iPhone, se instala automáticamente con el logotipo (o monograma oficial) y nombre de <strong className="text-emerald-300">{storeName || 'tu tienda'}</strong>, nunca con el de otra tienda.
+                      <strong className="text-white">Icono Oficial MIAPPHN:</strong> Al descargar o agregar la app al inicio en Android o iPhone, se instala con el logotipo oficial de <strong className="text-emerald-300">MIAPPHN</strong> y abre directamente en <strong className="text-emerald-300">{storeName || 'tu tienda'}</strong>.
                     </p>
                   </div>
 

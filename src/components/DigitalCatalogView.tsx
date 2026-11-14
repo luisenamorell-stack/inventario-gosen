@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { StoreSettings, Product, StoreBranchLocation, StoreBankAccount, getOfficialAppBaseUrl } from '../types';
+import {
+  StoreSettings,
+  Product,
+  StoreBranchLocation,
+  StoreBankAccount,
+  UserSession,
+  getOfficialAppBaseUrl,
+} from '../types';
 import {
   Share2,
   Copy,
@@ -32,6 +39,7 @@ import {
 interface DigitalCatalogViewProps {
   storeSettings: StoreSettings;
   inventory: Product[];
+  userSession?: UserSession | null;
   onSaveSettings: (settings: StoreSettings) => Promise<void>;
   onOpenPreview: () => void;
   showToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -40,10 +48,12 @@ interface DigitalCatalogViewProps {
 export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
   storeSettings,
   inventory,
+  userSession,
   onSaveSettings,
   onOpenPreview,
   showToast,
 }) => {
+  const isAdminUser = !userSession || userSession.role === 'admin';
   const [copied, setCopied] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -208,7 +218,7 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
             className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-3 rounded-2xl font-extrabold text-xs sm:text-sm shadow-lg transition-all flex items-center justify-center gap-2 border border-emerald-400/40 cursor-pointer hover:scale-105 active:scale-95 shrink-0"
           >
             <Eye className="w-4 h-4" />
-            <span>Ver Vista Previa del Cliente</span>
+            <span>{isAdminUser ? 'Ver Vista Previa del Cliente' : 'Ver Catálogo Digital'}</span>
           </button>
         </div>
 
@@ -218,20 +228,24 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
             <ShoppingBag className="w-3.5 h-3.5 text-emerald-400" />
             <span>Artículos disponibles en catálogo: <strong className="text-white font-bold">{availableCount}</strong></span>
           </span>
-          <span className="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1 rounded-xl border border-slate-700">
-            <WhatsAppIcon className="w-3.5 h-3.5 fill-emerald-400" />
-            <span>Recepción de pedidos: <strong className="text-emerald-400 font-bold">{whatsappPhone || storeSettings.phone || 'Configurar número'}</strong></span>
-          </span>
-          <span className="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1 rounded-xl border border-slate-700">
-            <Landmark className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Cuentas bancarias activas: <strong className="text-emerald-400 font-bold">{bankAccounts.length}</strong></span>
-          </span>
+          {isAdminUser && (
+            <>
+              <span className="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1 rounded-xl border border-slate-700">
+                <WhatsAppIcon className="w-3.5 h-3.5 fill-emerald-400" />
+                <span>Recepción de pedidos: <strong className="text-emerald-400 font-bold">{whatsappPhone || storeSettings.phone || 'Configurar número'}</strong></span>
+              </span>
+              <span className="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1 rounded-xl border border-slate-700">
+                <Landmark className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Cuentas bancarias activas: <strong className="text-emerald-400 font-bold">{bankAccounts.length}</strong></span>
+              </span>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column (2 Cols): Shareable Link & Config */}
-        <div className="lg:col-span-2 space-y-6">
+      <div className={`grid grid-cols-1 ${isAdminUser ? 'lg:grid-cols-3' : 'lg:grid-cols-2 max-w-5xl mx-auto'} gap-6`}>
+        {/* Left Column: Shareable Link (& Admin Config when isAdminUser) */}
+        <div className={`${isAdminUser ? 'lg:col-span-2' : ''} space-y-6`}>
           {/* Card 1: Enlace Público Generado */}
           <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -298,14 +312,17 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
                   className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 font-bold text-xs rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all"
                 >
                   <Eye className="w-4 h-4 text-emerald-600" />
-                  <span>Probar Vista del Cliente</span>
+                  <span>{isAdminUser ? 'Probar Vista del Cliente' : 'Ver Catálogo Digital'}</span>
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Card 2: Custom Settings Form */}
-          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          {/* Admin-only Configuration Cards: Orders Phone/Welcome/Colors, Bank Accounts & Store Locations */}
+          {isAdminUser && (
+            <>
+              {/* Card 2: Custom Settings Form */}
+              <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
@@ -562,6 +579,8 @@ export const DigitalCatalogView: React.FC<DigitalCatalogViewProps> = ({
               </button>
             </div>
           </div>
+            </>
+          )}
         </div>
 
         {/* Right Column: QR Code Card & Printable Badge */}

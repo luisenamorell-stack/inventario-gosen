@@ -342,6 +342,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
       if (resolution.type === 'collaborator' && resolution.collaborator) {
         const collabUser = resolution.collaborator;
         const effectiveRole = collabUser.role === 'admin' ? 'admin' : 'collaborator';
+        const assignedWarehouseIds = Array.isArray(collabUser.allowedWarehouseIds)
+          ? collabUser.allowedWarehouseIds
+          : Array.isArray(collabUser.salesPermissions?.allowedWarehouseIds)
+          ? collabUser.salesPermissions.allowedWarehouseIds
+          : [];
         const collabSession: UserSession = {
           userId: collabUser.id,
           companyId: matchedSlug,
@@ -370,10 +375,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   'activity',
                 ]
               : ['sales', 'inventory', 'price-checker', 'catalog'],
-          salesPermissions: collabUser.salesPermissions || {
-            canEditSales: true,
-            canCancelSales: effectiveRole === 'admin',
-            canViewCostsAndProfits: effectiveRole === 'admin',
+          allowedWarehouseIds:
+            effectiveRole === 'admin' || assignedWarehouseIds.length === 0
+              ? undefined
+              : assignedWarehouseIds,
+          salesPermissions: {
+            canEditSales:
+              collabUser.salesPermissions?.canEditSales !== undefined
+                ? collabUser.salesPermissions.canEditSales
+                : true,
+            canCancelSales:
+              collabUser.salesPermissions?.canCancelSales !== undefined
+                ? collabUser.salesPermissions.canCancelSales
+                : effectiveRole === 'admin',
+            canViewCostsAndProfits:
+              collabUser.salesPermissions?.canViewCostsAndProfits !== undefined
+                ? collabUser.salesPermissions.canViewCostsAndProfits
+                : effectiveRole === 'admin',
+            ...(effectiveRole !== 'admin' && assignedWarehouseIds.length > 0
+              ? { allowedWarehouseIds: assignedWarehouseIds }
+              : {}),
           },
         };
 

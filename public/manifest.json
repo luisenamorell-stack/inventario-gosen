@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Tienda Gosén - Inventario y Punto de Venta",
-  "short_name": "Tienda Gosén",
-  "description": "Sistema de inventario, auditoría física, punto de venta y control de proveedores para Tienda Gosén",
+  "name": "MIAPPHN - Sistema POS e Inventario",
+  "short_name": "MIAPPHN",
+  "description": "Sistema inteligente de punto de venta, control de inventario, facturación y multi-bodegas en la nube — MIAPPHN",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -12,25 +12,25 @@
   "categories": ["business", "productivity", "shopping"],
   "icons": [
     {
-      "src": "/pwa-192x192.png",
+      "src": "/pwa-192x192.png?v=miapphn3",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/pwa-512x512.png",
+      "src": "/pwa-512x512.png?v=miapphn3",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/pwa-maskable-512x512.png",
+      "src": "/pwa-maskable-512x512.png?v=miapphn3",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     },
     {
-      "src": "/apple-touch-icon.png",
+      "src": "/apple-touch-icon.png?v=miapphn3",
       "sizes": "180x180",
       "type": "image/png",
       "purpose": "any"

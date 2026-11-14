@@ -1394,20 +1394,86 @@ export function setCachedSuppliers(items: Supplier[], companyId = getActiveCompa
   safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.SUPPLIERS, companyId), items);
 }
 
+const GYG_CACHE_ALIASES = ['tiendagyg', 'comercialgyg', 'comercial-gyg', 'comercial_gyg', 'gyg'];
+
 export function getCachedSales(companyId = getActiveCompanyId()): SaleRecord[] | null {
-  return safeReadCache<SaleRecord[]>(getScopedCacheKey(BASE_CACHE_KEYS.SALES, companyId));
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const keysToRead = isGyGAlias(slug)
+    ? Array.from(new Set([slug, ...GYG_CACHE_ALIASES]))
+    : [slug];
+
+  const byId = new Map<string, SaleRecord>();
+  for (const k of keysToRead) {
+    const list = safeReadCache<SaleRecord[]>(`${BASE_CACHE_KEYS.SALES}__${k}`);
+    if (Array.isArray(list)) {
+      for (const item of list) {
+        if (!item || !item.id) continue;
+        if (!belongsToCompany(item.companyId, slug, item.id)) continue;
+        const existing = byId.get(item.id);
+        if (!existing) {
+          byId.set(item.id, item);
+        } else {
+          // Prefer record with signed contract, more credit payments, or more recent edit
+          const existingPayments = existing.creditPayments?.length || 0;
+          const itemPayments = item.creditPayments?.length || 0;
+          const existingHasSig = Boolean(
+            existing.creditContract?.customerSignatureDataUrl ||
+              existing.creditContract?.lessorSignatureDataUrl
+          );
+          const itemHasSig = Boolean(
+            item.creditContract?.customerSignatureDataUrl ||
+              item.creditContract?.lessorSignatureDataUrl
+          );
+          if (
+            (itemHasSig && !existingHasSig) ||
+            itemPayments > existingPayments ||
+            (item.lastEditedAt && !existing.lastEditedAt)
+          ) {
+            byId.set(item.id, { ...existing, ...item });
+          }
+        }
+      }
+    }
+  }
+  if (byId.size === 0) return null;
+  const merged = Array.from(byId.values());
+  merged.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+  return merged;
 }
 
 export function setCachedSales(items: SaleRecord[], companyId = getActiveCompanyId()): void {
-  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.SALES, companyId), items);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.SALES, slug), items);
 }
 
 export function getCachedPurchases(companyId = getActiveCompanyId()): PurchaseInvoice[] | null {
-  return safeReadCache<PurchaseInvoice[]>(getScopedCacheKey(BASE_CACHE_KEYS.PURCHASES, companyId));
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const keysToRead = isGyGAlias(slug)
+    ? Array.from(new Set([slug, ...GYG_CACHE_ALIASES]))
+    : [slug];
+
+  const byId = new Map<string, PurchaseInvoice>();
+  for (const k of keysToRead) {
+    const list = safeReadCache<PurchaseInvoice[]>(`${BASE_CACHE_KEYS.PURCHASES}__${k}`);
+    if (Array.isArray(list)) {
+      for (const item of list) {
+        if (!item || !item.id) continue;
+        if (!belongsToCompany(item.companyId, slug, item.id)) continue;
+        if (!byId.has(item.id)) {
+          byId.set(item.id, item);
+        }
+      }
+    }
+  }
+  if (byId.size === 0) return null;
+  const merged = Array.from(byId.values());
+  merged.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+  return merged;
 }
 
 export function setCachedPurchases(items: PurchaseInvoice[], companyId = getActiveCompanyId()): void {
-  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.PURCHASES, companyId), items);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.PURCHASES, slug), items);
 }
 
 export function getCachedAuditHistory(companyId = getActiveCompanyId()): AuditHistoryRecord[] | null {
@@ -3369,6 +3435,17 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
         data.creditContract && typeof data.creditContract === 'object'
           ? data.creditContract
           : undefined,
+      warrantyInfo:
+        data.warrantyInfo && typeof data.warrantyInfo === 'object'
+          ? {
+              enabled: Boolean(data.warrantyInfo.enabled),
+              durationLabel: String(data.warrantyInfo.durationLabel || '30 Días'),
+              coverageTerms: String(data.warrantyInfo.coverageTerms || ''),
+              serialOrModelNotes: data.warrantyInfo.serialOrModelNotes
+                ? String(data.warrantyInfo.serialOrModelNotes)
+                : undefined,
+            }
+          : undefined,
       customerName: data.customerName || 'Consumidor Final',
       customerPhone: data.customerPhone || '',
       customerRtn: data.customerRtn || '',
@@ -3407,6 +3484,10 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
         data.cashierRole === 'admin' || data.cashierRole === 'collaborator'
           ? data.cashierRole
           : undefined,
+      cashierUserId: data.cashierUserId ? String(data.cashierUserId).trim() : undefined,
+      cashierUsername: data.cashierUsername
+        ? String(data.cashierUsername).trim().toLowerCase().replace(/^@+/, '')
+        : undefined,
       lastEditedBy: data.lastEditedBy ? String(data.lastEditedBy) : undefined,
       lastEditedAt: data.lastEditedAt ? String(data.lastEditedAt) : undefined,
       loyaltyCustomerId: data.loyaltyCustomerId ? String(data.loyaltyCustomerId) : undefined,
@@ -3426,6 +3507,155 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
   return records;
 }
 
+const recoveredSalesInFlight = new Set<string>();
+const recoveredPurchasesInFlight = new Set<string>();
+
+function mergeSaleRecordsWithCache(
+  serverRecords: SaleRecord[],
+  cachedRecords: SaleRecord[] | null | undefined,
+  slug: string
+): { merged: SaleRecord[]; missingOnServer: SaleRecord[] } {
+  const byId = new Map<string, SaleRecord>();
+  const serverIds = new Set<string>();
+
+  for (const srv of serverRecords) {
+    if (!srv || !srv.id) continue;
+    if (!belongsToCompany(srv.companyId, slug, srv.id)) continue;
+    serverIds.add(srv.id);
+    byId.set(srv.id, srv);
+  }
+
+  const missingOnServer: SaleRecord[] = [];
+  if (Array.isArray(cachedRecords)) {
+    for (const loc of cachedRecords) {
+      if (!loc || !loc.id) continue;
+      if (!belongsToCompany(loc.companyId, slug, loc.id)) continue;
+      const srv = byId.get(loc.id);
+      if (!srv) {
+        byId.set(loc.id, loc);
+        missingOnServer.push(loc);
+      } else {
+        // Preserve signed creditContract or warrantyInfo if present in local cache and missing on server
+        const mergedContract = srv.creditContract || loc.creditContract;
+        const mergedWarranty = srv.warrantyInfo || loc.warrantyInfo;
+        const srvPaymentsLen = srv.creditPayments?.length || 0;
+        const locPaymentsLen = loc.creditPayments?.length || 0;
+        const useLocPayments = locPaymentsLen > srvPaymentsLen;
+        byId.set(loc.id, {
+          ...loc,
+          ...srv,
+          creditContract: mergedContract,
+          warrantyInfo: mergedWarranty,
+          ...(useLocPayments
+            ? {
+                creditPayments: loc.creditPayments,
+                amountPaid: loc.amountPaid,
+                balanceDue: loc.balanceDue,
+                creditStatus: loc.creditStatus,
+              }
+            : {}),
+        });
+      }
+    }
+  }
+
+  const merged = Array.from(byId.values());
+  merged.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+  return { merged, missingOnServer };
+}
+
+async function recoverUnsyncedSalesToFirestore(missingSales: SaleRecord[], slug: string): Promise<void> {
+  if (!missingSales.length || isFirestoreQuotaExhausted()) return;
+  for (const sale of missingSales) {
+    if (!sale?.id || recoveredSalesInFlight.has(sale.id)) continue;
+    recoveredSalesInFlight.add(sale.id);
+    try {
+      const { id, ...rest } = sale;
+      const saleRef = doc(db, 'sales', id);
+      await setDoc(
+        saleRef,
+        stripUndefinedDeep({
+          ...rest,
+          companyId: sale.companyId || slug,
+          saleNumber: String(sale.saleNumber || `VTA-${id.slice(-6)}`).slice(0, 50),
+          timestamp: Number(sale.timestamp) || Date.now(),
+          date: String(sale.date || new Date().toLocaleString()).slice(0, 100),
+          items: Array.isArray(sale.items) ? sale.items : [],
+          total: Number(sale.total) || 0,
+          status: sale.status === 'cancelled' ? 'cancelled' : 'completed',
+        }),
+        { merge: true }
+      );
+    } catch (err) {
+      recoveredSalesInFlight.delete(sale.id);
+      if (isQuotaOrNetworkError(err)) break;
+    }
+  }
+}
+
+function mergePurchaseRecordsWithCache(
+  serverRecords: PurchaseInvoice[],
+  cachedRecords: PurchaseInvoice[] | null | undefined,
+  slug: string
+): { merged: PurchaseInvoice[]; missingOnServer: PurchaseInvoice[] } {
+  const byId = new Map<string, PurchaseInvoice>();
+  for (const srv of serverRecords) {
+    if (!srv || !srv.id) continue;
+    if (!belongsToCompany(srv.companyId, slug, srv.id)) continue;
+    byId.set(srv.id, srv);
+  }
+
+  const missingOnServer: PurchaseInvoice[] = [];
+  if (Array.isArray(cachedRecords)) {
+    for (const loc of cachedRecords) {
+      if (!loc || !loc.id) continue;
+      if (!belongsToCompany(loc.companyId, slug, loc.id)) continue;
+      if (!byId.has(loc.id)) {
+        byId.set(loc.id, loc);
+        missingOnServer.push(loc);
+      }
+    }
+  }
+
+  const merged = Array.from(byId.values());
+  merged.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+  return { merged, missingOnServer };
+}
+
+async function recoverUnsyncedPurchasesToFirestore(
+  missingPurchases: PurchaseInvoice[],
+  slug: string
+): Promise<void> {
+  if (!missingPurchases.length || isFirestoreQuotaExhausted()) return;
+  for (const purchase of missingPurchases) {
+    if (!purchase?.id || recoveredPurchasesInFlight.has(purchase.id)) continue;
+    recoveredPurchasesInFlight.add(purchase.id);
+    try {
+      const { id, ...rest } = purchase;
+      const purchaseRef = doc(db, 'purchases', id);
+      await setDoc(
+        purchaseRef,
+        stripUndefinedDeep({
+          ...rest,
+          companyId: purchase.companyId || slug,
+          invoiceNumber: String(purchase.invoiceNumber || `FAC-${id.slice(-6)}`).slice(0, 100),
+          supplierId: String(purchase.supplierId || 'sup_default').slice(0, 128),
+          supplierName: String(purchase.supplierName || 'Proveedor').slice(0, 200),
+          date: String(purchase.date || new Date().toLocaleDateString()).slice(0, 100),
+          timestamp: Number(purchase.timestamp) || Date.now(),
+          items: Array.isArray(purchase.items) ? purchase.items : [],
+          total: Number(purchase.total) || 0,
+          status: purchase.status === 'cancelled' ? 'cancelled' : 'completed',
+        }),
+        { merge: true }
+      );
+    } catch (err) {
+      recoveredPurchasesInFlight.delete(purchase.id);
+      if (isQuotaOrNetworkError(err)) break;
+    }
+  }
+}
+
 export async function fetchSalesOnce(
   forceRefresh = false,
   companyId = getActiveCompanyId()
@@ -3433,7 +3663,10 @@ export async function fetchSalesOnce(
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const cached = getCachedSales(slug) || [];
   const hubSync = await syncCollectionsWithBackendHub({ sales: cached }, slug);
-  const baseSales = hubSync?.sales && hubSync.sales.length > 0 ? hubSync.sales : cached;
+  const baseSales =
+    hubSync?.sales && hubSync.sales.length > 0
+      ? mergeSaleRecordsWithCache(hubSync.sales, cached, slug).merged
+      : cached;
 
   if (isFirestoreQuotaExhausted()) {
     setCachedSales(baseSales, slug);
@@ -3446,8 +3679,19 @@ export async function fetchSalesOnce(
       ? await getDocsFromServer(scopedQuery).catch(() => getDocs(scopedQuery))
       : await getDocs(scopedQuery);
     const records = parseSaleDocsFromSnapshot(snapshot, slug);
-    const mergedHub = await syncCollectionsWithBackendHub({ sales: records }, slug);
-    const finalSales = mergedHub?.sales && mergedHub.sales.length > 0 ? mergedHub.sales : records;
+    const { merged: combinedWithLocal, missingOnServer } = mergeSaleRecordsWithCache(
+      records,
+      baseSales,
+      slug
+    );
+    if (missingOnServer.length > 0) {
+      recoverUnsyncedSalesToFirestore(missingOnServer, slug).catch(() => {});
+    }
+    const mergedHub = await syncCollectionsWithBackendHub({ sales: combinedWithLocal }, slug);
+    const finalSales =
+      mergedHub?.sales && mergedHub.sales.length > 0
+        ? mergeSaleRecordsWithCache(combinedWithLocal, mergedHub.sales, slug).merged
+        : combinedWithLocal;
     setCachedSales(finalSales, slug);
     return finalSales;
   } catch (error) {
@@ -3473,10 +3717,15 @@ export function subscribeToSales(
   return onSnapshot(
     scopedQuery,
     (snapshot) => {
-      const records = parseSaleDocsFromSnapshot(snapshot, slug);
-      setCachedSales(records, slug);
-      syncCollectionsWithBackendHub({ sales: records }, slug).catch(() => {});
-      onData(records);
+      const serverRecords = parseSaleDocsFromSnapshot(snapshot, slug);
+      const cached = getCachedSales(slug) || [];
+      const { merged, missingOnServer } = mergeSaleRecordsWithCache(serverRecords, cached, slug);
+      setCachedSales(merged, slug);
+      if (missingOnServer.length > 0) {
+        recoverUnsyncedSalesToFirestore(missingOnServer, slug).catch(() => {});
+      }
+      syncCollectionsWithBackendHub({ sales: merged }, slug).catch(() => {});
+      onData(merged);
     },
     async (error) => {
       isQuotaOrNetworkError(error);
@@ -3539,6 +3788,7 @@ export async function recordSaleInFirestore(
     creditDueDate: String(saleData.creditDueDate || '').trim().slice(0, 50),
     creditPayments: Array.isArray(saleData.creditPayments) ? saleData.creditPayments : [],
     creditContract: saleData.creditContract ? saleData.creditContract : undefined,
+    warrantyInfo: saleData.warrantyInfo ? saleData.warrantyInfo : undefined,
     customerName: String(saleData.customerName || 'Consumidor Final').trim().slice(0, 200),
     customerPhone: String(saleData.customerPhone || '').trim().slice(0, 50),
     customerRtn: String(saleData.customerRtn || '').trim().slice(0, 50),
@@ -3557,6 +3807,12 @@ export async function recordSaleInFirestore(
         : (saleData.cashier || '').toLowerCase().includes('admin')
         ? 'admin'
         : 'collaborator',
+    cashierUserId: saleData.cashierUserId
+      ? String(saleData.cashierUserId).trim().slice(0, 120)
+      : undefined,
+    cashierUsername: saleData.cashierUsername
+      ? String(saleData.cashierUsername).trim().toLowerCase().replace(/^@+/, '').slice(0, 100)
+      : undefined,
     loyaltyCustomerId: saleData.loyaltyCustomerId ? String(saleData.loyaltyCustomerId) : undefined,
     loyaltyPointsEarned:
       saleData.loyaltyPointsEarned !== undefined ? Number(saleData.loyaltyPointsEarned) : undefined,
@@ -3714,6 +3970,7 @@ export async function recordCreditPaymentInFirestore(
     prevSales.map((s) => (s.id === sale.id ? updatedSale : s)),
     slug
   );
+  syncCollectionsWithBackendHub({ sales: [updatedSale] }, slug).catch(() => {});
 
   try {
     await setDoc(
@@ -3800,6 +4057,10 @@ export async function updateSaleInFirestore(
       updatedSale.creditContract !== undefined
         ? updatedSale.creditContract
         : originalSale.creditContract,
+    warrantyInfo:
+      updatedSale.warrantyInfo !== undefined
+        ? updatedSale.warrantyInfo
+        : originalSale.warrantyInfo,
     customerName: String(updatedSale.customerName || 'Consumidor Final').trim().slice(0, 200),
     customerPhone: String(updatedSale.customerPhone || '').trim().slice(0, 50),
     customerRtn: String(updatedSale.customerRtn || '').trim().slice(0, 50),
@@ -3815,15 +4076,22 @@ export async function updateSaleInFirestore(
       updatedSale.onlineOrder !== undefined ? updatedSale.onlineOrder : originalSale.onlineOrder,
     cashier: String(updatedSale.cashier || originalSale.cashier || 'Administrador').trim().slice(0, 100),
     cashierRole: updatedSale.cashierRole || originalSale.cashierRole || 'admin',
+    cashierUserId: updatedSale.cashierUserId || originalSale.cashierUserId || undefined,
+    cashierUsername: updatedSale.cashierUsername || originalSale.cashierUsername || undefined,
     lastEditedBy: String(updatedSale.lastEditedBy || 'Administrador').slice(0, 150),
     lastEditedAt: String(updatedSale.lastEditedAt || new Date().toLocaleString()).slice(0, 100),
   };
 
+  const finalEditedRecord: SaleRecord = {
+    id: originalSale.id,
+    ...payload,
+  };
   const prevSales = getCachedSales(slug) || [];
   setCachedSales(
-    prevSales.map((s) => (s.id === originalSale.id ? { id: originalSale.id, ...payload } : s)),
+    prevSales.map((s) => (s.id === originalSale.id ? finalEditedRecord : s)),
     slug
   );
+  syncCollectionsWithBackendHub({ sales: [finalEditedRecord] }, slug).catch(() => {});
 
   try {
     await setDoc(saleRef, stripUndefinedDeep(payload), { merge: true });
@@ -3842,21 +4110,25 @@ export async function updateSaleInFirestore(
     const targetWhId = updatedSale.warehouseId || originalSale.warehouseId;
 
     const oldQtyByCode = new Map<string, number>();
-    for (const it of originalSale.items || []) {
-      const k = it.code.trim().toLowerCase();
-      if (!k) continue;
-      oldQtyByCode.set(k, (oldQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+    if (originalSale.status !== 'cancelled') {
+      for (const it of originalSale.items || []) {
+        const k = it.code.trim().toLowerCase();
+        if (!k) continue;
+        oldQtyByCode.set(k, (oldQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+      }
     }
 
     const newQtyByCode = new Map<string, { qty: number; item: typeof cleanItems[number] }>();
-    for (const it of cleanItems) {
-      const k = it.code.trim().toLowerCase();
-      if (!k) continue;
-      const existing = newQtyByCode.get(k);
-      if (existing) {
-        existing.qty += it.quantity;
-      } else {
-        newQtyByCode.set(k, { qty: it.quantity, item: it });
+    if (payload.status !== 'cancelled') {
+      for (const it of cleanItems) {
+        const k = it.code.trim().toLowerCase();
+        if (!k) continue;
+        const existing = newQtyByCode.get(k);
+        if (existing) {
+          existing.qty += it.quantity;
+        } else {
+          newQtyByCode.set(k, { qty: it.quantity, item: it });
+        }
       }
     }
 
@@ -3918,10 +4190,7 @@ export async function updateSaleInFirestore(
     console.warn('Warning adjusting inventory stock on sale edit:', invErr);
   }
 
-  return {
-    id: originalSale.id,
-    ...payload,
-  };
+  return finalEditedRecord;
 }
 
 export async function cancelSaleInFirestore(
@@ -3932,11 +4201,13 @@ export async function cancelSaleInFirestore(
   const slug = normalizeCompanySlug(companyId);
   const saleRef = doc(db, 'sales', sale.id);
 
+  const cancelledRecord: SaleRecord = { ...sale, status: 'cancelled' };
   const prevSales = getCachedSales(slug) || [];
   setCachedSales(
-    prevSales.map((s) => (s.id === sale.id ? { ...s, status: 'cancelled' } : s)),
+    prevSales.map((s) => (s.id === sale.id ? cancelledRecord : s)),
     slug
   );
+  syncCollectionsWithBackendHub({ sales: [cancelledRecord] }, slug).catch(() => {});
 
   try {
     await setDoc(
@@ -4000,6 +4271,88 @@ export async function cancelSaleInFirestore(
   } catch (invError) {
     console.warn('Warning restoring stock on sale cancel:', invError);
   }
+}
+
+export async function restoreCancelledSaleInFirestore(
+  sale: SaleRecord,
+  currentInventory: Product[],
+  companyId = getActiveCompanyId()
+): Promise<SaleRecord> {
+  const slug = normalizeCompanySlug(companyId);
+  const saleRef = doc(db, 'sales', sale.id);
+
+  const restoredRecord: SaleRecord = { ...sale, status: 'completed' };
+  const prevSales = getCachedSales(slug) || [];
+  setCachedSales(
+    prevSales.map((s) => (s.id === sale.id ? restoredRecord : s)),
+    slug
+  );
+  syncCollectionsWithBackendHub({ sales: [restoredRecord] }, slug).catch(() => {});
+
+  try {
+    await setDoc(
+      saleRef,
+      stripUndefinedDeep({
+        saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
+        timestamp: Number(sale.timestamp) || Date.now(),
+        date: String(sale.date || '').slice(0, 100),
+        items: Array.isArray(sale.items) ? sale.items : [],
+        total: Number(sale.total) || 0,
+        status: 'completed',
+      }),
+      { merge: true }
+    );
+  } catch (error) {
+    if (isQuotaOrNetworkError(error)) {
+      console.warn('Sale restoration saved in local cache; cloud sync deferred:', error);
+    } else {
+      handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+    }
+  }
+
+  try {
+    const storeWhData = getCachedStoreWarehouses(slug);
+    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
+    const batch = writeBatch(db);
+    for (const item of sale.items || []) {
+      const currentProd = currentInventory.find(
+        (p) =>
+          p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
+          p.id === item.productId
+      );
+      const productDocId = getScopedDocId(currentProd?.code || item.code, slug);
+      const productRef = doc(db, 'inventory', productDocId);
+
+      const { newStock: deductedStock, newWarehouseStocks } = applyWarehouseStockDelta(
+        currentProd,
+        -(Number(item.quantity) || 1),
+        sale.warehouseId,
+        activeWhList
+      );
+
+      batch.set(
+        productRef,
+        {
+          companyId: slug,
+          code: (currentProd?.code || item.code).trim().slice(0, 100),
+          name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
+          category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
+          price: Number(currentProd?.price ?? item.price) || 0,
+          cost: Number(currentProd?.cost ?? item.cost) || 0,
+          stock: deductedStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+        },
+        { merge: true }
+      );
+    }
+
+    await touchInventorySyncStamp(batch, slug);
+    await batch.commit();
+  } catch (invError) {
+    console.warn('Warning deducting stock on sale restore:', invError);
+  }
+
+  return restoredRecord;
 }
 
 export async function deleteSaleFromFirestore(saleId: string): Promise<void> {
@@ -4068,7 +4421,9 @@ export async function fetchPurchasesOnce(
   const cached = getCachedPurchases(slug) || [];
   const hubSync = await syncCollectionsWithBackendHub({ purchases: cached }, slug);
   const basePurchases =
-    hubSync?.purchases && hubSync.purchases.length > 0 ? hubSync.purchases : cached;
+    hubSync?.purchases && hubSync.purchases.length > 0
+      ? mergePurchaseRecordsWithCache(hubSync.purchases, cached, slug).merged
+      : cached;
 
   if (isFirestoreQuotaExhausted()) {
     setCachedPurchases(basePurchases, slug);
@@ -4081,9 +4436,19 @@ export async function fetchPurchasesOnce(
       ? await getDocsFromServer(scopedQuery).catch(() => getDocs(scopedQuery))
       : await getDocs(scopedQuery);
     const records = parsePurchaseDocsFromSnapshot(snapshot, slug);
-    const mergedHub = await syncCollectionsWithBackendHub({ purchases: records }, slug);
+    const { merged: combinedWithLocal, missingOnServer } = mergePurchaseRecordsWithCache(
+      records,
+      basePurchases,
+      slug
+    );
+    if (missingOnServer.length > 0) {
+      recoverUnsyncedPurchasesToFirestore(missingOnServer, slug).catch(() => {});
+    }
+    const mergedHub = await syncCollectionsWithBackendHub({ purchases: combinedWithLocal }, slug);
     const finalPurchases =
-      mergedHub?.purchases && mergedHub.purchases.length > 0 ? mergedHub.purchases : records;
+      mergedHub?.purchases && mergedHub.purchases.length > 0
+        ? mergePurchaseRecordsWithCache(combinedWithLocal, mergedHub.purchases, slug).merged
+        : combinedWithLocal;
     setCachedPurchases(finalPurchases, slug);
     return finalPurchases;
   } catch (error) {
@@ -4109,10 +4474,15 @@ export function subscribeToPurchases(
   return onSnapshot(
     scopedQuery,
     (snapshot) => {
-      const records = parsePurchaseDocsFromSnapshot(snapshot, slug);
-      setCachedPurchases(records, slug);
-      syncCollectionsWithBackendHub({ purchases: records }, slug).catch(() => {});
-      onData(records);
+      const serverRecords = parsePurchaseDocsFromSnapshot(snapshot, slug);
+      const cached = getCachedPurchases(slug) || [];
+      const { merged, missingOnServer } = mergePurchaseRecordsWithCache(serverRecords, cached, slug);
+      setCachedPurchases(merged, slug);
+      if (missingOnServer.length > 0) {
+        recoverUnsyncedPurchasesToFirestore(missingOnServer, slug).catch(() => {});
+      }
+      syncCollectionsWithBackendHub({ purchases: merged }, slug).catch(() => {});
+      onData(merged);
     },
     async (error) => {
       isQuotaOrNetworkError(error);
@@ -4316,11 +4686,13 @@ export async function cancelPurchaseInFirestore(
   const slug = normalizeCompanySlug(companyId);
   const purchaseRef = doc(db, 'purchases', purchase.id);
 
+  const cancelledPurchase: PurchaseInvoice = { ...purchase, status: 'cancelled' };
   const prevPurchases = getCachedPurchases(slug) || [];
   setCachedPurchases(
-    prevPurchases.map((p) => (p.id === purchase.id ? { ...p, status: 'cancelled' } : p)),
+    prevPurchases.map((p) => (p.id === purchase.id ? cancelledPurchase : p)),
     slug
   );
+  syncCollectionsWithBackendHub({ purchases: [cancelledPurchase] }, slug).catch(() => {});
 
   try {
     await setDoc(
@@ -4432,6 +4804,21 @@ function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: s
     ? 'tiendagyg'
     : normalizeCompanySlug(raw?.companyId || fallbackSlug);
   const rawId = String(raw?.id || fallbackId || `usr_${Date.now()}`);
+  const rawWhIds = Array.isArray(raw?.salesPermissions?.allowedWarehouseIds)
+    ? raw.salesPermissions.allowedWarehouseIds
+    : Array.isArray(raw?.allowedWarehouseIds)
+    ? raw.allowedWarehouseIds
+    : undefined;
+  const cleanWhIds: string[] | undefined = rawWhIds
+    ? Array.from(
+        new Set<string>(
+          rawWhIds
+            .map((id: any) => String(id || '').trim())
+            .filter((s: string) => s.length > 0)
+        )
+      )
+    : undefined;
+
   return {
     id: rawId,
     companyId: cSlug,
@@ -4446,6 +4833,7 @@ function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: s
     allowedTabs: Array.isArray(raw?.allowedTabs)
       ? raw.allowedTabs
       : ['sales', 'inventory', 'price-checker', 'catalog'],
+    ...(cleanWhIds ? { allowedWarehouseIds: cleanWhIds } : {}),
     salesPermissions: raw?.salesPermissions
       ? {
           canEditSales:
@@ -4454,11 +4842,13 @@ function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: s
               : true,
           canCancelSales: Boolean(raw.salesPermissions.canCancelSales),
           canViewCostsAndProfits: Boolean(raw.salesPermissions.canViewCostsAndProfits),
+          ...(cleanWhIds ? { allowedWarehouseIds: cleanWhIds } : {}),
         }
       : {
           canEditSales: true,
           canCancelSales: false,
           canViewCostsAndProfits: false,
+          ...(cleanWhIds ? { allowedWarehouseIds: cleanWhIds } : {}),
         },
     createdAt: Number(raw?.createdAt) || Date.now(),
     ...(raw?.lastLoginAt ? { lastLoginAt: Number(raw.lastLoginAt) } : {}),
@@ -4624,6 +5014,22 @@ export async function saveUserToFirestore(
   const rawUserId = user.id || `usr_${Date.now()}`;
   const userId = getScopedDocId(rawUserId, slug);
   const docRef = doc(db, 'users', userId);
+
+  const rawWhIds = Array.isArray(user.salesPermissions?.allowedWarehouseIds)
+    ? user.salesPermissions?.allowedWarehouseIds
+    : Array.isArray(user.allowedWarehouseIds)
+    ? user.allowedWarehouseIds
+    : undefined;
+  const cleanWhIds = rawWhIds
+    ? Array.from(
+        new Set(
+          rawWhIds
+            .map((id) => String(id || '').trim())
+            .filter(Boolean)
+        )
+      )
+    : [];
+
   const payload: UserAccount = {
     id: userId,
     companyId: slug,
@@ -4633,6 +5039,7 @@ export async function saveUserToFirestore(
     role: user.role,
     isActive: user.isActive !== false,
     allowedTabs: user.allowedTabs,
+    allowedWarehouseIds: cleanWhIds,
     salesPermissions: {
       canEditSales:
         user.salesPermissions?.canEditSales !== undefined
@@ -4640,6 +5047,7 @@ export async function saveUserToFirestore(
           : true,
       canCancelSales: Boolean(user.salesPermissions?.canCancelSales),
       canViewCostsAndProfits: Boolean(user.salesPermissions?.canViewCostsAndProfits),
+      allowedWarehouseIds: cleanWhIds,
     },
     createdAt: user.createdAt || Date.now(),
     ...(user.lastLoginAt ? { lastLoginAt: user.lastLoginAt } : {}),

@@ -1,13 +1,12 @@
-// Service Worker for Multi-Tenant SaaS PWA (Network-First with Dynamic Tenant Manifest support)
-const CACHE_NAME = 'tienda-gosen-v10';
+// Service Worker for Multi-Tenant SaaS PWA (MIAPPHN Official Branding)
+const CACHE_NAME = 'miapphn-pwa-v12';
 const STATIC_ASSETS = [
-  '/manifest.json',
-  '/favicon.png',
-  '/apple-touch-icon.png',
-  '/pwa-192x192.png',
-  '/pwa-512x512.png',
-  '/pwa-maskable-512x512.png',
-  '/store-logo.jpg'
+  '/manifest.json?v=miapphn3',
+  '/favicon.png?v=miapphn3',
+  '/apple-touch-icon.png?v=miapphn3',
+  '/pwa-192x192.png?v=miapphn3',
+  '/pwa-512x512.png?v=miapphn3',
+  '/pwa-maskable-512x512.png?v=miapphn3'
 ];
 
 self.addEventListener('install', (event) => {
@@ -51,7 +50,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // If the client app stored a dynamic tenant manifest in CacheStorage, serve it first for /manifest.json
+  // Serve dynamic manifest if updated in current cache, otherwise fetch latest /manifest.json
   if (url.pathname === '/manifest.json') {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) =>

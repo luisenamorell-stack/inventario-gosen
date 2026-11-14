@@ -265,7 +265,7 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
   const [historySupplierFilter, setHistorySupplierFilter] = useState<string>('all');
   const [historyWarehouseFilter, setHistoryWarehouseFilter] = useState<string>('all');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'completed' | 'cancelled'>('all');
-  const [historyDateFilter, setHistoryDateFilter] = useState<'today' | 'week' | 'month' | 'all'>('month');
+  const [historyDateFilter, setHistoryDateFilter] = useState<'today' | 'week' | 'month' | 'all'>('all');
 
   const receiptPrintRef = useRef<HTMLDivElement>(null);
 
@@ -550,10 +550,12 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
     return purchases.filter((p) => {
-      // Date filter
-      if (historyDateFilter === 'today' && p.timestamp < startOfToday) return false;
-      if (historyDateFilter === 'week' && p.timestamp < startOfWeek) return false;
-      if (historyDateFilter === 'month' && p.timestamp < startOfMonth) return false;
+      // Date filter (bypassed when searching in q)
+      if (!q) {
+        if (historyDateFilter === 'today' && p.timestamp < startOfToday) return false;
+        if (historyDateFilter === 'week' && p.timestamp < startOfWeek) return false;
+        if (historyDateFilter === 'month' && p.timestamp < startOfMonth) return false;
+      }
 
       // Status filter
       if (historyStatusFilter !== 'all' && p.status !== historyStatusFilter) return false;
@@ -567,15 +569,26 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
         if (invWhId !== historyWarehouseFilter) return false;
       }
 
-      // Search query
+      // Search query (invoice number, supplier, warehouse, total amount, or item name/code/price)
       if (q) {
+        const cleanAmountQuery = q.replace(/,/g, '');
         const matchInvoice = p.invoiceNumber.toLowerCase().includes(q);
         const matchSupplier = p.supplierName.toLowerCase().includes(q);
         const matchWarehouse = (p.warehouseName || '').toLowerCase().includes(q);
+        const matchAmount =
+          String(p.total).includes(cleanAmountQuery) ||
+          p.total.toFixed(2).includes(cleanAmountQuery) ||
+          String(p.subtotal).includes(cleanAmountQuery);
         const matchItem = p.items.some(
-          (it) => it.name.toLowerCase().includes(q) || it.code.toLowerCase().includes(q)
+          (it) =>
+            it.name.toLowerCase().includes(q) ||
+            it.code.toLowerCase().includes(q) ||
+            String(it.cost).includes(cleanAmountQuery) ||
+            String(it.subtotal).includes(cleanAmountQuery) ||
+            (it.salePrice !== undefined && String(it.salePrice).includes(cleanAmountQuery))
         );
-        if (!matchInvoice && !matchSupplier && !matchWarehouse && !matchItem) return false;
+        if (!matchInvoice && !matchSupplier && !matchWarehouse && !matchAmount && !matchItem)
+          return false;
       }
 
       return true;

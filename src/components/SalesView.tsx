@@ -18,9 +18,11 @@ import {
   InvoiceTemplateConfig,
   getEffectiveInvoiceTemplate,
   CreditContractData,
+  SaleWarrantyInfo,
   isStoreCreditContractEnabled,
   isGenericSystemAdminIssuer,
   resolveInvoiceIssuerName,
+  doesSaleBelongToCollaborator,
 } from '../types';
 import {
   getProductStockInWarehouse,
@@ -40,6 +42,8 @@ import {
   resolveCreditContractData,
   buildSaleAndCreditContractCombinedHtml,
   downloadCreditContractPdf,
+  buildWarrantyCertificateHtml,
+  downloadWarrantyCertificatePdf,
 } from '../utils/printPdfService';
 import {
   getBridgeConfig,
@@ -190,6 +194,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
     (effectiveSalesPerms?.canEditSales !== undefined ? effectiveSalesPerms.canEditSales : true);
   const canViewCostsAndProfits =
     isAdminUser || Boolean(effectiveSalesPerms?.canViewCostsAndProfits);
+
+  // Strict Collaborator Isolation: each collaborator ONLY sees their own sales (never global sales)
+  const visibleSales = useMemo<SaleRecord[]>(() => {
+    if (isAdminUser) return sales;
+    return sales.filter((s) =>
+      doesSaleBelongToCollaborator(s, userSession, matchedCollabAccount)
+    );
+  }, [sales, isAdminUser, userSession, matchedCollabAccount]);
+
   // Navigation between POS Terminal, Cash Register, Credits, Expenses and Sales History
   const [activeSubTab, setActiveSubTab] = useState<SalesSubTab>(initialSubTab);
 
@@ -218,6 +231,44 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return activeWarehouses.find((w) => w.isMainSalesFloor) || activeWarehouses[0];
   }, [activeWarehouses]);
 
+  // Collaborator-specific warehouse billing permissions assigned by the Store Admin
+  const assignedCollabWarehouseIds = useMemo<string[]>(() => {
+    if (isAdminUser) return [];
+    const raw =
+      matchedCollabAccount?.allowedWarehouseIds ||
+      effectiveSalesPerms?.allowedWarehouseIds ||
+      userSession?.allowedWarehouseIds ||
+      [];
+    return Array.from(
+      new Set(
+        raw
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+          .map((id) => id.trim())
+      )
+    );
+  }, [isAdminUser, matchedCollabAccount, effectiveSalesPerms, userSession]);
+
+  const allowedPosWarehouses = useMemo<WarehouseLocation[]>(() => {
+    if (isAdminUser || assignedCollabWarehouseIds.length === 0) {
+      return activeWarehouses;
+    }
+    const filtered = activeWarehouses.filter((w) => assignedCollabWarehouseIds.includes(w.id));
+    return filtered.length > 0 ? filtered : activeWarehouses;
+  }, [isAdminUser, assignedCollabWarehouseIds, activeWarehouses]);
+
+  const isCollabWarehouseRestricted =
+    !isAdminUser &&
+    assignedCollabWarehouseIds.length > 0 &&
+    allowedPosWarehouses.length < activeWarehouses.length;
+
+  const defaultAllowedWarehouse = useMemo<WarehouseLocation>(() => {
+    return (
+      allowedPosWarehouses.find((w) => w.isMainSalesFloor) ||
+      allowedPosWarehouses[0] ||
+      defaultMainWarehouse
+    );
+  }, [allowedPosWarehouses, defaultMainWarehouse]);
+
   const companyKey = (storeSettings.companyId || 'gosen').toLowerCase();
 
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>(() => {
@@ -228,17 +279,21 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return 'principal';
   });
 
-  // Ensure selectedWarehouseId always points to an active warehouse of the current store
+  // Ensure selectedWarehouseId always points to an authorized active warehouse of the current store
   useEffect(() => {
-    if (!activeWarehouses.some((w) => w.id === selectedWarehouseId)) {
-      setSelectedWarehouseId(defaultMainWarehouse?.id || 'principal');
+    if (!allowedPosWarehouses.some((w) => w.id === selectedWarehouseId)) {
+      const nextWhId = defaultAllowedWarehouse?.id || 'principal';
+      setSelectedWarehouseId(nextWhId);
+      try {
+        localStorage.setItem(`stockmaster_pos_warehouse_${companyKey}`, nextWhId);
+      } catch {}
     }
-  }, [activeWarehouses, selectedWarehouseId, defaultMainWarehouse]);
+  }, [allowedPosWarehouses, selectedWarehouseId, defaultAllowedWarehouse, companyKey]);
 
   const selectedWarehouse = useMemo<WarehouseLocation>(() => {
     return (
-      activeWarehouses.find((w) => w.id === selectedWarehouseId) ||
-      defaultMainWarehouse || {
+      allowedPosWarehouses.find((w) => w.id === selectedWarehouseId) ||
+      defaultAllowedWarehouse || {
         id: 'principal',
         code: 'PRINCIPAL',
         name: 'Tienda Principal (Sala de Ventas)',
@@ -247,7 +302,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
         createdAt: Date.now(),
       }
     );
-  }, [activeWarehouses, selectedWarehouseId, defaultMainWarehouse]);
+  }, [allowedPosWarehouses, selectedWarehouseId, defaultAllowedWarehouse]);
 
   const isWarehousesModuleEnabled = useMemo(() => {
     return !storeSettings.allowedModules || storeSettings.allowedModules.includes('warehouses');
@@ -414,9 +469,30 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [saleNotes, setSaleNotes] = useState<string>('');
   const [isSubmittingSale, setIsSubmittingSale] = useState<boolean>(false);
 
+  // Product Warranty state in POS & Receipt Modal (applicable to any product / sale)
+  const getDefaultWarrantyTermsForStore = () => {
+    const fromTpl = (effectiveInvoiceTemplate.warrantyPolicyText || '').trim();
+    if (fromTpl) return fromTpl;
+    return 'Garantía válida únicamente por defectos de fabricación presentando esta factura o ticket original. Quedan excluidos daños por mal uso, golpes, humedad, caídas, instalaciones eléctricas defectuosas, alto/bajo voltaje o revisión por personal no autorizado.';
+  };
+
+  const [posIncludeWarranty, setPosIncludeWarranty] = useState<boolean>(false);
+  const [posWarrantyDuration, setPosWarrantyDuration] = useState<string>('30 Días');
+  const [posWarrantySerialNotes, setPosWarrantySerialNotes] = useState<string>('');
+  const [posWarrantyTerms, setPosWarrantyTerms] = useState<string>('');
+  const [showPosWarrantyDetails, setShowPosWarrantyDetails] = useState<boolean>(false);
+
   const handleSelectPosWarehouse = (newWhId: string) => {
-    const targetWh = activeWarehouses.find((w) => w.id === newWhId);
-    if (!targetWh) return;
+    const targetWh = allowedPosWarehouses.find((w) => w.id === newWhId);
+    if (!targetWh) {
+      showToast(
+        `Tu usuario no tiene autorización para facturar desde esa bodega. Bodega(s) autorizada(s): ${allowedPosWarehouses
+          .map((w) => w.name)
+          .join(', ')}.`,
+        'warning'
+      );
+      return;
+    }
     setSelectedWarehouseId(newWhId);
     try {
       localStorage.setItem(`stockmaster_pos_warehouse_${companyKey}`, newWhId);
@@ -482,7 +558,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [historySearch, setHistorySearch] = useState('');
   const [historyDateFilter, setHistoryDateFilter] = useState<
     'today' | 'yesterday' | 'today_yesterday' | 'week' | 'month' | 'all' | 'custom'
-  >('today_yesterday');
+  >('all');
   const [historyYearFilter, setHistoryYearFilter] = useState<string>('all');
   const [historyMonthFilter, setHistoryMonthFilter] = useState<string>('all');
   const [historyDayFilter, setHistoryDayFilter] = useState<string>('all');
@@ -720,21 +796,37 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
   // Add product to cart with stock validation in the selected warehouse & automatic per-article discount
   const addToCart = (product: Product) => {
-    const availableStock = getPosWarehouseStock(product);
+    let availableStock = getPosWarehouseStock(product);
     const otherLocations = getOtherWarehousesWithStock(product);
+    const allowedOtherLocations = otherLocations.filter((loc) =>
+      allowedPosWarehouses.some((w) => w.id === loc.warehouse.id)
+    );
     if (availableStock <= 0) {
-      if (otherLocations.length > 0) {
-        const locationsText = otherLocations
+      if (allowedOtherLocations.length > 0) {
+        const bestAlt = allowedOtherLocations[0];
+        availableStock = bestAlt.stock;
+        setSelectedWarehouseId(bestAlt.warehouse.id);
+        showToast(
+          `Bodega cambiada automáticamente a "${bestAlt.warehouse.name}" (${bestAlt.stock} uds disponibles) para facturar "${product.name}".`,
+          'info'
+        );
+      } else if (otherLocations.length > 0) {
+        const otherText = otherLocations
           .map((loc) => `${loc.warehouse.name} (${loc.stock} uds)`)
           .join(', ');
         showToast(
-          `"${product.name}" no tiene existencia en ${selectedWarehouse.name}. Disponible en: ${locationsText}.`,
+          `El artículo "${product.name}" tiene existencia en ${otherText}, pero tu usuario solo está autorizado para facturar desde: ${allowedPosWarehouses
+            .map((w) => w.name)
+            .join(', ')}.`,
           'warning'
         );
+        return;
+      } else if (!isWarehousesModuleEnabled && (Number(product.stock) || 0) > 0) {
+        availableStock = Number(product.stock) || 1;
       } else {
         showToast(`El producto "${product.name}" está agotado en todas las bodegas (Stock 0)`, 'error');
+        return;
       }
-      return;
     }
 
     const basePrice = Number(product.price) || 0;
@@ -947,6 +1039,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setCreditArticleBrand('');
     setCreditArticleModel('');
     setSaleNotes('');
+    setPosIncludeWarranty(false);
+    setPosWarrantyDuration('30 Días');
+    setPosWarrantySerialNotes('');
+    setPosWarrantyTerms('');
+    setShowPosWarrantyDetails(false);
     setSelectedLoyaltyCustomerId('');
     setRedeemLoyaltyPoints(false);
     setMobilePosTab('catalog');
@@ -1085,17 +1182,34 @@ export const SalesView: React.FC<SalesViewProps> = ({
       return;
     }
 
-    // Verify stock availability in the selected warehouse right before saving
+    // Verify stock availability in the selected warehouse right before saving (with automatic fallback to another authorized warehouse if stock is located there)
+    let checkoutWarehouse = selectedWarehouse;
     for (const item of cart) {
       const liveProduct = inventory.find((p) => p.code === item.code);
-      const currentStock = getPosWarehouseStock(liveProduct);
+      const currentStock = liveProduct
+        ? getProductStockInWarehouse(liveProduct, checkoutWarehouse.id, activeWarehouses)
+        : 0;
       if (item.quantity > currentStock) {
-        playSound('error');
-        showToast(
-          `Stock insuficiente en "${selectedWarehouse.name}" para "${item.name}". Solo hay ${currentStock} unidades disponibles en esa bodega.`,
-          'error'
-        );
-        return;
+        const altWithStock = liveProduct
+          ? getOtherWarehousesWithStock(liveProduct).find(
+              (loc) =>
+                loc.stock >= item.quantity &&
+                allowedPosWarehouses.some((w) => w.id === loc.warehouse.id)
+            )
+          : undefined;
+        if (altWithStock) {
+          checkoutWarehouse = altWithStock.warehouse;
+          setSelectedWarehouseId(altWithStock.warehouse.id);
+        } else if (!isWarehousesModuleEnabled && (Number(liveProduct?.stock) || 0) >= item.quantity) {
+          // Total stock is sufficient when warehouses module is disabled
+        } else {
+          playSound('error');
+          showToast(
+            `Stock insuficiente en "${checkoutWarehouse.name}" para "${item.name}". Solo hay ${currentStock} unidades disponibles en tu bodega autorizada.`,
+            'error'
+          );
+          return;
+        }
       }
     }
 
@@ -1260,19 +1374,34 @@ export const SalesView: React.FC<SalesViewProps> = ({
         customerAddress: cleanCustAddress || undefined,
         notes: saleNotes.trim() || undefined,
         status: 'completed',
-        warehouseId: selectedWarehouse.id,
-        warehouseName: selectedWarehouse.name,
+        warehouseId: checkoutWarehouse.id,
+        warehouseName: checkoutWarehouse.name,
         cashier: resolveInvoiceIssuerName(
           hasCustomIssuerTyped ? invoiceIssuerName : invoiceIssuerName || userSession?.userName,
           effectiveInvoiceTemplate.defaultIssuerName,
           userSession?.userName || 'Administrador'
         ),
         cashierRole: userSession?.role || 'admin',
+        cashierUserId: userSession?.role === 'collaborator' ? userSession.userId : undefined,
+        cashierUsername: userSession?.role === 'collaborator' ? userSession.username : undefined,
         loyaltyCustomerId: targetLoyaltyId,
         loyaltyPointsEarned: ptsEarned > 0 ? ptsEarned : undefined,
         loyaltyPointsRedeemed: ptsRedeemed > 0 ? ptsRedeemed : undefined,
         loyaltyDiscountAmount: ptsDiscountLps > 0 ? ptsDiscountLps : undefined,
         loyaltyPointsBalanceAfter: nextPtsBalance,
+        warrantyInfo: posIncludeWarranty
+          ? {
+              enabled: true,
+              durationLabel: posWarrantyDuration.trim() || '30 Días',
+              serialOrModelNotes:
+                posWarrantySerialNotes.trim() ||
+                (creditArticleBrand.trim() || creditArticleModel.trim()
+                  ? [creditArticleBrand.trim(), creditArticleModel.trim()].filter(Boolean).join(' • ')
+                  : undefined),
+              coverageTerms:
+                posWarrantyTerms.trim() || getDefaultWarrantyTermsForStore(),
+            }
+          : undefined,
       };
 
       let initialCreditContract: CreditContractData | undefined = undefined;
@@ -1661,11 +1790,154 @@ export const SalesView: React.FC<SalesViewProps> = ({
       }
     }
 
+    if (sale.warrantyInfo?.enabled) {
+      text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+      text += `🛡️ *CERTIFICADO DE GARANTÍA DE PRODUCTO*\n`;
+      text += `⏱️ *Plazo de Garantía:* *${sale.warrantyInfo.durationLabel || '30 Días'}*\n`;
+      if (sale.warrantyInfo.serialOrModelNotes) {
+        text += `🔢 *Serie / Modelo:* ${sale.warrantyInfo.serialOrModelNotes}\n`;
+      }
+      text += `📋 *Cobertura:* ${
+        sale.warrantyInfo.coverageTerms || getDefaultWarrantyTermsForStore()
+      }\n`;
+    }
+
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
     text += `✨ *¡Muchas gracias por su preferencia!*\n`;
     text += `Guarde este ticket para cualquier cambio o garantía.`;
 
     return text;
+  };
+
+  // Format a dedicated Product Warranty Certificate message for WhatsApp (works for any sale)
+  const formatWarrantyOnlyWhatsAppMessage = (sale: SaleRecord): string => {
+    const sName = (storeSettings.storeName || 'TIENDA GOSÉN').toUpperCase();
+    const sAddress = storeSettings.address ? `📍 ${storeSettings.address}\n` : '';
+    const sPhone = storeSettings.phone ? `📞 Tel: ${storeSettings.phone}\n` : '';
+    const duration = sale.warrantyInfo?.durationLabel || posWarrantyDuration || '30 Días';
+    const serialNotes = sale.warrantyInfo?.serialOrModelNotes || '';
+    const terms =
+      sale.warrantyInfo?.coverageTerms || getDefaultWarrantyTermsForStore();
+
+    let msg = `🛡️ *CERTIFICADO DE GARANTÍA DE PRODUCTO*\n`;
+    msg += `🏪 *${sName}*\n`;
+    if (sAddress) msg += sAddress;
+    if (sPhone) msg += sPhone;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `🧾 *Factura / Ticket N°:* ${sale.saleNumber}\n`;
+    msg += `📅 *Fecha de Compra:* ${sale.date}\n`;
+    msg += `👤 *Cliente:* ${sale.customerName || 'Consumidor Final'}\n`;
+    if (sale.customerRtn) msg += `🪪 *RTN / DNI:* ${sale.customerRtn}\n`;
+    if (effectiveInvoiceTemplate.showSellerName) {
+      const issuerTag = effectiveInvoiceTemplate.issuerLabel || 'Atendido por';
+      msg += `👨‍💼 *${issuerTag}:* ${getFormattedSaleIssuer(sale)}\n`;
+    }
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `⏱️ *PLAZO DE GARANTÍA:* *${duration.toUpperCase()}*\n`;
+    if (serialNotes) {
+      msg += `🔢 *Serie / Modelo:* ${serialNotes}\n`;
+    }
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `🛍️ *ARTÍCULO(S) CUBIERTO(S):*\n`;
+    (sale.items || []).forEach((it) => {
+      msg += `• *${it.quantity}x* ${it.name} _(Cód: ${it.code} • L. ${it.subtotal.toFixed(2)})_\n`;
+    });
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `📋 *CONDICIONES DE GARANTÍA:*\n`;
+    msg += `${terms}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `✅ _Para hacer efectiva su garantía, conserve este mensaje junto con su factura N° ${sale.saleNumber}._`;
+    return msg;
+  };
+
+  // Send dedicated Product Warranty via WhatsApp
+  const handleSendWarrantyWhatsApp = (saleRecord?: SaleRecord, customPhone?: string) => {
+    const targetSale = saleRecord || completedSale;
+    if (!targetSale) {
+      showToast('No hay una venta seleccionada para enviar la garantía.', 'warning');
+      return;
+    }
+
+    // Ensure warrantyInfo is enabled on the sale if the user clicks "Mandar Garantía"
+    if (!targetSale.warrantyInfo?.enabled) {
+      const autoWarranty: SaleWarrantyInfo = {
+        enabled: true,
+        durationLabel: targetSale.warrantyInfo?.durationLabel || '30 Días',
+        serialOrModelNotes: targetSale.warrantyInfo?.serialOrModelNotes || '',
+        coverageTerms:
+          targetSale.warrantyInfo?.coverageTerms || getDefaultWarrantyTermsForStore(),
+      };
+      const updatedSale: SaleRecord = {
+        ...targetSale,
+        warrantyInfo: autoWarranty,
+      };
+      if (completedSale && completedSale.id === targetSale.id) {
+        setCompletedSale(updatedSale);
+      }
+      if (onUpdateSale) {
+        onUpdateSale(targetSale, updatedSale).catch(() => {});
+      }
+    }
+
+    const message = formatWarrantyOnlyWhatsAppMessage(targetSale);
+    const rawPhone = (
+      customPhone !== undefined
+        ? customPhone
+        : receiptWhatsAppPhone || targetSale.customerPhone || ''
+    ).trim();
+    const cleanDigits = rawPhone.replace(/\D/g, '');
+    const url =
+      cleanDigits.length > 0
+        ? `https://wa.me/${cleanDigits.length === 8 ? `504${cleanDigits}` : cleanDigits}?text=${encodeURIComponent(message)}`
+        : `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
+
+    window.open(url, '_blank', 'noopener,noreferrer');
+    showToast('Abriendo WhatsApp con el Certificado de Garantía del producto...', 'success');
+  };
+
+  // Print standalone Warranty Certificate
+  const handlePrintWarrantyCertificate = (
+    formatOverride?: PrinterPaperFormat,
+    targetSaleOverride?: SaleRecord
+  ) => {
+    const targetSale = targetSaleOverride || completedSale;
+    if (!targetSale) return;
+    const fmt = formatOverride || receiptPrinterFormat;
+    const sellerStr = getFormattedSaleIssuer(targetSale);
+    const html = buildWarrantyCertificateHtml(
+      targetSale,
+      {
+        ...storeSettings,
+        invoiceTemplate: effectiveInvoiceTemplate,
+        receiptFooterText: draftReceiptFooterText,
+      },
+      fmt,
+      sellerStr
+    );
+    printHtmlDocument(html, `Certificado de Garantía ${targetSale.saleNumber}`, fmt, storeSettings);
+    showToast('Imprimiendo Certificado de Garantía...', 'info');
+  };
+
+  // Download Warranty Certificate PDF
+  const handleDownloadWarrantyCertificatePdf = async (
+    formatOverride?: PrinterPaperFormat,
+    targetSaleOverride?: SaleRecord
+  ) => {
+    const targetSale = targetSaleOverride || completedSale;
+    if (!targetSale) return;
+    const fmt = formatOverride || receiptPrinterFormat;
+    const sellerStr = getFormattedSaleIssuer(targetSale);
+    await downloadWarrantyCertificatePdf(
+      targetSale,
+      {
+        ...storeSettings,
+        invoiceTemplate: effectiveInvoiceTemplate,
+        receiptFooterText: draftReceiptFooterText,
+      },
+      fmt,
+      sellerStr
+    );
+    showToast(`PDF de Factura + Garantía (${targetSale.saleNumber}) descargado.`, 'success');
   };
 
   // WhatsApp sender handler
@@ -1799,28 +2071,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
     };
   };
 
-  // Available years dynamically computed from sales + current year
+  // Available years dynamically computed from visibleSales + current year
   const availableSalesYears = useMemo(() => {
     const currentYr = new Date().getFullYear();
     const yearsSet = new Set<number>([currentYr, currentYr - 1]);
-    sales.forEach((s) => {
+    visibleSales.forEach((s) => {
       const { year } = getSaleCalendarParts(s);
       if (year >= 2020 && year <= 2100) yearsSet.add(year);
     });
     return Array.from(yearsSet).sort((a, b) => b - a);
-  }, [sales]);
+  }, [visibleSales]);
 
   // Count of sales per month (1..12) for the selected year (or all years)
   const monthSalesCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (let m = 1; m <= 12; m++) counts[String(m)] = 0;
-    sales.forEach((s) => {
+    visibleSales.forEach((s) => {
       const parts = getSaleCalendarParts(s);
       if (historyYearFilter !== 'all' && String(parts.year) !== historyYearFilter) return;
       counts[String(parts.month)] = (counts[String(parts.month)] || 0) + 1;
     });
     return counts;
-  }, [sales, historyYearFilter]);
+  }, [visibleSales, historyYearFilter]);
 
   const dateFilterCounts = useMemo(() => {
     const now = new Date();
@@ -1837,7 +2109,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
     let todayCount = 0;
     let yesterdayCount = 0;
 
-    sales.forEach((s) => {
+    visibleSales.forEach((s) => {
       if (isSaleMatchingDay(s, todayHn, todayLocal, startOfToday, endOfToday)) {
         todayCount++;
       } else if (isSaleMatchingDay(s, yesterdayHn, yesterdayLocal, startOfYesterday, startOfToday)) {
@@ -1849,9 +2121,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
       today: todayCount,
       yesterday: yesterdayCount,
       today_yesterday: todayCount + yesterdayCount,
-      all: sales.length,
+      all: visibleSales.length,
     };
-  }, [sales]);
+  }, [visibleSales]);
 
   const activePeriodLabel = useMemo(() => {
     if (historyDateFilter === 'today') return 'Hoy';
@@ -1892,22 +2164,24 @@ export const SalesView: React.FC<SalesViewProps> = ({
     const todayLocal = getLocalDateStr(nowMs);
     const yesterdayLocal = getLocalDateStr(startOfYesterday);
 
-    return sales.filter((s) => {
+    return visibleSales.filter((s) => {
       const isToday = isSaleMatchingDay(s, todayHn, todayLocal, startOfToday, endOfToday);
       const isYesterday = !isToday && isSaleMatchingDay(s, yesterdayHn, yesterdayLocal, startOfYesterday, startOfToday);
 
-      // Date filter
-      if (historyDateFilter === 'today' && !isToday) return false;
-      if (historyDateFilter === 'yesterday' && !isYesterday) return false;
-      if (historyDateFilter === 'today_yesterday' && !isToday && !isYesterday) return false;
-      if (historyDateFilter === 'week' && !isToday && !isYesterday && s.timestamp < startOfWeek) return false;
-      if (historyDateFilter === 'month' && !isToday && !isYesterday && s.timestamp < startOfMonth) return false;
-      if (historyDateFilter === 'custom') {
-        const cal = getSaleCalendarParts(s);
-        if (historyExactDate && cal.isoDate !== historyExactDate) return false;
-        if (historyYearFilter !== 'all' && String(cal.year) !== historyYearFilter) return false;
-        if (historyMonthFilter !== 'all' && String(cal.month) !== historyMonthFilter) return false;
-        if (historyDayFilter !== 'all' && String(cal.day) !== historyDayFilter) return false;
+      // Date filter (when searching by text/number in q, search across all dates unless custom filter is set)
+      if (!q || historyDateFilter === 'custom') {
+        if (historyDateFilter === 'today' && !isToday) return false;
+        if (historyDateFilter === 'yesterday' && !isYesterday) return false;
+        if (historyDateFilter === 'today_yesterday' && !isToday && !isYesterday) return false;
+        if (historyDateFilter === 'week' && !isToday && !isYesterday && s.timestamp < startOfWeek) return false;
+        if (historyDateFilter === 'month' && !isToday && !isYesterday && s.timestamp < startOfMonth) return false;
+        if (historyDateFilter === 'custom') {
+          const cal = getSaleCalendarParts(s);
+          if (historyExactDate && cal.isoDate !== historyExactDate) return false;
+          if (historyYearFilter !== 'all' && String(cal.year) !== historyYearFilter) return false;
+          if (historyMonthFilter !== 'all' && String(cal.month) !== historyMonthFilter) return false;
+          if (historyDayFilter !== 'all' && String(cal.day) !== historyDayFilter) return false;
+        }
       }
 
       // Status filter
@@ -1918,28 +2192,49 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
       const sellerInfo = getSaleSellerInfo(s);
 
-      // Seller Role filter (Administrador vs Colaborador)
-      if (historySellerFilter !== 'all' && sellerInfo.role !== historySellerFilter) return false;
+      // Seller Role filter (only applicable to Admin; Collaborators already only see their own sales)
+      if (isAdminUser && historySellerFilter !== 'all' && sellerInfo.role !== historySellerFilter)
+        return false;
 
-      // Search query (sale number, customer name, rtn, seller name/role, or item name/code)
+      // Search query (sale number, customer name, rtn, seller name/role, total amount, or item name/code)
       if (q) {
+        const cleanAmountQuery = q.replace(/,/g, '');
         const matchesSaleNum = s.saleNumber.toLowerCase().includes(q);
         const matchesCustomer = (s.customerName || '').toLowerCase().includes(q);
         const matchesRtn = (s.customerRtn || '').toLowerCase().includes(q);
+        const matchesPhone = (s.customerPhone || '').toLowerCase().includes(q);
         const matchesSeller =
           sellerInfo.name.toLowerCase().includes(q) ||
           sellerInfo.roleLabel.toLowerCase().includes(q);
+        const matchesAmount =
+          String(s.total).includes(cleanAmountQuery) ||
+          s.total.toFixed(2).includes(cleanAmountQuery) ||
+          String(s.subtotal).includes(cleanAmountQuery) ||
+          (s.cashPriceTotal !== undefined && String(s.cashPriceTotal).includes(cleanAmountQuery));
         const matchesItem = s.items.some(
-          (it) => it.name.toLowerCase().includes(q) || it.code.toLowerCase().includes(q)
+          (it) =>
+            it.name.toLowerCase().includes(q) ||
+            it.code.toLowerCase().includes(q) ||
+            String(it.price).includes(cleanAmountQuery) ||
+            String(it.subtotal).includes(cleanAmountQuery)
         );
-        if (!matchesSaleNum && !matchesCustomer && !matchesRtn && !matchesSeller && !matchesItem)
+        if (
+          !matchesSaleNum &&
+          !matchesCustomer &&
+          !matchesRtn &&
+          !matchesPhone &&
+          !matchesSeller &&
+          !matchesAmount &&
+          !matchesItem
+        )
           return false;
       }
 
       return true;
     }).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   }, [
-    sales,
+    visibleSales,
+    isAdminUser,
     users,
     historySearch,
     historyDateFilter,
@@ -2189,133 +2484,135 @@ export const SalesView: React.FC<SalesViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0 bg-slate-50 overflow-hidden">
-      {/* Top Bar / Navigation Tabs — Ultra-compact on Android mobile so POS gets maximum vertical height */}
-      <div className="bg-white border-b border-slate-200 px-2.5 sm:px-5 py-1.5 sm:py-2 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-1.5 sm:gap-2.5 shrink-0 shadow-2xs">
-        <div className="hidden sm:flex items-center justify-between min-w-0 shrink-0">
-          <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2 truncate">
-            <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
-            <span className="truncate">Ventas &amp; Facturación</span>
-          </h1>
-        </div>
+    <div className="flex-1 flex flex-col h-full min-h-0 w-full bg-slate-100/80 overflow-hidden">
+      {/* Top Bar / Navigation Tabs — Centered container with balanced margins on any screen */}
+      <div className="bg-white border-b border-slate-200 shrink-0 shadow-2xs">
+        <div className="w-full max-w-[1680px] mx-auto px-3 sm:px-6 lg:px-8 py-2 sm:py-2.5 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2">
+          <div className="hidden sm:flex items-center justify-between min-w-0 shrink-0">
+            <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2 truncate">
+              <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
+              <span className="truncate">Ventas &amp; Facturación</span>
+            </h1>
+          </div>
 
-        {/* View Switcher Tabs — Well-spaced buttons */}
-        <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-100/90 p-1 sm:p-1.5 rounded-2xl border border-slate-200/80 overflow-x-auto max-w-full no-scrollbar">
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('pos')}
-            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-              activeSubTab === 'pos'
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-            }`}
-          >
-            <ShoppingCart className="w-4 h-4 shrink-0" />
-            <span>Nueva Venta (POS)</span>
-            {cart.length > 0 && (
-              <span className="bg-white text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 shadow-2xs">
-                {totalCartItemsCount}
-              </span>
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('cash-register')}
-            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-              activeSubTab === 'cash-register'
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-            }`}
-          >
-            <Wallet className="w-4 h-4 shrink-0" />
-            <span>Caja / Arqueo</span>
-            {(posFinanceData?.shifts || []).some((s) => s.status === 'open') && (
-              <span
-                className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0 ring-2 ring-emerald-300"
-                title="Caja Abierta"
-              />
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('credits')}
-            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-              activeSubTab === 'credits'
-                ? 'bg-amber-600 text-white shadow-xs'
-                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-            }`}
-          >
-            <Users className="w-4 h-4 shrink-0" />
-            <span>Cuentas por Cobrar</span>
-            {sales.filter(
-              (s) =>
-                s.status === 'completed' &&
-                (s.balanceDue ??
-                  (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01
-            ).length > 0 && (
-              <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-                {
-                  sales.filter(
-                    (s) =>
-                      s.status === 'completed' &&
-                      (s.balanceDue ??
-                        (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01
-                  ).length
-                }
-              </span>
-            )}
-          </button>
-
-          {canViewCostsAndProfits && (
+          {/* View Switcher Tabs — Centered & balanced */}
+          <div className="flex items-center justify-start sm:justify-center lg:justify-end gap-1.5 sm:gap-2 bg-slate-100/90 p-1 sm:p-1.5 rounded-2xl border border-slate-200/80 overflow-x-auto max-w-full no-scrollbar">
             <button
               type="button"
-              onClick={() => setActiveSubTab('expenses')}
+              onClick={() => setActiveSubTab('pos')}
               className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-                activeSubTab === 'expenses'
-                  ? 'bg-rose-600 text-white shadow-xs'
+                activeSubTab === 'pos'
+                  ? 'bg-emerald-600 text-white shadow-xs'
                   : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
               }`}
             >
-              <TrendingUp className="w-4 h-4 shrink-0" />
-              <span>Gastos y Utilidad</span>
+              <ShoppingCart className="w-4 h-4 shrink-0" />
+              <span>Nueva Venta (POS)</span>
+              {cart.length > 0 && (
+                <span className="bg-white text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 shadow-2xs">
+                  {totalCartItemsCount}
+                </span>
+              )}
             </button>
-          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('loyalty')}
-            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-              activeSubTab === 'loyalty'
-                ? 'bg-amber-500 text-slate-950 shadow-xs'
-                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-            }`}
-          >
-            <Award className="w-4 h-4 shrink-0" />
-            <span>Clientes VIP / Puntos</span>
-            {loyaltyCustomers.length > 0 && (
-              <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-                {loyaltyCustomers.length}
-              </span>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('cash-register')}
+              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                activeSubTab === 'cash-register'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+              }`}
+            >
+              <Wallet className="w-4 h-4 shrink-0" />
+              <span>Caja / Arqueo</span>
+              {(posFinanceData?.shifts || []).some((s) => s.status === 'open') && (
+                <span
+                  className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0 ring-2 ring-emerald-300"
+                  title="Caja Abierta"
+                />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('credits')}
+              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                activeSubTab === 'credits'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0" />
+              <span>Cuentas por Cobrar</span>
+              {visibleSales.filter(
+                (s) =>
+                  s.status === 'completed' &&
+                  (s.balanceDue ??
+                    (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01
+              ).length > 0 && (
+                <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                  {
+                    visibleSales.filter(
+                      (s) =>
+                        s.status === 'completed' &&
+                        (s.balanceDue ??
+                          (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01
+                    ).length
+                  }
+                </span>
+              )}
+            </button>
+
+            {canViewCostsAndProfits && (
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('expenses')}
+                className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                  activeSubTab === 'expenses'
+                    ? 'bg-rose-600 text-white shadow-xs'
+                    : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                }`}
+              >
+                <TrendingUp className="w-4 h-4 shrink-0" />
+                <span>Gastos y Utilidad</span>
+              </button>
             )}
-          </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('history')}
-            className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-              activeSubTab === 'history'
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-            }`}
-          >
-            <History className="w-4 h-4 shrink-0" />
-            <span>Historial</span>
-            <span className="bg-slate-200 text-slate-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-              {sales.length}
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('loyalty')}
+              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                activeSubTab === 'loyalty'
+                  ? 'bg-amber-500 text-slate-950 shadow-xs'
+                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+              }`}
+            >
+              <Award className="w-4 h-4 shrink-0" />
+              <span>Clientes VIP / Puntos</span>
+              {loyaltyCustomers.length > 0 && (
+                <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                  {loyaltyCustomers.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('history')}
+              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                activeSubTab === 'history'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+              }`}
+            >
+              <History className="w-4 h-4 shrink-0" />
+              <span>{isAdminUser ? 'Historial' : 'Mis Ventas'}</span>
+              <span className="bg-slate-200 text-slate-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                {visibleSales.length}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2327,7 +2624,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
         <POSFinanceTabs
           mode={activeSubTab}
           inventory={inventory}
-          sales={sales}
+          sales={visibleSales}
           storeSettings={storeSettings}
           userSession={userSession}
           posFinanceData={
@@ -2352,11 +2649,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
           showToast={showToast}
         />
       ) : activeSubTab === 'pos' ? (
-        /* ==================== POS TERMINAL VIEW ==================== */
-        <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden relative">
+        /* ==================== POS TERMINAL VIEW (CENTERED & SYMMETRICAL ON ANY SCREEN) ==================== */
+        <div className="flex-1 min-h-0 w-full max-w-[1680px] mx-auto px-2.5 sm:px-5 lg:px-8 py-2 sm:py-3.5 flex flex-col md:flex-row items-stretch justify-center gap-3 lg:gap-5 overflow-hidden relative">
           {/* Mobile Segmented POS Switcher (< md) */}
-          <div className="md:hidden w-full p-2 bg-white border-b border-slate-200 flex items-center justify-between gap-2 shrink-0 shadow-2xs">
-            <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl w-full">
+          <div className="md:hidden w-full max-w-xl mx-auto p-1.5 bg-white border border-slate-200/90 rounded-2xl flex items-center justify-between gap-2 shrink-0 shadow-xs">
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl w-full">
               <button
                 type="button"
                 onClick={() => setMobilePosTab('catalog')}
@@ -2395,9 +2692,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
           </div>
 
-          {/* Left Column: Product Catalog & Search — Maximum Viewport Space for Inventory */}
+          {/* Left Column: Product Catalog & Search — Centered Card Container */}
           <div
-            className={`flex-1 min-h-0 flex flex-col border-r border-slate-200 bg-slate-50/70 overflow-hidden relative ${
+            className={`flex-1 min-w-0 min-h-0 flex flex-col rounded-2xl border border-slate-200/90 bg-white shadow-xs overflow-hidden relative ${
               mobilePosTab === 'cart' ? 'hidden md:flex' : 'flex'
             }`}
           >
@@ -2434,15 +2731,26 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-teal-50/90 border border-teal-200 shrink-0">
                     <Boxes className="w-3.5 h-3.5 text-teal-600 shrink-0" />
                     <span className="text-[11px] font-bold text-teal-900 whitespace-nowrap">
-                      Bodega:
+                      {isCollabWarehouseRestricted && allowedPosWarehouses.length === 1
+                        ? 'Bodega Asignada:'
+                        : 'Bodega:'}
                     </span>
                     <select
                       value={selectedWarehouse.id}
                       onChange={(e) => handleSelectPosWarehouse(e.target.value)}
-                      className="bg-white border border-teal-300 rounded-lg px-2 py-0.5 text-xs font-extrabold text-teal-950 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer max-w-[190px] truncate"
-                      title="Seleccionar bodega para mostrar solo sus artículos"
+                      disabled={allowedPosWarehouses.length <= 1}
+                      className={`bg-white border border-teal-300 rounded-lg px-2 py-0.5 text-xs font-extrabold text-teal-950 focus:outline-none focus:ring-1 focus:ring-teal-500 max-w-[190px] truncate ${
+                        allowedPosWarehouses.length <= 1 ? 'cursor-default' : 'cursor-pointer'
+                      }`}
+                      title={
+                        isCollabWarehouseRestricted
+                          ? `Bodegas autorizadas para tu usuario: ${allowedPosWarehouses
+                              .map((w) => w.name)
+                              .join(', ')}`
+                          : 'Seleccionar bodega para mostrar solo sus artículos'
+                      }
                     >
-                      {activeWarehouses.map((wh) => (
+                      {allowedPosWarehouses.map((wh) => (
                         <option key={wh.id} value={wh.id}>
                           {wh.name}
                         </option>
@@ -2633,29 +2941,43 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                   <span>Disponible en otra bodega:</span>
                                 </div>
                                 <div className="space-y-1">
-                                  {otherLocations.map((loc) => (
-                                    <div
-                                      key={loc.warehouse.id}
-                                      className="flex items-center justify-between gap-1 bg-white/90 px-2 py-1 rounded-lg border border-amber-200"
-                                    >
-                                      <span className="font-bold text-slate-800 truncate">
-                                        {loc.warehouse.name}:{' '}
-                                        <strong className="text-emerald-700">
-                                          {loc.stock} uds
-                                        </strong>
-                                      </span>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          handleSelectPosWarehouse(loc.warehouse.id);
-                                        }}
-                                        className="px-2 py-0.5 rounded-md bg-teal-700 hover:bg-teal-800 text-white font-black text-[10px] shrink-0 cursor-pointer"
-                                        title={`Cambiar a ${loc.warehouse.name} para vender este artículo`}
+                                  {otherLocations.map((loc) => {
+                                    const canSwitchToLoc = allowedPosWarehouses.some(
+                                      (w) => w.id === loc.warehouse.id
+                                    );
+                                    return (
+                                      <div
+                                        key={loc.warehouse.id}
+                                        className="flex items-center justify-between gap-1 bg-white/90 px-2 py-1 rounded-lg border border-amber-200"
                                       >
-                                        Ir a bodega
-                                      </button>
-                                    </div>
-                                  ))}
+                                        <span className="font-bold text-slate-800 truncate">
+                                          {loc.warehouse.name}:{' '}
+                                          <strong className="text-emerald-700">
+                                            {loc.stock} uds
+                                          </strong>
+                                        </span>
+                                        {canSwitchToLoc ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              handleSelectPosWarehouse(loc.warehouse.id);
+                                            }}
+                                            className="px-2 py-0.5 rounded-md bg-teal-700 hover:bg-teal-800 text-white font-black text-[10px] shrink-0 cursor-pointer"
+                                            title={`Cambiar a ${loc.warehouse.name} para vender este artículo`}
+                                          >
+                                            Ir a bodega
+                                          </button>
+                                        ) : (
+                                          <span
+                                            className="px-1.5 py-0.5 rounded-md bg-slate-200 text-slate-700 font-bold text-[9px] shrink-0"
+                                            title="No tienes permiso para facturar desde esta bodega"
+                                          >
+                                            Sin permiso
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </div>
                             )}
@@ -2747,9 +3069,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
             )}
           </div>
 
-          {/* Right Column: Dedicated Ticket Zone — Unified smooth scroll on Android mobile (< md), split scroll on desktop (md:) */}
+          {/* Right Column: Dedicated Ticket Zone — Centered on mobile/tablet, balanced fixed width on desktop */}
           <div
-            className={`flex-1 min-h-0 w-full md:flex-initial md:w-[360px] lg:w-[420px] xl:w-[460px] flex flex-col bg-white md:border-l border-slate-200 shadow-xl overflow-y-auto md:overflow-hidden scroll-container ${
+            className={`flex-1 min-h-0 w-full max-w-xl mx-auto md:mx-0 md:max-w-none md:flex-initial md:w-[375px] lg:w-[425px] xl:w-[455px] flex flex-col bg-white rounded-2xl border border-slate-200/90 shadow-md overflow-y-auto md:overflow-hidden scroll-container ${
               mobilePosTab === 'catalog' ? 'hidden md:flex' : 'flex'
             }`}
           >
@@ -3481,6 +3803,75 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </div>
               )}
 
+              {/* Product Warranty Option Bar (Available for ANY product / invoice / ticket) */}
+              <div className="p-2 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={posIncludeWarranty}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setPosIncludeWarranty(checked);
+                        if (checked && !posWarrantyTerms) {
+                          setPosWarrantyTerms(getDefaultWarrantyTermsForStore());
+                        }
+                      }}
+                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                    />
+                    <span className="text-xs font-extrabold text-emerald-950 flex items-center gap-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Incluir Garantía del Producto</span>
+                    </span>
+                  </label>
+
+                  {posIncludeWarranty && (
+                    <div className="flex items-center gap-1 ml-auto">
+                      <select
+                        value={posWarrantyDuration}
+                        onChange={(e) => setPosWarrantyDuration(e.target.value)}
+                        className="px-2 py-0.5 bg-white border border-emerald-300 rounded-lg text-[11px] font-black text-emerald-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                        title="Plazo de garantía del producto"
+                      >
+                        <option value="15 Días">15 Días</option>
+                        <option value="30 Días">30 Días (1 Mes)</option>
+                        <option value="2 Meses">2 Meses</option>
+                        <option value="3 Meses">3 Meses</option>
+                        <option value="6 Meses">6 Meses</option>
+                        <option value="1 Año">1 Año (12 Meses)</option>
+                        <option value="Según Artículo">Según Artículo</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setShowPosWarrantyDetails((prev) => !prev)}
+                        className="px-2 py-0.5 rounded-lg bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-bold cursor-pointer"
+                      >
+                        {showPosWarrantyDetails ? 'Ocultar' : 'Detalle'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {posIncludeWarranty && showPosWarrantyDetails && (
+                  <div className="space-y-1.5 pt-1 border-t border-emerald-200/70">
+                    <input
+                      type="text"
+                      placeholder="Serie / Modelo / IMEI / Detalle del artículo (Opcional)"
+                      value={posWarrantySerialNotes}
+                      onChange={(e) => setPosWarrantySerialNotes(e.target.value)}
+                      className="w-full px-2 py-1 bg-white border border-emerald-200 rounded-lg text-[11px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                    <textarea
+                      rows={2}
+                      placeholder="Condiciones de cobertura de la garantía..."
+                      value={posWarrantyTerms}
+                      onChange={(e) => setPosWarrantyTerms(e.target.value)}
+                      className="w-full px-2 py-1 bg-white border border-emerald-200 rounded-lg text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none"
+                    />
+                  </div>
+                )}
+              </div>
+
               {/* Compact Discount + ISV + Subtotal Row */}
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 pt-1.5 border-t border-slate-100">
                 <div className="flex items-center gap-1.5">
@@ -3588,9 +3979,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
           </div>
         </div>
       ) : (
-        /* ==================== SALES HISTORY VIEW ==================== */
-        <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-4 sm:space-y-5 pb-40 md:pb-24">
-          {/* Top KPI Metrics Banner */}
+        /* ==================== SALES HISTORY VIEW (CENTERED MARGINS) ==================== */
+        <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-40 md:pb-24">
+          <div className="w-full max-w-[1640px] mx-auto space-y-4 sm:space-y-5">
+            {/* Top KPI Metrics Banner */}
           <div className={`grid grid-cols-2 ${canViewCostsAndProfits ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-2.5 sm:gap-3`}>
             <div className="p-3 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between gap-2 min-w-0">
               <div className="min-w-0">
@@ -3959,16 +4351,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
               {/* Right Group: Seller & Status Dropdowns */}
               <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
-                <select
-                  value={historySellerFilter}
-                  onChange={(e) => setHistorySellerFilter(e.target.value as any)}
-                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-                  title="Filtrar por quién realizó la venta"
-                >
-                  <option value="all">Vendedor: Todos</option>
-                  <option value="admin">Administrador</option>
-                  <option value="collaborator">Colaboradores</option>
-                </select>
+                {isAdminUser ? (
+                  <select
+                    value={historySellerFilter}
+                    onChange={(e) => setHistorySellerFilter(e.target.value as any)}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                    title="Filtrar por quién realizó la venta"
+                  >
+                    <option value="all">Vendedor: Todos</option>
+                    <option value="admin">Administrador</option>
+                    <option value="collaborator">Colaboradores</option>
+                  </select>
+                ) : (
+                  <div
+                    className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 rounded-xl px-2.5 py-1.5 text-emerald-900 font-extrabold text-xs"
+                    title="Solo visualizas las ventas facturadas por tu usuario"
+                  >
+                    <User className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="truncate max-w-[160px]">
+                      Mis Ventas: {userSession?.userName || 'Colaborador'}
+                    </span>
+                  </div>
+                )}
 
                 <select
                   value={historyStatusFilter}
@@ -4173,6 +4577,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             >
                               <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
                               <span>WhatsApp</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSendWarrantyWhatsApp(sale, sale.customerPhone)}
+                              className="min-h-[40px] px-3 py-2 text-xs font-bold text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-300 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs col-span-2 sm:col-span-1"
+                              title="Mandar Certificado de Garantía por WhatsApp"
+                            >
+                              <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
+                              <span>Mandar Garantía</span>
                             </button>
                             {!isCancelled && canEditSales && onUpdateSale && (
                               <button
@@ -4405,6 +4818,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 <WhatsAppIcon className="w-4 h-4 fill-emerald-600" />
                               </button>
 
+                              {/* Send Product Warranty via WhatsApp */}
+                              <button
+                                type="button"
+                                onClick={() => handleSendWarrantyWhatsApp(sale, sale.customerPhone)}
+                                className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
+                                title="Mandar Garantía del Producto por WhatsApp"
+                              >
+                                <ShieldCheck className="w-4 h-4" />
+                              </button>
+
                               {/* Edit sale button */}
                               {!isCancelled && canEditSales && onUpdateSale && (
                                 <button
@@ -4431,6 +4854,34 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 >
                                   {!canCancelSales && <Lock className="w-3 h-3 text-amber-500" />}
                                   <RotateCcw className="w-4 h-4" />
+                                </button>
+                              )}
+
+                              {/* Reactivate cancelled sale button */}
+                              {isCancelled && canEditSales && onUpdateSale && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await onUpdateSale(sale, {
+                                        ...sale,
+                                        status: 'completed',
+                                        lastEditedBy: userSession?.userName || 'Administrador',
+                                        lastEditedAt: new Date().toLocaleString('es-HN'),
+                                      });
+                                      showToast(
+                                        `Factura ${sale.saleNumber} reactivada correctamente.`,
+                                        'success'
+                                      );
+                                    } catch {
+                                      showToast('No se pudo reactivar la factura.', 'error');
+                                    }
+                                  }}
+                                  className="px-2 py-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                                  title="Reactivar esta factura anulada"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  Reactivar
                                 </button>
                               )}
                             </div>
@@ -4486,6 +4937,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
               )}
             </div>
           )}
+          </div>
           </div>
         </div>
       )}
@@ -4891,8 +5343,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   )}
                 </div>
 
-                {/* Warranty / Return Policy if configured */}
-                {effectiveInvoiceTemplate.warrantyPolicyText && (
+                {/* Product Warranty Certificate Box inside Printable Ticket */}
+                {completedSale.warrantyInfo?.enabled && (
+                  <div className="p-2.5 rounded-lg bg-emerald-50/90 border-2 border-emerald-600 text-[10px] text-slate-800 space-y-1">
+                    <div className="font-black text-center uppercase text-emerald-950 flex items-center justify-center gap-1 border-b border-emerald-300 pb-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                      <span>
+                        CERTIFICADO DE GARANTÍA ({completedSale.warrantyInfo.durationLabel || '30 Días'})
+                      </span>
+                    </div>
+                    {completedSale.warrantyInfo.serialOrModelNotes && (
+                      <div className="font-bold text-slate-900">
+                        Serie / Modelo: {completedSale.warrantyInfo.serialOrModelNotes}
+                      </div>
+                    )}
+                    <p className="text-[9.5px] text-slate-700 leading-snug text-justify">
+                      {completedSale.warrantyInfo.coverageTerms || getDefaultWarrantyTermsForStore()}
+                    </p>
+                  </div>
+                )}
+
+                {/* Warranty / Return Policy if configured and no custom warranty active */}
+                {!completedSale.warrantyInfo?.enabled && effectiveInvoiceTemplate.warrantyPolicyText && (
                   <div className="text-center text-[9.5px] text-slate-600 pt-2 border-t border-dashed border-slate-300">
                     <p className="font-bold uppercase text-slate-800">
                       {effectiveInvoiceTemplate.warrantyTitle}:
@@ -4916,12 +5388,170 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </div>
               </div>
 
+              {/* Interactive Product Warranty Card (Toggle, Customize, Send via WhatsApp, Print & PDF for ANY Product) */}
+              <div className="bg-teal-50/90 border border-teal-300 rounded-xl p-3 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(completedSale.warrantyInfo?.enabled)}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        const nextWarranty: SaleWarrantyInfo = {
+                          enabled,
+                          durationLabel:
+                            completedSale.warrantyInfo?.durationLabel || '30 Días',
+                          serialOrModelNotes:
+                            completedSale.warrantyInfo?.serialOrModelNotes || '',
+                          coverageTerms:
+                            completedSale.warrantyInfo?.coverageTerms ||
+                            getDefaultWarrantyTermsForStore(),
+                        };
+                        const updatedSale: SaleRecord = {
+                          ...completedSale,
+                          warrantyInfo: nextWarranty,
+                        };
+                        setCompletedSale(updatedSale);
+                        if (onUpdateSale) {
+                          onUpdateSale(completedSale, updatedSale).catch(() => {});
+                        }
+                      }}
+                      className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500 cursor-pointer"
+                    />
+                    <span className="text-xs font-extrabold text-teal-950 flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
+                      <span>Garantía del Producto en Ticket / Factura</span>
+                    </span>
+                  </label>
+
+                  <select
+                    value={completedSale.warrantyInfo?.durationLabel || '30 Días'}
+                    onChange={(e) => {
+                      const nextDuration = e.target.value;
+                      const nextWarranty: SaleWarrantyInfo = {
+                        enabled: true,
+                        durationLabel: nextDuration,
+                        serialOrModelNotes:
+                          completedSale.warrantyInfo?.serialOrModelNotes || '',
+                        coverageTerms:
+                          completedSale.warrantyInfo?.coverageTerms ||
+                          getDefaultWarrantyTermsForStore(),
+                      };
+                      const updatedSale: SaleRecord = {
+                        ...completedSale,
+                        warrantyInfo: nextWarranty,
+                      };
+                      setCompletedSale(updatedSale);
+                      if (onUpdateSale) {
+                        onUpdateSale(completedSale, updatedSale).catch(() => {});
+                      }
+                    }}
+                    className="px-2 py-1 bg-white border border-teal-300 rounded-lg text-[11px] font-black text-teal-900 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
+                  >
+                    <option value="15 Días">Plazo: 15 Días</option>
+                    <option value="30 Días">Plazo: 30 Días</option>
+                    <option value="2 Meses">Plazo: 2 Meses</option>
+                    <option value="3 Meses">Plazo: 3 Meses</option>
+                    <option value="6 Meses">Plazo: 6 Meses</option>
+                    <option value="1 Año">Plazo: 1 Año</option>
+                    <option value="Según Artículo">Según Artículo</option>
+                  </select>
+                </div>
+
+                {completedSale.warrantyInfo?.enabled && (
+                  <div className="space-y-1.5 pt-1 border-t border-teal-200/80">
+                    <input
+                      type="text"
+                      placeholder="Serie / Modelo / IMEI del producto (Opcional)"
+                      value={completedSale.warrantyInfo?.serialOrModelNotes || ''}
+                      onChange={(e) => {
+                        const updatedSale: SaleRecord = {
+                          ...completedSale,
+                          warrantyInfo: {
+                            enabled: true,
+                            durationLabel:
+                              completedSale.warrantyInfo?.durationLabel || '30 Días',
+                            serialOrModelNotes: e.target.value,
+                            coverageTerms:
+                              completedSale.warrantyInfo?.coverageTerms ||
+                              getDefaultWarrantyTermsForStore(),
+                          },
+                        };
+                        setCompletedSale(updatedSale);
+                        if (onUpdateSale) {
+                          onUpdateSale(completedSale, updatedSale).catch(() => {});
+                        }
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-white border border-teal-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                    <textarea
+                      rows={2}
+                      placeholder="Condiciones y cobertura de garantía..."
+                      value={
+                        completedSale.warrantyInfo?.coverageTerms ??
+                        getDefaultWarrantyTermsForStore()
+                      }
+                      onChange={(e) => {
+                        const updatedSale: SaleRecord = {
+                          ...completedSale,
+                          warrantyInfo: {
+                            enabled: true,
+                            durationLabel:
+                              completedSale.warrantyInfo?.durationLabel || '30 Días',
+                            serialOrModelNotes:
+                              completedSale.warrantyInfo?.serialOrModelNotes || '',
+                            coverageTerms: e.target.value,
+                          },
+                        };
+                        setCompletedSale(updatedSale);
+                        if (onUpdateSale) {
+                          onUpdateSale(completedSale, updatedSale).catch(() => {});
+                        }
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-white border border-teal-200 rounded-lg text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 resize-none"
+                    />
+                  </div>
+                )}
+
+                <div className="grid grid-cols-3 gap-1.5 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => handleSendWarrantyWhatsApp(completedSale)}
+                    className="py-1.5 px-2 bg-teal-600 hover:bg-teal-700 text-white font-bold text-[11px] rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-2xs"
+                    title="Mandar Certificado de Garantía por WhatsApp"
+                  >
+                    <WhatsAppIcon className="w-3.5 h-3.5 fill-white shrink-0" />
+                    <span className="truncate">Mandar Garantía</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePrintWarrantyCertificate(receiptPrinterFormat, completedSale)}
+                    className="py-1.5 px-2 bg-slate-800 hover:bg-slate-900 text-white font-bold text-[11px] rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-2xs"
+                    title="Imprimir Certificado de Garantía"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-teal-300 shrink-0" />
+                    <span className="truncate">Imprimir Garantía</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleDownloadWarrantyCertificatePdf(receiptPrinterFormat, completedSale)
+                    }
+                    className="py-1.5 px-2 bg-white hover:bg-teal-100 text-teal-900 border border-teal-300 font-bold text-[11px] rounded-lg flex items-center justify-center gap-1 cursor-pointer"
+                    title="Descargar Factura con Certificado de Garantía en PDF"
+                  >
+                    <Download className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                    <span className="truncate">PDF Garantía</span>
+                  </button>
+                </div>
+              </div>
+
               {/* WhatsApp Digital Ticket Card */}
               <div className="bg-emerald-50 border border-emerald-200/90 rounded-xl p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
                     <WhatsAppIcon className="w-4 h-4 fill-emerald-600 shrink-0" />
-                    <span>Enviar Ticket por WhatsApp</span>
+                    <span>Enviar Ticket y/o Garantía por WhatsApp</span>
                   </span>
                   <span className="text-[10px] text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-full font-bold">
                     Directo
@@ -4949,21 +5579,31 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     <Phone className="w-3.5 h-3.5 text-emerald-600 absolute left-2.5 top-1/2 -translate-y-1/2" />
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => handleSendTicketWhatsApp()}
-                      className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition-all shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="flex-1 min-w-[130px] py-2 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition-all shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
                       title="Abrir WhatsApp para enviar este ticket"
                     >
                       <WhatsAppIcon className="w-3.5 h-3.5 fill-white shrink-0" />
-                      <span>Enviar a este número</span>
+                      <span>Enviar Ticket</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSendWarrantyWhatsApp(completedSale)}
+                      className="flex-1 min-w-[130px] py-2 px-2.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs rounded-lg transition-all shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                      title="Mandar Certificado de Garantía al WhatsApp del cliente"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-teal-200 shrink-0" />
+                      <span>Mandar Garantía</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => handleCopyTicketText()}
-                      className="py-2 px-3 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+                      className="py-2 px-2.5 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1 shrink-0"
                       title="Copiar texto del ticket al portapapeles"
                     >
                       <Copy className="w-3.5 h-3.5 text-emerald-700" />

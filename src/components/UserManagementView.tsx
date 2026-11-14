@@ -1,5 +1,13 @@
-import React, { useState } from 'react';
-import { UserAccount, StoreSettings, ActiveTab, UserRole } from '../types';
+import React, { useState, useMemo } from 'react';
+import {
+  UserAccount,
+  StoreSettings,
+  ActiveTab,
+  UserRole,
+  StoreWarehousesData,
+  WarehouseLocation,
+} from '../types';
+import { getDefaultWarehousesForStore } from '../firebase/firestoreService';
 import {
   Users,
   UserPlus,
@@ -32,6 +40,7 @@ import {
 interface UserManagementViewProps {
   users: UserAccount[];
   storeSettings: StoreSettings;
+  warehousesData?: StoreWarehousesData;
   companyAllowedModules?: ActiveTab[];
   maxUsers?: number;
   onSaveUser: (user: UserAccount) => Promise<void>;
@@ -111,6 +120,7 @@ const TAB_MODULES: { id: ActiveTab; label: string; description: string; icon: Re
 export const UserManagementView: React.FC<UserManagementViewProps> = ({
   users,
   storeSettings,
+  warehousesData,
   companyAllowedModules,
   maxUsers = 0,
   onSaveUser,
@@ -123,6 +133,21 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     effectiveCompanyModules && effectiveCompanyModules.length > 0
       ? TAB_MODULES.filter((tm) => effectiveCompanyModules.includes(tm.id))
       : TAB_MODULES;
+
+  const isWarehousesModuleEnabled = useMemo(() => {
+    const companyHasWh = !effectiveCompanyModules || effectiveCompanyModules.includes('warehouses');
+    const storeHasWh = !storeSettings.allowedModules || storeSettings.allowedModules.includes('warehouses');
+    return companyHasWh && storeHasWh;
+  }, [effectiveCompanyModules, storeSettings.allowedModules]);
+
+  const activeWarehouses = useMemo<WarehouseLocation[]>(() => {
+    const list =
+      warehousesData?.warehouses && warehousesData.warehouses.length > 0
+        ? warehousesData.warehouses
+        : getDefaultWarehousesForStore();
+    const active = list.filter((w) => w.isActive !== false);
+    return active.length > 0 ? active : list;
+  }, [warehousesData]);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserAccount | null>(null);
@@ -143,6 +168,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [canEditSales, setCanEditSales] = useState<boolean>(true);
   const [canCancelSales, setCanCancelSales] = useState<boolean>(false);
   const [canViewCostsAndProfits, setCanViewCostsAndProfits] = useState<boolean>(false);
+  const [restrictWarehouses, setRestrictWarehouses] = useState<boolean>(false);
+  const [allowedWarehouseIds, setAllowedWarehouseIds] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [userToDelete, setUserToDelete] = useState<UserAccount | null>(null);
 
@@ -168,6 +195,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     setCanEditSales(true);
     setCanCancelSales(false);
     setCanViewCostsAndProfits(false);
+    setRestrictWarehouses(false);
+    setAllowedWarehouseIds(activeWarehouses.map((w) => w.id));
     setIsModalOpen(true);
   };
 
@@ -184,7 +213,29 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     );
     setCanCancelSales(Boolean(user.salesPermissions?.canCancelSales));
     setCanViewCostsAndProfits(Boolean(user.salesPermissions?.canViewCostsAndProfits));
+    const savedWhIds =
+      user.salesPermissions?.allowedWarehouseIds || user.allowedWarehouseIds || [];
+    const validSavedWhIds = savedWhIds.filter((id) =>
+      activeWarehouses.some((w) => w.id === id)
+    );
+    if (validSavedWhIds.length > 0) {
+      setRestrictWarehouses(true);
+      setAllowedWarehouseIds(validSavedWhIds);
+    } else {
+      setRestrictWarehouses(false);
+      setAllowedWarehouseIds(activeWarehouses.map((w) => w.id));
+    }
     setIsModalOpen(true);
+  };
+
+  const handleToggleWarehousePermission = (warehouseId: string) => {
+    setRestrictWarehouses(true);
+    setAllowedWarehouseIds((prev) => {
+      if (prev.includes(warehouseId)) {
+        return prev.filter((id) => id !== warehouseId);
+      }
+      return [...prev, warehouseId];
+    });
   };
 
   const handleToggleTabPermission = (tabId: ActiveTab) => {
@@ -224,6 +275,19 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
       showToast('Selecciona al menos un módulo habilitado para el colaborador.', 'error');
       return;
     }
+    if (
+      role === 'collaborator' &&
+      isWarehousesModuleEnabled &&
+      allowedTabs.includes('sales') &&
+      restrictWarehouses &&
+      allowedWarehouseIds.length === 0
+    ) {
+      showToast(
+        'Selecciona al menos una bodega autorizada para que el colaborador pueda facturar.',
+        'error'
+      );
+      return;
+    }
 
     // Check duplicate username
     const cleanUsername = username.trim().toLowerCase();
@@ -235,6 +299,11 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
       return;
     }
 
+    const effectiveAllowedWhIds =
+      role === 'admin' || !restrictWarehouses
+        ? []
+        : allowedWarehouseIds.filter((id) => activeWarehouses.some((w) => w.id === id));
+
     setIsSaving(true);
     try {
       const userPayload: UserAccount = {
@@ -245,10 +314,12 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         role,
         isActive,
         allowedTabs: role === 'admin' ? availableTabModules.map((t) => t.id) : allowedTabs,
+        allowedWarehouseIds: effectiveAllowedWhIds,
         salesPermissions: {
           canEditSales,
           canCancelSales,
           canViewCostsAndProfits,
+          allowedWarehouseIds: effectiveAllowedWhIds,
         },
         createdAt: editingUser ? editingUser.createdAt : Date.now(),
       };
@@ -445,44 +516,83 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                       </div>
 
                       {u.role !== 'admin' && u.allowedTabs?.includes('sales') && (
-                        <div className="pt-1.5 border-t border-slate-100 space-y-1">
-                          <div className="font-bold text-[10px] uppercase tracking-wider text-slate-400">
-                            Seguridad en Facturación (POS):
-                          </div>
-                          <div className="flex flex-wrap gap-1">
-                            <span
-                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                                u.salesPermissions?.canCancelSales
-                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                  : 'bg-slate-100 text-slate-700 border-slate-200'
-                              }`}
-                            >
-                              {u.salesPermissions?.canCancelSales
-                                ? 'Anular ventas: Permitido'
-                                : '🔒 Anular ventas: Solo con clave Admin'}
-                            </span>
-                            <span
-                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                                u.salesPermissions?.canEditSales !== false
-                                  ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                                  : 'bg-slate-100 text-slate-600 border-slate-200'
-                              }`}
-                            >
-                              {u.salesPermissions?.canEditSales !== false
-                                ? '✏️ Editar factura: Sí'
-                                : 'Editar factura: No'}
-                            </span>
-                            <span
-                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                                u.salesPermissions?.canViewCostsAndProfits
-                                  ? 'bg-teal-50 text-teal-800 border-teal-200'
-                                  : 'bg-slate-100 text-slate-600 border-slate-200'
-                              }`}
-                            >
-                              {u.salesPermissions?.canViewCostsAndProfits
-                                ? 'Costos/Ganancias: Visibles'
-                                : '🔒 Costos/Ganancias: Ocultos'}
-                            </span>
+                        <div className="pt-1.5 border-t border-slate-100 space-y-2">
+                          {isWarehousesModuleEnabled && activeWarehouses.length > 0 && (
+                            <div className="space-y-1">
+                              <div className="font-bold text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                                <Boxes className="w-3 h-3 text-teal-600" />
+                                <span>Bodegas Autorizadas para Facturar:</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {(() => {
+                                  const assignedIds =
+                                    u.salesPermissions?.allowedWarehouseIds ||
+                                    u.allowedWarehouseIds ||
+                                    [];
+                                  const matchedWhs = activeWarehouses.filter((w) =>
+                                    assignedIds.includes(w.id)
+                                  );
+                                  if (matchedWhs.length === 0) {
+                                    return (
+                                      <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-1">
+                                        <Boxes className="w-2.5 h-2.5 text-teal-600" />
+                                        Todas las bodegas ({activeWarehouses.length})
+                                      </span>
+                                    );
+                                  }
+                                  return matchedWhs.map((wh) => (
+                                    <span
+                                      key={wh.id}
+                                      className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-teal-100/90 text-teal-900 border border-teal-300 flex items-center gap-1"
+                                    >
+                                      <Boxes className="w-2.5 h-2.5 text-teal-700" />
+                                      {wh.name}
+                                    </span>
+                                  ));
+                                })()}
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="space-y-1">
+                            <div className="font-bold text-[10px] uppercase tracking-wider text-slate-400">
+                              Seguridad en Facturación (POS):
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                  u.salesPermissions?.canCancelSales
+                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                    : 'bg-slate-100 text-slate-700 border-slate-200'
+                                }`}
+                              >
+                                {u.salesPermissions?.canCancelSales
+                                  ? 'Anular ventas: Permitido'
+                                  : '🔒 Anular ventas: Solo con clave Admin'}
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                  u.salesPermissions?.canEditSales !== false
+                                    ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                                }`}
+                              >
+                                {u.salesPermissions?.canEditSales !== false
+                                  ? '✏️ Editar factura: Sí'
+                                  : 'Editar factura: No'}
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                  u.salesPermissions?.canViewCostsAndProfits
+                                    ? 'bg-teal-50 text-teal-800 border-teal-200'
+                                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                                }`}
+                              >
+                                {u.salesPermissions?.canViewCostsAndProfits
+                                  ? 'Costos/Ganancias: Visibles'
+                                  : '🔒 Costos/Ganancias: Ocultos'}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       )}
@@ -776,6 +886,126 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                           </div>
                         </label>
                       </div>
+
+                      {/* Warehouse Billing Assignment Section (Shown when store has Warehouses module enabled) */}
+                      {isWarehousesModuleEnabled && activeWarehouses.length > 0 && (
+                        <div className="pt-3 border-t border-slate-800 space-y-3">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex items-start gap-2">
+                              <Boxes className="w-4 h-4 text-teal-400 shrink-0 mt-0.5" />
+                              <div>
+                                <h5 className="text-xs sm:text-sm font-extrabold text-white">
+                                  Bodegas Autorizadas para Facturar en Ventas (POS)
+                                </h5>
+                                <p className="text-[11px] text-slate-300 mt-0.5">
+                                  Elige desde qué bodega(s) o sala(s) de venta puede facturar este colaborador.
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRestrictWarehouses(false);
+                                  setAllowedWarehouseIds(activeWarehouses.map((w) => w.id));
+                                }}
+                                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer ${
+                                  !restrictWarehouses
+                                    ? 'bg-teal-500 text-slate-950 border-teal-400 shadow-xs'
+                                    : 'bg-white/5 text-slate-300 border-white/15 hover:bg-white/10'
+                                }`}
+                              >
+                                Todas ({activeWarehouses.length})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRestrictWarehouses(true);
+                                  if (allowedWarehouseIds.length === 0) {
+                                    const mainWh =
+                                      activeWarehouses.find((w) => w.isMainSalesFloor) ||
+                                      activeWarehouses[0];
+                                    if (mainWh) setAllowedWarehouseIds([mainWh.id]);
+                                  }
+                                }}
+                                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer ${
+                                  restrictWarehouses
+                                    ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-xs'
+                                    : 'bg-white/5 text-slate-300 border-white/15 hover:bg-white/10'
+                                }`}
+                              >
+                                Asignar Específicas
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {activeWarehouses.map((wh) => {
+                              const isWhChecked =
+                                !restrictWarehouses || allowedWarehouseIds.includes(wh.id);
+                              return (
+                                <label
+                                  key={wh.id}
+                                  className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-start gap-2.5 select-none ${
+                                    isWhChecked
+                                      ? 'bg-teal-500/15 border-teal-400/70 text-white'
+                                      : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isWhChecked}
+                                    onChange={() => {
+                                      if (!restrictWarehouses) {
+                                        // Switching from "Todas" to selecting this specific warehouse
+                                        setRestrictWarehouses(true);
+                                        setAllowedWarehouseIds([wh.id]);
+                                      } else {
+                                        handleToggleWarehousePermission(wh.id);
+                                      }
+                                    }}
+                                    className="mt-0.5 rounded text-teal-500 focus:ring-teal-500 w-4 h-4 cursor-pointer shrink-0"
+                                  />
+                                  <div className="min-w-0 flex-1 text-xs">
+                                    <div className="font-extrabold flex items-center gap-1.5 flex-wrap">
+                                      <span className="truncate">{wh.name}</span>
+                                      {wh.isMainSalesFloor && (
+                                        <span className="px-1.5 py-0.2 rounded bg-teal-400/20 text-teal-300 text-[9px] font-black border border-teal-400/30">
+                                          Principal
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[10px] text-slate-300 font-mono truncate mt-0.5">
+                                      Código: {wh.code}
+                                      {wh.address ? ` • ${wh.address}` : ''}
+                                    </div>
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+
+                          <div className="text-[11px] text-teal-200/90 bg-teal-950/60 border border-teal-800/70 px-3 py-2 rounded-xl flex items-center justify-between gap-2">
+                            <span>
+                              {!restrictWarehouses ? (
+                                <>
+                                  ✅ El colaborador podrá facturar desde <strong>cualquiera de las {activeWarehouses.length} bodegas</strong> de la tienda.
+                                </>
+                              ) : (
+                                <>
+                                  🔒 El colaborador <strong>solo podrá facturar</strong> desde{' '}
+                                  <strong>
+                                    {allowedWarehouseIds.length}{' '}
+                                    {allowedWarehouseIds.length === 1 ? 'bodega asignada' : 'bodegas asignadas'}
+                                  </strong>
+                                  .
+                                </>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

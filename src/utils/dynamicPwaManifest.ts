@@ -122,103 +122,29 @@ export function generateMonogramIconDataUrl(storeName: string, size = 512): stri
 }
 
 /**
- * Generates a square PNG Data URL adapting any store logo (vertical, horizontal, or square)
- * cleanly onto a padded square canvas for Android & iOS home screen installation.
- * Falls back to the store's custom monogram if the store has no logo or if CORS blocks loading.
+ * Returns the official MIAPPHN PWA icon URL for the requested size so that
+ * downloading/installing the app on Android or iPhone ALWAYS displays the
+ * official MIAPPHN logo (never Tienda Gosén's logo).
  */
 export async function generateTenantAppIconDataUrl(
-  storeName: string,
-  logoUrl: string | undefined,
-  isGosen: boolean,
+  _storeName: string,
+  _logoUrl: string | undefined,
+  _isGosen: boolean,
   size = 512
 ): Promise<string> {
-  const trimmedLogo = (logoUrl || '').trim();
-
-  // If this is Tienda Gosén and no custom override logo is set, use the official Gosén icons
-  if (!trimmedLogo && isGosen) {
-    if (size <= 180) return '/apple-touch-icon.png';
-    if (size <= 192) return '/pwa-192x192.png';
-    return '/pwa-512x512.png';
-  }
-
-  // If this is a client store (e.g., Comercial GYG) and they haven't uploaded a logo yet,
-  // generate a custom monogram icon with their store name/initials
-  if (!trimmedLogo) {
-    return generateMonogramIconDataUrl(storeName, size);
-  }
-
-  if (typeof document === 'undefined') {
-    return trimmedLogo;
-  }
-
-  return new Promise<string>((resolve) => {
-    const img = new Image();
-    if (!trimmedLogo.startsWith('data:')) {
-      img.crossOrigin = 'anonymous';
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      resolve(isGosen ? '/pwa-512x512.png' : generateMonogramIconDataUrl(storeName, size));
-    }, 3500);
-
-    img.onload = () => {
-      window.clearTimeout(timeoutId);
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(generateMonogramIconDataUrl(storeName, size));
-          return;
-        }
-
-        // Fill clean white background so transparent or rectangular logos look crisp on iOS & Android
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, size, size);
-
-        // Compute proportional object-contain fit inside an 84% safe zone
-        const safePadding = Math.round(size * 0.08);
-        const maxDrawW = size - safePadding * 2;
-        const maxDrawH = size - safePadding * 2;
-
-        const naturalW = img.naturalWidth || img.width || size;
-        const naturalH = img.naturalHeight || img.height || size;
-        const scale = Math.min(maxDrawW / naturalW, maxDrawH / naturalH);
-
-        const drawW = Math.max(1, Math.round(naturalW * scale));
-        const drawH = Math.max(1, Math.round(naturalH * scale));
-        const offsetX = Math.round((size - drawW) / 2);
-        const offsetY = Math.round((size - drawH) / 2);
-
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
-
-        resolve(canvas.toDataURL('image/png'));
-      } catch {
-        // If canvas is tainted by external non-CORS URL, fall back to monogram
-        resolve(isGosen ? '/pwa-512x512.png' : generateMonogramIconDataUrl(storeName, size));
-      }
-    };
-
-    img.onerror = () => {
-      window.clearTimeout(timeoutId);
-      resolve(isGosen ? '/pwa-512x512.png' : generateMonogramIconDataUrl(storeName, size));
-    };
-
-    img.src = trimmedLogo;
-  });
+  if (size <= 180) return '/apple-touch-icon.png?v=miapphn3';
+  if (size <= 192) return '/pwa-192x192.png?v=miapphn3';
+  return '/pwa-512x512.png?v=miapphn3';
 }
 
 export function generateMiAppHNCashRegisterIconDataUrl(size = 512): string {
-  if (typeof document === 'undefined') return '/pwa-512x512.png';
+  if (typeof document === 'undefined') return '/pwa-512x512.png?v=miapphn3';
 
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return '/pwa-512x512.png';
+  if (!ctx) return '/pwa-512x512.png?v=miapphn3';
 
   // 1. Emerald rounded square gradient matching MIAPPHN official logo
   const grad = ctx.createLinearGradient(0, 0, size, size);
@@ -290,12 +216,10 @@ export function generateMiAppHNCashRegisterIconDataUrl(size = 512): string {
   return canvas.toDataURL('image/png');
 }
 
-let activeManifestBlobUrl: string | null = null;
-
 /**
- * Dynamically updates the browser's PWA Web App Manifest, Apple Touch Icon, Favicon,
+ * Synchronizes the browser's PWA Web App Manifest, Apple Touch Icon, Favicon,
  * Document Title, and start_url so that installing the app on Android or iPhone
- * installs the active client's own brand, icon, and direct store URL (`/?empresa=...`).
+ * ALWAYS installs with the official MIAPPHN logo and branding.
  */
 export async function syncDynamicPwaBranding(
   companyId: string,
@@ -318,8 +242,6 @@ export async function syncDynamicPwaBranding(
     ? 'Sistema POS, Inventario y Multi-Bodegas en la Nube'
     : (storeSettings?.tagline || '').trim() || 'Sistema de Inventario y Punto de Venta';
 
-  // Build tenant-specific start path so launching from the mobile home screen
-  // always boots directly into this client's isolated company workspace.
   const startPath = options?.isSalesLandingMode
     ? '/'
     : `/?empresa=${encodeURIComponent(normalizedSlug)}`;
@@ -328,9 +250,6 @@ export async function syncDynamicPwaBranding(
       ? `${window.location.origin}${startPath}`
       : startPath;
 
-  // Keep ?empresa=<slug> in the browser address bar for every store tenant
-  // (unless on the dedicated ?saas=1 portal or official root sales landing page)
-  // so each app link remains strictly separated.
   if (typeof window !== 'undefined' && !options?.isPublicCatalogMode && !options?.isSalesLandingMode) {
     try {
       const currentUrl = new URL(window.location.href);
@@ -348,24 +267,18 @@ export async function syncDynamicPwaBranding(
     }
   }
 
-  // Generate tenant-specific icons (or official MIAPPHN cash register icons when on the root portal)
-  const [appleIcon180, icon192, icon512] = options?.isSalesLandingMode
-    ? [
-        generateMiAppHNCashRegisterIconDataUrl(180),
-        generateMiAppHNCashRegisterIconDataUrl(192),
-        generateMiAppHNCashRegisterIconDataUrl(512),
-      ]
-    : await Promise.all([
-        generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 180),
-        generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 192),
-        generateTenantAppIconDataUrl(storeName, storeSettings?.logoUrl, isGosen, 512),
-      ]);
+  // Always use the official MIAPPHN static PNG paths with cache-buster so Android WebAPK
+  // builders fetch crisp HTTP(S) PNG icons with the official MIAPPHN logo.
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const appleIcon180 = `${origin}/apple-touch-icon.png?v=miapphn3`;
+  const icon192 = `${origin}/pwa-192x192.png?v=miapphn3`;
+  const icon512 = `${origin}/pwa-512x512.png?v=miapphn3`;
+  const iconMaskable512 = `${origin}/pwa-maskable-512x512.png?v=miapphn3`;
 
   if (typeof document !== 'undefined') {
-    // 1. Update Document Title & Mobile App Title Meta Tags
     const pageTitle = options?.isSalesLandingMode
       ? 'MIAPPHN | Sistema POS, Inventario y Multi-Bodegas en la Nube'
-      : `${storeName} | ${tagline}`;
+      : `MIAPPHN — ${storeName} | ${tagline}`;
     document.title = pageTitle;
 
     const setMetaContent = (selector: string, content: string) => {
@@ -373,43 +286,38 @@ export async function syncDynamicPwaBranding(
       if (el) el.setAttribute('content', content);
     };
 
-    setMetaContent('meta[name="application-name"]', storeName);
-    setMetaContent('meta[name="apple-mobile-web-app-title"]', storeName);
+    setMetaContent('meta[name="application-name"]', 'MIAPPHN');
+    setMetaContent('meta[name="apple-mobile-web-app-title"]', 'MIAPPHN');
     setMetaContent('meta[property="og:title"]', pageTitle);
 
-    // 2. Update Favicons
+    // Update Favicons to official MIAPPHN icon
     const iconLinks = document.querySelectorAll<HTMLLinkElement>(
       'link[rel="icon"], link[rel="shortcut icon"]'
     );
     iconLinks.forEach((link) => {
-      link.href = icon192;
+      link.href = '/favicon.png?v=miapphn3';
     });
 
-    // 3. Replace <link rel="apple-touch-icon"> elements so iOS Safari immediately refreshes the icon preview
+    // Update Apple Touch Icons to official MIAPPHN icon
     const existingAppleIcons = document.querySelectorAll<HTMLLinkElement>(
       'link[rel="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]'
     );
-    existingAppleIcons.forEach((el) => el.parentNode?.removeChild(el));
+    existingAppleIcons.forEach((el) => {
+      el.href = '/apple-touch-icon.png?v=miapphn3';
+    });
 
-    const newAppleIcon = document.createElement('link');
-    newAppleIcon.rel = 'apple-touch-icon';
-    newAppleIcon.sizes = '180x180';
-    newAppleIcon.href = appleIcon180;
-    document.head.appendChild(newAppleIcon);
-
-    // 4. Build dynamic Web App Manifest for Android / Chrome / Edge
-    const shortName = storeName.length > 15 ? storeName.slice(0, 15).trim() : storeName;
+    // Build Web App Manifest with official MIAPPHN logo and branding
     const dynamicManifest = {
-      id: startPath,
-      name: `${storeName} - ${tagline}`,
-      short_name: shortName,
-      description: `${tagline} — ${storeName}`,
+      id: '/',
+      name: 'MIAPPHN - Sistema POS e Inventario',
+      short_name: 'MIAPPHN',
+      description: 'Sistema inteligente de punto de venta, control de inventario, facturación y multi-bodegas en la nube — MIAPPHN',
       start_url: fullStartUrl,
       scope: typeof window !== 'undefined' ? `${window.location.origin}/` : '/',
       display: 'standalone',
       background_color: '#0f172a',
-      theme_color: '#059669',
-      orientation: 'any',
+      theme_color: '#0f172a',
+      orientation: 'portrait',
       categories: ['business', 'finance', 'productivity'],
       icons: [
         {
@@ -425,20 +333,25 @@ export async function syncDynamicPwaBranding(
           purpose: 'any',
         },
         {
-          src: icon512,
+          src: iconMaskable512,
           sizes: '512x512',
           type: 'image/png',
           purpose: 'maskable',
+        },
+        {
+          src: appleIcon180,
+          sizes: '180x180',
+          type: 'image/png',
+          purpose: 'any',
         },
       ],
     };
 
     const manifestJsonString = JSON.stringify(dynamicManifest);
 
-    // Also store in CacheStorage so the Service Worker can serve /manifest.json with the active tenant's manifest
     if ('caches' in window) {
       try {
-        const cache = await caches.open('tienda-gosen-v8');
+        const cache = await caches.open('miapphn-pwa-v12');
         await cache.put(
           new Request('/manifest.json'),
           new Response(manifestJsonString, {
@@ -450,27 +363,21 @@ export async function syncDynamicPwaBranding(
       }
     }
 
-    // Update <link rel="manifest"> with a fresh Blob URL
-    if (activeManifestBlobUrl) {
-      URL.revokeObjectURL(activeManifestBlobUrl);
-      activeManifestBlobUrl = null;
-    }
-    const blob = new Blob([manifestJsonString], { type: 'application/manifest+json' });
-    activeManifestBlobUrl = URL.createObjectURL(blob);
-
+    // Keep <link rel="manifest"> pointing to the standard HTTP /manifest.json?v=miapphn3
+    // so Android Chrome creates a true native WebAPK with the official MIAPPHN icon.
     let manifestLink = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
     if (!manifestLink) {
       manifestLink = document.createElement('link');
       manifestLink.rel = 'manifest';
       document.head.appendChild(manifestLink);
     }
-    manifestLink.href = activeManifestBlobUrl;
+    manifestLink.href = '/manifest.json?v=miapphn3';
   }
 
   return {
-    icon192,
-    icon512,
-    appleIcon180,
+    icon192: '/pwa-192x192.png?v=miapphn3',
+    icon512: '/pwa-512x512.png?v=miapphn3',
+    appleIcon180: '/apple-touch-icon.png?v=miapphn3',
     startUrl: fullStartUrl,
     storeName,
   };

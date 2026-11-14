@@ -104,7 +104,17 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   showToast,
 }) => {
   const currentUserName = userSession?.userName || 'Administrador';
-  const shifts = posFinanceData.shifts || [];
+  const isAdminSession = !userSession || userSession.role === 'admin';
+  const allShifts = posFinanceData.shifts || [];
+  const shifts = useMemo(() => {
+    if (isAdminSession) return allShifts;
+    const uname = currentUserName.trim().toLowerCase();
+    const loginName = (userSession?.username || '').trim().toLowerCase().replace(/^@+/, '');
+    return allShifts.filter((sh) => {
+      const opened = (sh.openedBy || '').trim().toLowerCase().replace(/^@+/, '');
+      return opened === uname || (Boolean(loginName) && opened === loginName);
+    });
+  }, [allShifts, isAdminSession, currentUserName, userSession?.username]);
   const expenses = posFinanceData.expenses || [];
   const activeShift = useMemo(() => shifts.find((s) => s.status === 'open') || null, [shifts]);
 
@@ -222,7 +232,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       };
       await onSavePOSFinanceData({
         ...posFinanceData,
-        shifts: [newShift, ...shifts],
+        shifts: [newShift, ...allShifts],
         updatedAt: Date.now(),
       });
       setOpeningCashInput('');
@@ -258,7 +268,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         user: currentUserName,
       };
 
-      const updatedShifts = shifts.map((s) =>
+      const updatedShifts = allShifts.map((s) =>
         s.id === activeShift.id
           ? { ...s, cashMovements: [newMov, ...(s.cashMovements || [])] }
           : s
@@ -338,7 +348,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         notes: closingNotes.trim(),
       };
 
-      const updatedShifts = shifts.map((s) => (s.id === activeShift.id ? closedShift : s));
+      const updatedShifts = allShifts.map((s) => (s.id === activeShift.id ? closedShift : s));
       await onSavePOSFinanceData({
         ...posFinanceData,
         shifts: updatedShifts,
@@ -545,10 +555,22 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       }
 
       if (q) {
+        const cleanAmountQuery = q.replace(/,/g, '');
         const matchCust = (s.customerName || '').toLowerCase().includes(q);
         const matchPhone = (s.customerPhone || '').toLowerCase().includes(q);
+        const matchRtn = (s.customerRtn || '').toLowerCase().includes(q);
         const matchNum = (s.saleNumber || '').toLowerCase().includes(q);
-        if (!matchCust && !matchPhone && !matchNum) return false;
+        const matchAmount =
+          String(s.total).includes(cleanAmountQuery) ||
+          s.total.toFixed(2).includes(cleanAmountQuery) ||
+          String(analytics.balanceDue).includes(cleanAmountQuery);
+        const matchItem = (s.items || []).some(
+          (it) =>
+            it.name.toLowerCase().includes(q) ||
+            it.code.toLowerCase().includes(q)
+        );
+        if (!matchCust && !matchPhone && !matchRtn && !matchNum && !matchAmount && !matchItem)
+          return false;
       }
       return true;
     });
@@ -1584,7 +1606,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   // ==================== RENDER MODE 4: LOYALTY / CLIENTES FRECUENTES ====================
   if (mode === 'loyalty') {
     return (
-      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-5 pb-32">
+      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-32">
+        <div className="w-full max-w-[1640px] mx-auto space-y-5">
         {/* Top Hero Banner */}
         <div className="p-4 sm:p-6 rounded-2xl bg-gradient-to-r from-amber-950 via-slate-900 to-indigo-950 text-white border border-amber-500/30 shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-3.5">
@@ -2433,6 +2456,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             </div>
           </div>
         )}
+        </div>
       </div>
     );
   }
@@ -2443,7 +2467,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     const liveDiff = countedCashInput.trim() !== '' ? countedNum - activeShiftMetrics.expectedCash : 0;
 
     return (
-      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-5 pb-32">
+      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-32">
+        <div className="w-full max-w-[1640px] mx-auto space-y-5">
         {/* Top Status Banner */}
         <div
           className={`p-4 sm:p-5 rounded-2xl border shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
@@ -2935,6 +2960,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             showToast={showToast}
           />
         )}
+        </div>
       </div>
     );
   }
@@ -2971,7 +2997,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       : null;
 
     return (
-      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-5 pb-32">
+      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-32">
+        <div className="w-full max-w-[1640px] mx-auto space-y-5">
         {/* Top KPI Cards: Cartera, Costo vs Ganancia & Alertas */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs">
@@ -4434,13 +4461,15 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             }}
           />
         )}
+        </div>
       </div>
     );
   }
 
   // ==================== RENDER MODE 3: OPERATING EXPENSES & NET PROFIT ====================
   return (
-    <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container p-3 sm:p-6 space-y-5 pb-32">
+    <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-32">
+      <div className="w-full max-w-[1640px] mx-auto space-y-5">
       {/* Period Selector + Formula Banner */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
@@ -4782,6 +4811,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         }
         showToast={showToast}
       />
+      </div>
     </div>
   );
 };
