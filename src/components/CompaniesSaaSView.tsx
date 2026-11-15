@@ -178,8 +178,8 @@ export const SAAS_PLAN_PRESETS: {
   },
   {
     id: 'prueba15',
-    name: 'Demo Prueba 15 Días',
-    badge: '15 Días Gratis',
+    name: 'Demo Prueba 7 Días',
+    badge: '7 Días Gratis',
     price: 0,
     plan: 'prueba',
     maxProducts: 100,
@@ -188,7 +188,7 @@ export const SAAS_PLAN_PRESETS: {
     enableDvolada: false,
     enableCreditContract: false,
     enableDigitalSignature: false,
-    desc: 'Acceso de demostración por 15 días con corte automático al vencer',
+    desc: 'Acceso de demostración por 7 días con corte automático al vencer',
   },
 ];
 
@@ -247,7 +247,7 @@ export function computeNextBillingDateFromCurrent(
   if (plan === 'anual') {
     next.setFullYear(next.getFullYear() + 1);
   } else if (plan === 'prueba') {
-    next.setDate(next.getDate() + 15);
+    next.setDate(next.getDate() + 7);
   } else {
     next.setMonth(next.getMonth() + 1);
   }
@@ -427,13 +427,13 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     const base = getOfficialAppBaseUrl(saasGlobalConfig?.customDomain);
     const storeUrl = `${base}/?empresa=${encodeURIComponent(slugToUse)}`;
     const msg =
-      `🎉 *¡BIENVENIDO A TU DEMO DE 15 DÍAS — ${req.businessName.toUpperCase()}!*\n\n` +
+      `🎉 *¡BIENVENIDO A TU DEMO DE 7 DÍAS — ${req.businessName.toUpperCase()}!*\n\n` +
       `Hola *${req.contactName}*, hemos activado el sistema para tu negocio *${req.businessName}*.\n\n` +
       `🔗 *Tu Enlace Exclusivo de Acceso:*\n${storeUrl}\n\n` +
       `🔑 *Tus Credenciales de Administrador:*\n` +
       `• *Código de Empresa:* \`${slugToUse}\`\n` +
       `• *Contraseña Administrador:* \`${passwordToUse}\`\n` +
-      `• *Vencimiento de Prueba Gratis:* ${formatShortDateEs(expDateStr)} (15 días)\n\n` +
+      `• *Vencimiento de Prueba Gratis:* ${formatShortDateEs(expDateStr)} (7 días)\n\n` +
       `📱 *Cómo instalar tu App:* Abre tu enlace exclusivo desde tu celular o computadora para entrar directamente a tu tienda con todos los módulos habilitados.`;
 
     const cleanPhone = (req.phone || '').replace(/\D/g, '');
@@ -767,8 +767,8 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setEnableCreditContract(preset.enableCreditContract);
     setEnableDigitalSignature(preset.enableDigitalSignature);
     if (preset.plan === 'prueba') {
-      const in15Days = new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0];
-      setNextBillingDate(in15Days);
+      const in7Days = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+      setNextBillingDate(in7Days);
     }
     showToast(`Paquete "${preset.name}" aplicado al formulario`, 'info');
   };
@@ -1882,7 +1882,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                   🚀 Tienes {pendingDemoRequestsCount} Solicitud(es) de Demo Pendiente(s) desde miapphn.online
                 </div>
                 <p className="text-emerald-100/80 mt-0.5">
-                  Nuevos prospectos registraron sus datos en tu página de ventas. Crea su cuenta Demo de 15 días con 1 clic y envíales su link por WhatsApp.
+                  Nuevos prospectos registraron sus datos en tu página de ventas. Crea su cuenta Demo de 7 días con 1 clic y envíales su link por WhatsApp.
                 </p>
               </div>
             </div>
@@ -5026,7 +5026,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                               <span>
                                 {isProvisioning
                                   ? 'Creando Tienda Demo...'
-                                  : 'Crear Demo 15 Días y Enviar por WhatsApp'}
+                                  : 'Crear Demo 7 Días y Enviar por WhatsApp'}
                               </span>
                             </button>
                           ) : (

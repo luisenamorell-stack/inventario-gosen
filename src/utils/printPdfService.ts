@@ -1206,6 +1206,10 @@ export function buildSaleDocumentHtml(
           ${(sale.items || [])
             .map((it) => {
               const disc = Number(it.unitDiscount) || 0;
+              const wCodeStr =
+                it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+                  ? it.warrantyCodes.filter(Boolean).join(', ')
+                  : it.warrantyCode || '';
               return `
                 <tr>
                   <td style="padding-top:4px;">
@@ -1214,6 +1218,13 @@ export function buildSaleDocumentHtml(
                       ${tpl.showItemCode ? `Cód: ${it.code} • ` : ''}@ ${formatCurrencyL(it.price)}
                       ${tpl.showItemDiscount && disc > 0 ? ` (Desc -${formatCurrencyL(disc)} c/u)` : ''}
                     </div>
+                    ${
+                      wCodeStr || it.hasWarranty
+                        ? `<div style="font-size:9px;font-weight:800;color:#065f46;margin-top:1px;">
+                            🛡️ Garantía${it.warrantyDuration ? ` (${it.warrantyDuration})` : ''}${wCodeStr ? `: Cód. ${wCodeStr}` : ''}${it.warrantyNotes ? ` • ${it.warrantyNotes}` : ''}
+                          </div>`
+                        : ''
+                    }
                   </td>
                   <td class="text-right font-bold" style="padding-top:4px;white-space:nowrap;">${formatCurrencyL(it.subtotal)}</td>
                 </tr>
@@ -1383,12 +1394,23 @@ export function buildSaleDocumentHtml(
             .map((it, i) => {
               const disc = Number(it.unitDiscount) || 0;
               const orig = it.originalPrice !== undefined ? Number(it.originalPrice) : it.price + disc;
+              const wCodeStr =
+                it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+                  ? it.warrantyCodes.filter(Boolean).join(', ')
+                  : it.warrantyCode || '';
               return `
                 <tr style="border-bottom:1px solid #e2e8f0;background:${i % 2 === 0 ? '#ffffff' : '#f8fafc'};">
                   <td class="text-center" style="color:#64748b;">${i + 1}</td>
                   ${tpl.showItemCode ? `<td style="font-family:monospace;font-weight:700;">${it.code}</td>` : ''}
                   <td>
                     <strong>${it.name}</strong>${it.size ? ` <span style="color:#475569;">(Talla: ${it.size})</span>` : ''}
+                    ${
+                      wCodeStr || it.hasWarranty
+                        ? `<div style="font-size:9.5px;font-weight:800;color:#047857;margin-top:2px;">
+                            🛡️ Garantía${it.warrantyDuration ? ` (${it.warrantyDuration})` : ''}${wCodeStr ? ` — Cód. Garantía: <span style="font-family:monospace;">${wCodeStr}</span>` : ''}${it.warrantyNotes ? ` (${it.warrantyNotes})` : ''}
+                          </div>`
+                        : ''
+                    }
                   </td>
                   <td class="text-center font-bold">${it.quantity}</td>
                   <td class="text-right">${formatCurrencyL(orig)}</td>
@@ -1653,8 +1675,23 @@ export async function downloadSalePdf(
         marginX + 2,
         y
       );
+      y += 3.2;
+      const wCodeStr =
+        it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+          ? it.warrantyCodes.filter(Boolean).join(', ')
+          : it.warrantyCode || '';
+      if (wCodeStr || it.hasWarranty) {
+        doc.setFont('courier', 'bold');
+        const wLine = `Garantia${it.warrantyDuration ? ` (${it.warrantyDuration})` : ''}${
+          wCodeStr ? `: ${wCodeStr}` : ''
+        }`;
+        const wWrapped = doc.splitTextToSize(wLine, contentWidth - 4);
+        doc.text(wWrapped, marginX + 2, y);
+        y += wWrapped.length * 3;
+        doc.setFont('courier', 'normal');
+      }
       doc.setFontSize(7.5);
-      y += 3.6;
+      y += 0.6;
     });
 
     doc.line(marginX, y, pageWidth - marginX, y);
@@ -1862,10 +1899,20 @@ export async function downloadSalePdf(
       const unitDisc = Number(it.unitDiscount) || 0;
       const origPrice =
         it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) + unitDisc;
+      const wCodeStr =
+        it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+          ? it.warrantyCodes.filter(Boolean).join(', ')
+          : it.warrantyCode || '';
+      const wSuffix =
+        wCodeStr || it.hasWarranty
+          ? `\n[Garantía${it.warrantyDuration ? ` ${it.warrantyDuration}` : ''}${
+              wCodeStr ? ` • Cód: ${wCodeStr}` : ''
+            }${it.warrantyNotes ? ` • ${it.warrantyNotes}` : ''}]`
+          : '';
       return [
         String(idx + 1),
         tpl.showItemCode ? it.code || '-' : '-',
-        `${it.name}${it.size ? ` (Talla: ${it.size})` : ''}`,
+        `${it.name}${it.size ? ` (Talla: ${it.size})` : ''}${wSuffix}`,
         String(it.quantity),
         formatCurrencyL(origPrice),
         tpl.showItemDiscount && unitDisc > 0 ? `-${formatCurrencyL(unitDisc)}` : 'L. 0.00',
@@ -2132,13 +2179,22 @@ export function buildWarrantyCertificateHtml(
 
   if (isThermal) {
     const itemsHtml = (sale.items || [])
-      .map(
-        (it) => `
+      .map((it) => {
+        const wCodeStr =
+          it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+            ? it.warrantyCodes.filter(Boolean).join(', ')
+            : it.warrantyCode || '';
+        return `
         <div style="margin-bottom:4px; padding-bottom:3px; border-bottom:1px dotted #cbd5e1;">
           <div style="font-weight:800;">${it.quantity}x ${it.name}</div>
-          <div style="font-size:0.88em; color:#334155;">Código: ${it.code} • Valor: ${formatCurrencyL(it.subtotal)}</div>
-        </div>`
-      )
+          <div style="font-size:0.88em; color:#334155;">Código Art.: ${it.code} • Valor: ${formatCurrencyL(it.subtotal)}</div>
+          ${
+            wCodeStr || it.hasWarranty
+              ? `<div style="font-size:0.88em; font-weight:800; color:#000;">🛡️ Cód. Garantía: ${wCodeStr || 'Cubierto'}${it.warrantyDuration ? ` (${it.warrantyDuration})` : ''}${it.warrantyNotes ? ` • ${it.warrantyNotes}` : ''}</div>`
+              : ''
+          }
+        </div>`;
+      })
       .join('');
 
     return `
@@ -2186,17 +2242,32 @@ export function buildWarrantyCertificateHtml(
   }
 
   const rowsHtml = (sale.items || [])
-    .map(
-      (it, idx) => `
+    .map((it, idx) => {
+      const wCodeStr =
+        it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+          ? it.warrantyCodes.filter(Boolean).join(', ')
+          : it.warrantyCode || '';
+      return `
       <tr style="border-bottom:1px solid #e2e8f0;">
         <td class="text-center" style="font-family:monospace;">${idx + 1}</td>
         <td style="font-family:monospace;font-weight:700;">${it.code}</td>
-        <td><strong>${it.name}</strong>${it.size ? ` (${it.size})` : ''}</td>
+        <td>
+          <strong>${it.name}</strong>${it.size ? ` (${it.size})` : ''}
+          ${
+            wCodeStr || it.hasWarranty
+              ? `<div style="font-size:10px;font-weight:800;color:#047857;margin-top:2px;">
+                  🛡️ Cód. Garantía Individual: <span style="font-family:monospace;background:#ecfdf5;padding:1px 6px;border-radius:4px;border:1px solid #a7f3d0;">${wCodeStr || 'Cubierto'}</span>
+                  ${it.warrantyDuration ? ` • Plazo: <strong>${it.warrantyDuration}</strong>` : ''}
+                  ${it.warrantyNotes ? ` • Nota/Serie: ${it.warrantyNotes}` : ''}
+                </div>`
+              : ''
+          }
+        </td>
         <td class="text-center font-bold">${it.quantity}</td>
         <td class="text-right">${formatCurrencyL(it.price)}</td>
         <td class="text-right font-bold">${formatCurrencyL(it.subtotal)}</td>
-      </tr>`
-    )
+      </tr>`;
+    })
     .join('');
 
   return `

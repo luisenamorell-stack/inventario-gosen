@@ -133,6 +133,7 @@ export const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-
 
 export type SalesSubTab =
   | 'pos'
+  | 'warranty'
   | 'cash-register'
   | 'credits'
   | 'expenses'
@@ -938,6 +939,75 @@ export const SalesView: React.FC<SalesViewProps> = ({
     );
   };
 
+  // Generate a unique, human-readable warranty code for an individual article
+  const generateUniqueWarrantyCode = (itemCode?: string, unitIndex?: number): string => {
+    const cleanSku = String(itemCode || 'ART')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toUpperCase()
+      .slice(0, 4) || 'ART';
+    const now = new Date();
+    const datePart = `${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    const randPart = Math.floor(1000 + Math.random() * 9000);
+    const suffix = unitIndex !== undefined ? `-U${unitIndex + 1}` : '';
+    return `GAR-${cleanSku}-${datePart}-${randPart}${suffix}`;
+  };
+
+  // Parse warranty duration label into days to calculate exact expiration and remaining days
+  const parseWarrantyDurationDays = (durationLabel?: string): number => {
+    const raw = String(durationLabel || '30 Días').trim().toLowerCase();
+    const numMatch = raw.match(/(\d+)/);
+    const num = numMatch ? parseInt(numMatch[1], 10) : 30;
+    if (raw.includes('año') || raw.includes('ano') || raw.includes('year')) {
+      return num * 365;
+    }
+    if (raw.includes('mes') || raw.includes('month')) {
+      return num * 30;
+    }
+    if (raw.includes('semana') || raw.includes('week')) {
+      return num * 7;
+    }
+    return num > 0 ? num : 30;
+  };
+
+  // Update individual article warranty fields inside the POS cart
+  const updateCartItemWarranty = (
+    code: string,
+    updates: Partial<
+      Pick<
+        SaleItem,
+        'hasWarranty' | 'warrantyCode' | 'warrantyCodes' | 'warrantyDuration' | 'warrantyNotes'
+      >
+    >
+  ) => {
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.code !== code) return item;
+        const nextItem: SaleItem = {
+          ...item,
+          ...updates,
+        };
+        if (updates.warrantyCodes) {
+          const nonEmpty = updates.warrantyCodes.map((c) => c.trim()).filter(Boolean);
+          nextItem.warrantyCode = nonEmpty.join(', ');
+        }
+        return nextItem;
+      })
+    );
+    if (updates.hasWarranty || updates.warrantyCode || (updates.warrantyCodes && updates.warrantyCodes.some(Boolean))) {
+      setPosIncludeWarranty(true);
+    }
+  };
+
+  // State for the dedicated "Consultar Garantía" module
+  const [warrantyLookupQuery, setWarrantyLookupQuery] = useState('');
+  const [warrantyStatusFilter, setWarrantyStatusFilter] = useState<
+    'all' | 'active' | 'expired' | 'all-sold'
+  >('all');
+  const [editingWarrantyItemKey, setEditingWarrantyItemKey] = useState<string | null>(null);
+  const [draftItemWarrantyCode, setDraftItemWarrantyCode] = useState('');
+  const [draftItemWarrantyDuration, setDraftItemWarrantyDuration] = useState('30 Días');
+  const [draftItemWarrantyNotes, setDraftItemWarrantyNotes] = useState('');
+
   // Update per-unit credit price for a specific item in the cart when selling on credit
   const updateCartItemCreditPrice = (code: string, rawCreditPrice: number) => {
     const cleanCredit = Math.max(0, Number(rawCreditPrice) || 0);
@@ -1389,19 +1459,46 @@ export const SalesView: React.FC<SalesViewProps> = ({
         loyaltyPointsRedeemed: ptsRedeemed > 0 ? ptsRedeemed : undefined,
         loyaltyDiscountAmount: ptsDiscountLps > 0 ? ptsDiscountLps : undefined,
         loyaltyPointsBalanceAfter: nextPtsBalance,
-        warrantyInfo: posIncludeWarranty
-          ? {
-              enabled: true,
-              durationLabel: posWarrantyDuration.trim() || '30 Días',
-              serialOrModelNotes:
-                posWarrantySerialNotes.trim() ||
-                (creditArticleBrand.trim() || creditArticleModel.trim()
-                  ? [creditArticleBrand.trim(), creditArticleModel.trim()].filter(Boolean).join(' • ')
-                  : undefined),
-              coverageTerms:
-                posWarrantyTerms.trim() || getDefaultWarrantyTermsForStore(),
-            }
-          : undefined,
+        warrantyInfo: (() => {
+          const itemsWithWarranty = finalItemsForSale.filter(
+            (it) =>
+              it.hasWarranty ||
+              Boolean(it.warrantyCode && it.warrantyCode.trim()) ||
+              Boolean(it.warrantyCodes && it.warrantyCodes.some((c) => c && c.trim()))
+          );
+          const shouldEnableWarranty = posIncludeWarranty || itemsWithWarranty.length > 0;
+          if (!shouldEnableWarranty) return undefined;
+          const itemCodesSummary = itemsWithWarranty
+            .map((it) => {
+              const cStr =
+                it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+                  ? it.warrantyCodes.filter(Boolean).join(', ')
+                  : it.warrantyCode || '';
+              return `${it.name}${cStr ? ` [Cód. Garantía: ${cStr}]` : ''}${
+                it.warrantyDuration ? ` (${it.warrantyDuration})` : ''
+              }${it.warrantyNotes ? ` - ${it.warrantyNotes}` : ''}`;
+            })
+            .join(' | ');
+          const combinedSerialNotes = [
+            posWarrantySerialNotes.trim(),
+            itemCodesSummary,
+            creditArticleBrand.trim() || creditArticleModel.trim()
+              ? [creditArticleBrand.trim(), creditArticleModel.trim()].filter(Boolean).join(' • ')
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' • ');
+          const primaryDuration =
+            itemsWithWarranty.find((it) => it.warrantyDuration)?.warrantyDuration ||
+            posWarrantyDuration.trim() ||
+            '30 Días';
+          return {
+            enabled: true,
+            durationLabel: primaryDuration,
+            serialOrModelNotes: combinedSerialNotes || undefined,
+            coverageTerms: posWarrantyTerms.trim() || getDefaultWarrantyTermsForStore(),
+          };
+        })(),
       };
 
       let initialCreditContract: CreditContractData | undefined = undefined;
@@ -1722,6 +1819,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
       } else {
         text += `  ↳ ${codeStr}L. ${item.subtotal.toFixed(2)}  _(L. ${item.price.toFixed(2)} c/u)_\n`;
       }
+      const itemWCode =
+        item.warrantyCodes && item.warrantyCodes.filter(Boolean).length > 0
+          ? item.warrantyCodes.filter(Boolean).join(', ')
+          : item.warrantyCode || '';
+      if (itemWCode || item.hasWarranty) {
+        text += `  🛡️ *Garantía${item.warrantyDuration ? ` (${item.warrantyDuration})` : ''}:* ${
+          itemWCode ? `Cód. *${itemWCode}*` : 'Cubierto'
+        }${item.warrantyNotes ? ` _(${item.warrantyNotes})_` : ''}\n`;
+      }
     });
 
     text += `━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -1840,7 +1946,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
     msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
     msg += `🛍️ *ARTÍCULO(S) CUBIERTO(S):*\n`;
     (sale.items || []).forEach((it) => {
-      msg += `• *${it.quantity}x* ${it.name} _(Cód: ${it.code} • L. ${it.subtotal.toFixed(2)})_\n`;
+      const itemWCode =
+        it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+          ? it.warrantyCodes.filter(Boolean).join(', ')
+          : it.warrantyCode || '';
+      msg += `• *${it.quantity}x* ${it.name} _(Cód Art: ${it.code} • L. ${it.subtotal.toFixed(2)})_\n`;
+      if (itemWCode || it.hasWarranty) {
+        msg += `  🛡️ *Código de Garantía:* *${itemWCode || 'Cubierto'}*${
+          it.warrantyDuration ? ` • Plazo: *${it.warrantyDuration}*` : ''
+        }${it.warrantyNotes ? ` • _${it.warrantyNotes}_` : ''}\n`;
+      }
     });
     msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
     msg += `📋 *CONDICIONES DE GARANTÍA:*\n`;
@@ -2211,10 +2326,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
           s.total.toFixed(2).includes(cleanAmountQuery) ||
           String(s.subtotal).includes(cleanAmountQuery) ||
           (s.cashPriceTotal !== undefined && String(s.cashPriceTotal).includes(cleanAmountQuery));
+        const matchesWarrantyNotes = (s.warrantyInfo?.serialOrModelNotes || '')
+          .toLowerCase()
+          .includes(q);
         const matchesItem = s.items.some(
           (it) =>
             it.name.toLowerCase().includes(q) ||
             it.code.toLowerCase().includes(q) ||
+            (it.warrantyCode || '').toLowerCase().includes(q) ||
+            (it.warrantyCodes || []).some((wc) => (wc || '').toLowerCase().includes(q)) ||
+            (it.warrantyNotes || '').toLowerCase().includes(q) ||
             String(it.price).includes(cleanAmountQuery) ||
             String(it.subtotal).includes(cleanAmountQuery)
         );
@@ -2225,6 +2346,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
           !matchesPhone &&
           !matchesSeller &&
           !matchesAmount &&
+          !matchesWarrantyNotes &&
           !matchesItem
         )
           return false;
@@ -2511,6 +2633,46 @@ export const SalesView: React.FC<SalesViewProps> = ({
               {cart.length > 0 && (
                 <span className="bg-white text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 shadow-2xs">
                   {totalCartItemsCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('warranty')}
+              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                activeSubTab === 'warranty'
+                  ? 'bg-teal-600 text-white shadow-xs'
+                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>Consultar Garantía</span>
+              {visibleSales.reduce(
+                (acc, s) =>
+                  acc +
+                  (s.items || []).filter(
+                    (it) =>
+                      it.hasWarranty ||
+                      Boolean(it.warrantyCode) ||
+                      Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
+                      Boolean(s.warrantyInfo?.enabled)
+                  ).length,
+                0
+              ) > 0 && (
+                <span className="bg-teal-100 text-teal-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                  {visibleSales.reduce(
+                    (acc, s) =>
+                      acc +
+                      (s.items || []).filter(
+                        (it) =>
+                          it.hasWarranty ||
+                          Boolean(it.warrantyCode) ||
+                          Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
+                          Boolean(s.warrantyInfo?.enabled)
+                      ).length,
+                    0
+                  )}
                 </span>
               )}
             </button>
@@ -3285,6 +3447,178 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           </button>
                         </div>
                       </div>
+
+                      {/* Row 3: Per-Article Individual Warranty Code & Duration */}
+                      <div className="pt-1.5 border-t border-dashed border-slate-200/80">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextHasWarranty = !item.hasWarranty;
+                              if (nextHasWarranty) {
+                                const existingCodes =
+                                  item.warrantyCodes && item.warrantyCodes.length > 0
+                                    ? item.warrantyCodes
+                                    : item.warrantyCode
+                                    ? [item.warrantyCode]
+                                    : [generateUniqueWarrantyCode(item.code, 0)];
+                                updateCartItemWarranty(item.code, {
+                                  hasWarranty: true,
+                                  warrantyDuration: item.warrantyDuration || posWarrantyDuration || '30 Días',
+                                  warrantyCodes: existingCodes,
+                                  warrantyCode: existingCodes.filter(Boolean).join(', '),
+                                });
+                              } else {
+                                updateCartItemWarranty(item.code, {
+                                  hasWarranty: false,
+                                  warrantyCode: '',
+                                  warrantyCodes: [],
+                                  warrantyNotes: '',
+                                });
+                              }
+                            }}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              item.hasWarranty
+                                ? 'bg-teal-600 text-white shadow-2xs'
+                                : 'bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-teal-800 border border-slate-200'
+                            }`}
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                              {item.hasWarranty
+                                ? `Con Garantía (${item.warrantyDuration || '30 Días'})`
+                                : '+ Agregar Código de Garantía'}
+                            </span>
+                          </button>
+
+                          {item.hasWarranty && item.warrantyCode && (
+                            <span className="font-mono text-[10px] font-black bg-teal-50 text-teal-900 border border-teal-300 px-2 py-0.5 rounded-md truncate max-w-[180px]">
+                              Cód: {item.warrantyCode}
+                            </span>
+                          )}
+                        </div>
+
+                        {item.hasWarranty && (
+                          <div className="mt-2 p-2.5 rounded-xl bg-teal-50/80 border border-teal-200 space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-[10px] font-extrabold uppercase text-teal-900">
+                                🛡️ Código(s) de Garantía del Artículo
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <select
+                                  value={item.warrantyDuration || '30 Días'}
+                                  onChange={(e) =>
+                                    updateCartItemWarranty(item.code, {
+                                      hasWarranty: true,
+                                      warrantyDuration: e.target.value,
+                                    })
+                                  }
+                                  className="px-2 py-0.5 bg-white border border-teal-300 rounded-md text-[10.5px] font-black text-teal-900 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
+                                >
+                                  <option value="15 Días">15 Días</option>
+                                  <option value="30 Días">30 Días</option>
+                                  <option value="2 Meses">2 Meses</option>
+                                  <option value="3 Meses">3 Meses</option>
+                                  <option value="6 Meses">6 Meses</option>
+                                  <option value="1 Año">1 Año</option>
+                                  <option value="2 Años">2 Años</option>
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const generated = Array.from(
+                                      { length: Math.max(1, item.quantity) },
+                                      (_, idx) =>
+                                        generateUniqueWarrantyCode(
+                                          item.code,
+                                          item.quantity > 1 ? idx : undefined
+                                        )
+                                    );
+                                    updateCartItemWarranty(item.code, {
+                                      hasWarranty: true,
+                                      warrantyCodes: generated,
+                                      warrantyCode: generated.join(', '),
+                                    });
+                                  }}
+                                  className="px-2 py-0.5 bg-teal-600 hover:bg-teal-700 text-white rounded-md text-[10px] font-extrabold cursor-pointer shadow-2xs"
+                                  title="Generar código único de garantía automáticamente"
+                                >
+                                  ⚡ Generar {item.quantity > 1 ? `(${item.quantity})` : 'Código'}
+                                </button>
+                              </div>
+                            </div>
+
+                            {item.quantity <= 1 ? (
+                              <input
+                                type="text"
+                                value={item.warrantyCode || ''}
+                                onChange={(e) =>
+                                  updateCartItemWarranty(item.code, {
+                                    hasWarranty: true,
+                                    warrantyCode: e.target.value,
+                                    warrantyCodes: e.target.value.trim() ? [e.target.value.trim()] : [],
+                                  })
+                                }
+                                placeholder="Escribe o escanea el código de garantía de este artículo..."
+                                className="w-full px-2.5 py-1.5 bg-white border border-teal-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                              />
+                            ) : (
+                              <div className="space-y-1.5">
+                                <span className="text-[10px] text-teal-800 font-semibold block">
+                                  Este artículo lleva {item.quantity} unidades. Ingresa el código de cada unidad individual:
+                                </span>
+                                {Array.from({ length: item.quantity }, (_, uIdx) => {
+                                  const currentCodes =
+                                    item.warrantyCodes && item.warrantyCodes.length > 0
+                                      ? [...item.warrantyCodes]
+                                      : (item.warrantyCode || '')
+                                          .split(',')
+                                          .map((s) => s.trim())
+                                          .filter(Boolean);
+                                  return (
+                                    <div key={uIdx} className="flex items-center gap-1.5">
+                                      <span className="text-[10px] font-black text-teal-900 w-16 shrink-0">
+                                        Unidad #{uIdx + 1}:
+                                      </span>
+                                      <input
+                                        type="text"
+                                        value={currentCodes[uIdx] || ''}
+                                        onChange={(e) => {
+                                          const nextArr = Array.from(
+                                            { length: item.quantity },
+                                            (__, i) => currentCodes[i] || ''
+                                          );
+                                          nextArr[uIdx] = e.target.value;
+                                          updateCartItemWarranty(item.code, {
+                                            hasWarranty: true,
+                                            warrantyCodes: nextArr,
+                                            warrantyCode: nextArr.map((c) => c.trim()).filter(Boolean).join(', '),
+                                          });
+                                        }}
+                                        placeholder={`Código de garantía Unidad #${uIdx + 1}...`}
+                                        className="flex-1 px-2 py-1 bg-white border border-teal-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            <input
+                              type="text"
+                              value={item.warrantyNotes || ''}
+                              onChange={(e) =>
+                                updateCartItemWarranty(item.code, {
+                                  hasWarranty: true,
+                                  warrantyNotes: e.target.value,
+                                })
+                              }
+                              placeholder="Serie / Modelo / IMEI o condición especial de este artículo (Opcional)"
+                              className="w-full px-2.5 py-1 bg-white border border-teal-200 rounded-lg text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                            />
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })
@@ -3978,7 +4312,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeSubTab === 'history' ? (
         /* ==================== SALES HISTORY VIEW (CENTERED MARGINS) ==================== */
         <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-40 md:pb-24">
           <div className="w-full max-w-[1640px] mx-auto space-y-4 sm:space-y-5">
@@ -4940,6 +5274,753 @@ export const SalesView: React.FC<SalesViewProps> = ({
           </div>
           </div>
         </div>
+      ) : (
+        /* ==================== 2.5 CONSULTAR GARANTÍA POR CÓDIGO (INDIVIDUAL ARTICLE WARRANTY LOOKUP) ==================== */
+        <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-40 md:pb-24">
+          <div className="w-full max-w-[1640px] mx-auto space-y-4 sm:space-y-5">
+            {/* Header & Instant Warranty Code Search Bar */}
+            <div className="bg-gradient-to-br from-teal-900 via-emerald-900 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md border border-teal-700/50 space-y-3.5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1 min-w-0">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-teal-500/20 border border-teal-400/30 text-teal-200 text-[11px] font-extrabold">
+                    <ShieldCheck className="w-3.5 h-3.5 text-teal-300 shrink-0" />
+                    <span>CONTROL DE GARANTÍAS POR ARTÍCULO INDIVIDUAL</span>
+                  </div>
+                  <h2 className="text-base sm:text-xl md:text-2xl font-black tracking-tight leading-tight">
+                    Consultar Garantía y Factura de Origen por Código
+                  </h2>
+                  <p className="text-xs sm:text-sm text-teal-100/90 max-w-3xl leading-relaxed">
+                    Cuando un cliente traiga un artículo dañado, ingresa o escanea aquí su{' '}
+                    <strong className="text-white underline">Código de Garantía</strong> (o busca por N° de
+                    Factura, Serie, SKU o Nombre del Cliente) para saber al instante de qué factura salió y
+                    si su garantía sigue vigente.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('pos')}
+                    className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/20 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <ShoppingCart className="w-4 h-4 text-teal-300" />
+                    <span>Ir a Caja / POS</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('history')}
+                    className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/20 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <History className="w-4 h-4 text-emerald-300" />
+                    <span>Ver Historial</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Input Box & Filter Pills */}
+              <div className="flex flex-col lg:flex-row gap-2.5">
+                <div className="relative flex-1 min-w-0">
+                  <Barcode className="w-5 h-5 text-teal-600 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={warrantyLookupQuery}
+                    onChange={(e) => setWarrantyLookupQuery(e.target.value)}
+                    placeholder="Escanea o escribe el CÓDIGO DE GARANTÍA (ej. GAR-...), N° de Factura, Serie, Artículo o Cliente..."
+                    className="w-full pl-11 pr-10 py-2.5 sm:py-3 bg-white text-slate-900 rounded-xl text-xs sm:text-sm md:text-base font-bold placeholder:text-slate-400 placeholder:font-normal focus:outline-none focus:ring-2 focus:ring-teal-400 shadow-inner"
+                  />
+                  {warrantyLookupQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setWarrantyLookupQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+                      title="Limpiar búsqueda"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 bg-slate-900/50 p-1 rounded-xl border border-white/15 overflow-x-auto no-scrollbar shrink-0">
+                  {(
+                    [
+                      { id: 'all', label: '🛡️ Con Garantía' },
+                      { id: 'active', label: '✅ Vigentes' },
+                      { id: 'expired', label: '❌ Vencidas' },
+                      { id: 'all-sold', label: '📦 Todos los Artículos' },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setWarrantyStatusFilter(f.id)}
+                      className={`px-3 py-2 rounded-lg text-xs font-extrabold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                        warrantyStatusFilter === f.id
+                          ? 'bg-teal-400 text-slate-950 shadow-2xs'
+                          : 'text-teal-100 hover:bg-white/10'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Compute Flattened Individual Articles with Invoice Context */}
+            {(() => {
+              const nowMs = Date.now();
+              const rawQuery = warrantyLookupQuery.trim().toLowerCase();
+
+              const allArticleEntries = visibleSales.flatMap((sale) =>
+                (sale.items || []).map((item, itemIdx) => {
+                  const individualCodes =
+                    item.warrantyCodes && item.warrantyCodes.filter(Boolean).length > 0
+                      ? item.warrantyCodes.map((c) => c.trim()).filter(Boolean)
+                      : item.warrantyCode
+                      ? item.warrantyCode
+                          .split(',')
+                          .map((c) => c.trim())
+                          .filter(Boolean)
+                      : [];
+                  const combinedCodeStr = individualCodes.join(', ') || item.warrantyCode || '';
+                  const hasItemWarranty = Boolean(
+                    item.hasWarranty ||
+                      combinedCodeStr ||
+                      sale.warrantyInfo?.enabled
+                  );
+                  const effectiveDurationLabel =
+                    item.warrantyDuration ||
+                    sale.warrantyInfo?.durationLabel ||
+                    '30 Días';
+                  const durationDays = parseWarrantyDurationDays(effectiveDurationLabel);
+                  const saleStartMs = Number(sale.timestamp) || Date.now();
+                  const expiryMs = saleStartMs + durationDays * 24 * 60 * 60 * 1000;
+                  const diffDays = Math.ceil((expiryMs - nowMs) / (24 * 60 * 60 * 1000));
+                  const isExpired = diffDays < 0;
+                  const expiryDateFormatted = new Date(expiryMs).toLocaleDateString('es-HN', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                  });
+
+                  const exactCodeMatch =
+                    rawQuery.length > 0 &&
+                    (combinedCodeStr.toLowerCase() === rawQuery ||
+                      individualCodes.some((c) => c.toLowerCase() === rawQuery) ||
+                      combinedCodeStr.toLowerCase().includes(rawQuery));
+
+                  return {
+                    key: `${sale.id}__${itemIdx}`,
+                    sale,
+                    item,
+                    itemIdx,
+                    individualCodes,
+                    combinedCodeStr,
+                    hasItemWarranty,
+                    effectiveDurationLabel,
+                    durationDays,
+                    expiryMs,
+                    diffDays,
+                    isExpired,
+                    expiryDateFormatted,
+                    exactCodeMatch,
+                  };
+                })
+              );
+
+              const totalWithWarranty = allArticleEntries.filter((e) => e.hasItemWarranty).length;
+              const totalActiveWarranty = allArticleEntries.filter(
+                (e) => e.hasItemWarranty && !e.isExpired && e.sale.status !== 'cancelled'
+              ).length;
+              const totalExpiredWarranty = allArticleEntries.filter(
+                (e) => e.hasItemWarranty && e.isExpired
+              ).length;
+
+              // If there are no items with warranty yet and filter is 'all', show all sold articles so the user can assign codes to any existing invoice item
+              const showAllSoldWhenEmpty =
+                warrantyStatusFilter === 'all-sold' ||
+                (warrantyStatusFilter === 'all' && totalWithWarranty === 0);
+
+              const filteredEntries = allArticleEntries
+                .filter((entry) => {
+                  if (!rawQuery && !showAllSoldWhenEmpty && !entry.hasItemWarranty) return false;
+
+                  if (warrantyStatusFilter === 'active') {
+                    if (!entry.hasItemWarranty || entry.isExpired || entry.sale.status === 'cancelled')
+                      return false;
+                  } else if (warrantyStatusFilter === 'expired') {
+                    if (!entry.hasItemWarranty || !entry.isExpired) return false;
+                  }
+
+                  if (!rawQuery) return true;
+
+                  const s = entry.sale;
+                  const it = entry.item;
+                  const matchesWarrantyCode =
+                    entry.combinedCodeStr.toLowerCase().includes(rawQuery) ||
+                    entry.individualCodes.some((c) => c.toLowerCase().includes(rawQuery));
+                  const matchesSerialNotes =
+                    (it.warrantyNotes || '').toLowerCase().includes(rawQuery) ||
+                    (s.warrantyInfo?.serialOrModelNotes || '').toLowerCase().includes(rawQuery);
+                  const matchesSaleNumber = (s.saleNumber || '').toLowerCase().includes(rawQuery);
+                  const matchesProduct =
+                    (it.name || '').toLowerCase().includes(rawQuery) ||
+                    (it.code || '').toLowerCase().includes(rawQuery);
+                  const matchesCustomer =
+                    (s.customerName || '').toLowerCase().includes(rawQuery) ||
+                    (s.customerRtn || '').toLowerCase().includes(rawQuery) ||
+                    (s.customerPhone || '').toLowerCase().includes(rawQuery);
+
+                  return (
+                    matchesWarrantyCode ||
+                    matchesSerialNotes ||
+                    matchesSaleNumber ||
+                    matchesProduct ||
+                    matchesCustomer
+                  );
+                })
+                .sort((a, b) => {
+                  if (a.exactCodeMatch !== b.exactCodeMatch) return a.exactCodeMatch ? -1 : 1;
+                  if (a.hasItemWarranty !== b.hasItemWarranty) return a.hasItemWarranty ? -1 : 1;
+                  return (Number(b.sale.timestamp) || 0) - (Number(a.sale.timestamp) || 0);
+                });
+
+              return (
+                <>
+                  {/* Summary KPI Cards — Clickable to filter */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setWarrantyStatusFilter('all')}
+                      className={`text-left bg-white border rounded-xl p-3 sm:p-3.5 shadow-2xs flex items-center justify-between cursor-pointer transition-all ${
+                        warrantyStatusFilter === 'all'
+                          ? 'border-teal-500 ring-2 ring-teal-500/20'
+                          : 'border-slate-200 hover:border-teal-300'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <span className="text-[10px] sm:text-[11px] font-bold uppercase text-slate-500 block truncate">
+                          Con Garantía
+                        </span>
+                        <span className="text-lg sm:text-2xl font-black text-slate-900 tabular-nums">
+                          {totalWithWarranty}
+                        </span>
+                      </div>
+                      <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
+                        <ShieldCheck className="w-5 h-5" />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setWarrantyStatusFilter('active')}
+                      className={`text-left bg-white border rounded-xl p-3 sm:p-3.5 shadow-2xs flex items-center justify-between cursor-pointer transition-all ${
+                        warrantyStatusFilter === 'active'
+                          ? 'border-emerald-500 ring-2 ring-emerald-500/20'
+                          : 'border-emerald-200 hover:border-emerald-400'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <span className="text-[10px] sm:text-[11px] font-bold uppercase text-emerald-700 block truncate">
+                          Vigentes Hoy
+                        </span>
+                        <span className="text-lg sm:text-2xl font-black text-emerald-700 tabular-nums">
+                          {totalActiveWarranty}
+                        </span>
+                      </div>
+                      <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                        <CheckCircle2 className="w-5 h-5" />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setWarrantyStatusFilter('expired')}
+                      className={`text-left bg-white border rounded-xl p-3 sm:p-3.5 shadow-2xs flex items-center justify-between cursor-pointer transition-all ${
+                        warrantyStatusFilter === 'expired'
+                          ? 'border-rose-500 ring-2 ring-rose-500/20'
+                          : 'border-rose-200 hover:border-rose-400'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <span className="text-[10px] sm:text-[11px] font-bold uppercase text-rose-700 block truncate">
+                          Vencidas
+                        </span>
+                        <span className="text-lg sm:text-2xl font-black text-rose-600 tabular-nums">
+                          {totalExpiredWarranty}
+                        </span>
+                      </div>
+                      <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                        <AlertTriangle className="w-5 h-5" />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setWarrantyStatusFilter('all-sold')}
+                      className={`text-left bg-white border rounded-xl p-3 sm:p-3.5 shadow-2xs flex items-center justify-between cursor-pointer transition-all ${
+                        warrantyStatusFilter === 'all-sold'
+                          ? 'border-indigo-500 ring-2 ring-indigo-500/20'
+                          : 'border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <span className="text-[10px] sm:text-[11px] font-bold uppercase text-indigo-700 block truncate">
+                          Total Artículos Facturados
+                        </span>
+                        <span className="text-lg sm:text-2xl font-black text-indigo-700 tabular-nums">
+                          {allArticleEntries.length}
+                        </span>
+                      </div>
+                      <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                        <Package className="w-5 h-5" />
+                      </div>
+                    </button>
+                  </div>
+
+                  {/* Results List */}
+                  {filteredEntries.length === 0 ? (
+                    <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 text-center space-y-3">
+                      <ShieldCheck className="w-12 h-12 text-slate-300 mx-auto" />
+                      <h3 className="text-base font-black text-slate-800">
+                        {rawQuery
+                          ? `No se encontró ningún artículo o factura con "${warrantyLookupQuery}"`
+                          : 'No hay artículos en este filtro'}
+                      </h3>
+                      <p className="text-xs text-slate-500 max-w-md mx-auto">
+                        {rawQuery
+                          ? 'Verifica el código de garantía, número de factura, código de producto o nombre del cliente.'
+                          : 'Puedes ver todos los artículos vendidos y asignarles un código de garantía haciendo clic en el botón de abajo.'}
+                      </p>
+                      {allArticleEntries.length > 0 && warrantyStatusFilter !== 'all-sold' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWarrantyLookupQuery('');
+                            setWarrantyStatusFilter('all-sold');
+                          }}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-extrabold cursor-pointer shadow-xs"
+                        >
+                          <Package className="w-4 h-4" />
+                          <span>Ver Todos los Artículos Facturados ({allArticleEntries.length})</span>
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredEntries.slice(0, 60).map((entry) => {
+                        const {
+                          key,
+                          sale,
+                          item,
+                          itemIdx,
+                          combinedCodeStr,
+                          hasItemWarranty,
+                          effectiveDurationLabel,
+                          diffDays,
+                          isExpired,
+                          expiryDateFormatted,
+                          exactCodeMatch,
+                        } = entry;
+                        const isEditingThis = editingWarrantyItemKey === key;
+                        const isCancelled = sale.status === 'cancelled';
+
+                        return (
+                          <div
+                            key={key}
+                            className={`bg-white rounded-2xl border transition-all shadow-xs overflow-hidden ${
+                              exactCodeMatch
+                                ? 'border-2 border-teal-500 ring-2 ring-teal-500/20'
+                                : isCancelled
+                                ? 'border-rose-200 opacity-75'
+                                : hasItemWarranty && !isExpired
+                                ? 'border-emerald-300'
+                                : 'border-slate-200'
+                            }`}
+                          >
+                            {/* Top Status Banner */}
+                            <div
+                              className={`px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 border-b ${
+                                isCancelled
+                                  ? 'bg-rose-50 border-rose-200 text-rose-900'
+                                  : !hasItemWarranty
+                                  ? 'bg-slate-100 border-slate-200 text-slate-700'
+                                  : isExpired
+                                  ? 'bg-rose-50 border-rose-200 text-rose-900'
+                                  : 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                {isCancelled ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-xs font-black">
+                                    🚫 FACTURA ANULADA
+                                  </span>
+                                ) : !hasItemWarranty ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-600 text-white text-xs font-black">
+                                    ⚪ SIN GARANTÍA ASIGNADA
+                                  </span>
+                                ) : isExpired ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-xs font-black">
+                                    ❌ GARANTÍA VENCIDA (Venció hace {Math.abs(diffDays)} días • {expiryDateFormatted})
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-xs font-black">
+                                    ✅ GARANTÍA VIGENTE (Quedan {diffDays} días • Vence el {expiryDateFormatted})
+                                  </span>
+                                )}
+
+                                {combinedCodeStr ? (
+                                  <div className="inline-flex items-center gap-1.5 bg-white border-2 border-teal-600 text-teal-950 px-2.5 py-0.5 rounded-lg font-mono text-xs sm:text-sm font-black shadow-2xs">
+                                    <span>🛡️ CÓDIGO: {combinedCodeStr}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard?.writeText(combinedCodeStr);
+                                        showToast(`Código "${combinedCodeStr}" copiado`, 'info');
+                                      }}
+                                      className="text-teal-600 hover:text-teal-800 p-0.5 cursor-pointer"
+                                      title="Copiar Código de Garantía"
+                                    >
+                                      <Copy className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs font-bold text-slate-600">
+                                    (Sin código individual — haz clic en &quot;Editar Código / Reclamo&quot; para asignarlo)
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="text-xs font-black text-slate-800 flex items-center gap-2">
+                                <span className="bg-white/90 px-2.5 py-1 rounded-lg border border-slate-200 font-mono">
+                                  🧾 Factura Origen: <strong className="text-emerald-800">{sale.saleNumber}</strong>
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Main Body: Left = Individual Article Info, Right = Invoice Origin Info */}
+                            <div className="p-4 grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+                              {/* Article & Warranty Details (7 cols) */}
+                              <div className="lg:col-span-7 space-y-2.5">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-teal-700 block">
+                                      ARTÍCULO INDIVIDUAL FACTURADO
+                                    </span>
+                                    <h3 className="text-base sm:text-lg font-black text-slate-900 leading-snug">
+                                      {item.quantity}x {item.name}
+                                      {item.size ? ` (Talla: ${item.size})` : ''}
+                                    </h3>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <span className="text-[10px] text-slate-500 font-bold block">
+                                      VALOR ARTÍCULO
+                                    </span>
+                                    <span className="text-sm sm:text-base font-black text-emerald-700 tabular-nums">
+                                      L. {item.subtotal.toFixed(2)}
+                                    </span>
+                                    {item.quantity > 1 && (
+                                      <span className="text-[10px] text-slate-500 block">
+                                        (L. {item.price.toFixed(2)} c/u)
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-200/80">
+                                  <div>
+                                    <span className="text-[10px] font-bold text-slate-500 block">
+                                      CÓDIGO ARTÍCULO / SKU
+                                    </span>
+                                    <span className="font-mono font-black text-slate-900">
+                                      {item.code || 'N/A'}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] font-bold text-slate-500 block">
+                                      PLAZO DE GARANTÍA
+                                    </span>
+                                    <span className="font-black text-teal-800">
+                                      {hasItemWarranty ? effectiveDurationLabel : 'No asignado'}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] font-bold text-slate-500 block">
+                                      FECHA LÍMITE COBERTURA
+                                    </span>
+                                    <span className="font-bold text-slate-900">
+                                      {hasItemWarranty ? expiryDateFormatted : '—'}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {(item.warrantyNotes || sale.warrantyInfo?.serialOrModelNotes) && (
+                                  <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-950">
+                                    <strong className="font-black uppercase text-[10px] text-amber-800 block">
+                                      🔢 Serie / Modelo / Notas de Garantía o Reclamo:
+                                    </strong>
+                                    <span className="font-medium">
+                                      {[item.warrantyNotes, sale.warrantyInfo?.serialOrModelNotes]
+                                        .filter(Boolean)
+                                        .join(' • ')}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Invoice Origin Card (5 cols) */}
+                              <div className="lg:col-span-5 bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2 text-xs">
+                                <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                                  <span className="text-[10.5px] font-black uppercase text-slate-700 flex items-center gap-1">
+                                    <Receipt className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span>DATOS DE LA FACTURA DE ORIGEN</span>
+                                  </span>
+                                  <span className="font-mono font-black text-emerald-800">
+                                    {sale.saleNumber}
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-y-1.5 gap-x-2 text-[11.5px]">
+                                  <div>
+                                    <span className="text-slate-500 block text-[10px]">Fecha y Hora Compra:</span>
+                                    <strong className="text-slate-900">{sale.date}</strong>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-500 block text-[10px]">Cliente Facturado:</span>
+                                    <strong className="text-slate-900">{sale.customerName || 'Consumidor Final'}</strong>
+                                  </div>
+                                  {sale.customerRtn && (
+                                    <div>
+                                      <span className="text-slate-500 block text-[10px]">RTN / Identidad:</span>
+                                      <strong className="text-slate-800 font-mono">{sale.customerRtn}</strong>
+                                    </div>
+                                  )}
+                                  {sale.customerPhone && (
+                                    <div>
+                                      <span className="text-slate-500 block text-[10px]">Teléfono / WhatsApp:</span>
+                                      <strong className="text-emerald-700">{sale.customerPhone}</strong>
+                                    </div>
+                                  )}
+                                  <div>
+                                    <span className="text-slate-500 block text-[10px]">Bodega / Sucursal:</span>
+                                    <strong className="text-slate-800">{sale.warehouseName || 'Tienda Principal'}</strong>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-500 block text-[10px]">Vendedor / Cajero:</span>
+                                    <strong className="text-slate-800">{getFormattedSaleIssuer(sale)}</strong>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-500 block text-[10px]">Método de Pago:</span>
+                                    <strong className="text-slate-800 capitalize">
+                                      {sale.paymentMethod === 'cash'
+                                        ? 'Contado (Efectivo)'
+                                        : sale.paymentMethod === 'credit'
+                                        ? 'Crédito / Fiado'
+                                        : sale.paymentMethod === 'card'
+                                        ? 'Tarjeta'
+                                        : 'Transferencia'}
+                                    </strong>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-500 block text-[10px]">Total de la Factura:</span>
+                                    <strong className="text-emerald-800 font-black">L. {sale.total.toFixed(2)}</strong>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Inline Editor for Warranty Code / Duration / Claim Notes */}
+                            {isEditingThis && (
+                              <div className="px-4 py-3 bg-teal-50/90 border-t border-teal-200 space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-black text-teal-950 uppercase">
+                                    ✏️ Asignar / Editar Código de Garantía o Registrar Reclamo ({item.name})
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingWarrantyItemKey(null)}
+                                    className="text-xs text-slate-500 hover:text-slate-800 font-bold cursor-pointer"
+                                  >
+                                    Cancelar
+                                  </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                                  <div className="sm:col-span-5">
+                                    <label className="text-[10px] font-bold text-teal-900 uppercase block mb-1">
+                                      Código de Garantía Individual
+                                    </label>
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="text"
+                                        value={draftItemWarrantyCode}
+                                        onChange={(e) => setDraftItemWarrantyCode(e.target.value)}
+                                        placeholder="Ej. GAR-LAV-1115-4821"
+                                        className="flex-1 px-2.5 py-1.5 bg-white border border-teal-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setDraftItemWarrantyCode(generateUniqueWarrantyCode(item.code))
+                                        }
+                                        className="px-2.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[11px] font-extrabold cursor-pointer shrink-0"
+                                      >
+                                        ⚡ Generar
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="sm:col-span-3">
+                                    <label className="text-[10px] font-bold text-teal-900 uppercase block mb-1">
+                                      Plazo de Garantía
+                                    </label>
+                                    <select
+                                      value={draftItemWarrantyDuration}
+                                      onChange={(e) => setDraftItemWarrantyDuration(e.target.value)}
+                                      className="w-full px-2.5 py-1.5 bg-white border border-teal-300 rounded-lg text-xs font-black text-teal-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                    >
+                                      <option value="15 Días">15 Días</option>
+                                      <option value="30 Días">30 Días</option>
+                                      <option value="2 Meses">2 Meses</option>
+                                      <option value="3 Meses">3 Meses</option>
+                                      <option value="6 Meses">6 Meses</option>
+                                      <option value="1 Año">1 Año</option>
+                                      <option value="2 Años">2 Años</option>
+                                    </select>
+                                  </div>
+
+                                  <div className="sm:col-span-4">
+                                    <label className="text-[10px] font-bold text-teal-900 uppercase block mb-1">
+                                      Serie / Modelo / Historial de Reclamo
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={draftItemWarrantyNotes}
+                                      onChange={(e) => setDraftItemWarrantyNotes(e.target.value)}
+                                      placeholder="Ej. Serie #99812 - Recibido para revisión..."
+                                      className="w-full px-2.5 py-1.5 bg-white border border-teal-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="flex justify-end gap-2 pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const cleanCode = draftItemWarrantyCode.trim();
+                                      const codesArr = cleanCode
+                                        ? cleanCode.split(',').map((c) => c.trim()).filter(Boolean)
+                                        : [];
+                                      const updatedItems = sale.items.map((it, idx) =>
+                                        idx === itemIdx
+                                          ? {
+                                              ...it,
+                                              hasWarranty: true,
+                                              warrantyCode: cleanCode,
+                                              warrantyCodes: codesArr,
+                                              warrantyDuration: draftItemWarrantyDuration,
+                                              warrantyNotes: draftItemWarrantyNotes.trim(),
+                                            }
+                                          : it
+                                      );
+                                      const updatedSale: SaleRecord = {
+                                        ...sale,
+                                        items: updatedItems,
+                                        warrantyInfo: {
+                                          enabled: true,
+                                          durationLabel:
+                                            sale.warrantyInfo?.durationLabel || draftItemWarrantyDuration,
+                                          serialOrModelNotes:
+                                            sale.warrantyInfo?.serialOrModelNotes ||
+                                            (cleanCode ? `${item.name}: ${cleanCode}` : undefined),
+                                          coverageTerms:
+                                            sale.warrantyInfo?.coverageTerms ||
+                                            getDefaultWarrantyTermsForStore(),
+                                        },
+                                      };
+                                      if (onUpdateSale) {
+                                        await onUpdateSale(sale, updatedSale);
+                                      }
+                                      setEditingWarrantyItemKey(null);
+                                      showToast(
+                                        `Garantía actualizada para "${item.name}" en factura ${sale.saleNumber}`,
+                                        'success'
+                                      );
+                                    }}
+                                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs"
+                                  >
+                                    <Check className="w-4 h-4" />
+                                    <span>Guardar Garantía en Factura</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Action Buttons Footer */}
+                            <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCompletedSale(sale);
+                                    setReceiptModalTab('ticket');
+                                    setShowReceiptModal(true);
+                                  }}
+                                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                                >
+                                  <Receipt className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span>Ver Factura Original ({sale.saleNumber})</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingWarrantyItemKey(isEditingThis ? null : key);
+                                    setDraftItemWarrantyCode(
+                                      combinedCodeStr || generateUniqueWarrantyCode(item.code)
+                                    );
+                                    setDraftItemWarrantyDuration(effectiveDurationLabel);
+                                    setDraftItemWarrantyNotes(item.warrantyNotes || '');
+                                  }}
+                                  className="px-3 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-900 border border-teal-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5 text-teal-700" />
+                                  <span>Editar Código / Registrar Reclamo</span>
+                                </button>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSendWarrantyWhatsApp(sale)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                                >
+                                  <WhatsAppIcon className="w-3.5 h-3.5 fill-white" />
+                                  <span>WhatsApp Garantía</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handlePrintWarrantyCertificate(receiptPrinterFormat, sale)
+                                  }
+                                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Printer className="w-3.5 h-3.5 text-teal-600" />
+                                  <span>Imprimir Garantía</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        </div>
       )}
 
       {/* ==================== TICKET / RECEIPT + CREDIT CONTRACT MODAL ==================== */}
@@ -5223,6 +6304,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       it.originalPrice !== undefined
                         ? Number(it.originalPrice)
                         : it.price + unitDisc;
+                    const itemWCode =
+                      it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+                        ? it.warrantyCodes.filter(Boolean).join(', ')
+                        : it.warrantyCode || '';
                     return (
                       <div key={idx} className="flex items-start justify-between gap-2 text-[11px]">
                         <div className="flex-1 min-w-0 break-words leading-snug">
@@ -5237,6 +6322,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               </span>
                             )}
                           </div>
+                          {(itemWCode || it.hasWarranty) && (
+                            <div className="mt-0.5 inline-flex flex-wrap items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-[9.5px] font-bold text-emerald-900">
+                              <span>
+                                🛡️ Garantía{it.warrantyDuration ? ` (${it.warrantyDuration})` : ''}:
+                              </span>
+                              <span className="font-mono font-black">
+                                {itemWCode || 'Cubierto'}
+                              </span>
+                              {it.warrantyNotes && (
+                                <span className="text-emerald-700">• {it.warrantyNotes}</span>
+                              )}
+                            </div>
+                          )}
                         </div>
                         <span className="font-bold text-slate-900 shrink-0">
                           L. {it.subtotal.toFixed(2)}
@@ -5459,10 +6557,155 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </div>
 
                 {completedSale.warrantyInfo?.enabled && (
-                  <div className="space-y-1.5 pt-1 border-t border-teal-200/80">
+                  <div className="space-y-2 pt-1.5 border-t border-teal-200/80">
+                    {/* Per-Item Individual Warranty Code Assignment inside Invoice Modal */}
+                    <div className="space-y-1.5 bg-white/90 p-2.5 rounded-xl border border-teal-200">
+                      <div className="text-[10.5px] font-black uppercase text-teal-900 flex items-center justify-between">
+                        <span>🛡️ Códigos de Garantía por Artículo Individual</span>
+                        <span className="text-[10px] font-semibold text-teal-700">
+                          Factura {completedSale.saleNumber}
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {completedSale.items.map((it, idx) => {
+                          const currentWCode =
+                            it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+                              ? it.warrantyCodes.filter(Boolean).join(', ')
+                              : it.warrantyCode || '';
+                          return (
+                            <div
+                              key={`${it.code}-${idx}`}
+                              className="p-2 rounded-lg bg-teal-50/60 border border-teal-200/80 space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2 text-[11px]">
+                                <span className="font-bold text-slate-900 truncate">
+                                  {it.quantity}x {it.name}{' '}
+                                  <span className="font-mono text-[10px] text-slate-500">
+                                    ({it.code})
+                                  </span>
+                                </span>
+                                <select
+                                  value={
+                                    it.warrantyDuration ||
+                                    completedSale.warrantyInfo?.durationLabel ||
+                                    '30 Días'
+                                  }
+                                  onChange={(e) => {
+                                    const nextDur = e.target.value;
+                                    const nextItems = completedSale.items.map((item, i) =>
+                                      i === idx
+                                        ? {
+                                            ...item,
+                                            hasWarranty: true,
+                                            warrantyDuration: nextDur,
+                                          }
+                                        : item
+                                    );
+                                    const updatedSale: SaleRecord = {
+                                      ...completedSale,
+                                      items: nextItems,
+                                    };
+                                    setCompletedSale(updatedSale);
+                                    if (onUpdateSale) {
+                                      onUpdateSale(completedSale, updatedSale).catch(() => {});
+                                    }
+                                  }}
+                                  className="px-1.5 py-0.5 bg-white border border-teal-300 rounded text-[10px] font-black text-teal-900"
+                                >
+                                  <option value="15 Días">15 Días</option>
+                                  <option value="30 Días">30 Días</option>
+                                  <option value="2 Meses">2 Meses</option>
+                                  <option value="3 Meses">3 Meses</option>
+                                  <option value="6 Meses">6 Meses</option>
+                                  <option value="1 Año">1 Año</option>
+                                  <option value="2 Años">2 Años</option>
+                                </select>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  value={currentWCode}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const codesArr = val
+                                      .split(',')
+                                      .map((c) => c.trim())
+                                      .filter(Boolean);
+                                    const nextItems = completedSale.items.map((item, i) =>
+                                      i === idx
+                                        ? {
+                                            ...item,
+                                            hasWarranty: Boolean(val.trim()),
+                                            warrantyCode: val,
+                                            warrantyCodes: codesArr,
+                                            warrantyDuration:
+                                              item.warrantyDuration ||
+                                              completedSale.warrantyInfo?.durationLabel ||
+                                              '30 Días',
+                                          }
+                                        : item
+                                    );
+                                    const updatedSale: SaleRecord = {
+                                      ...completedSale,
+                                      items: nextItems,
+                                    };
+                                    setCompletedSale(updatedSale);
+                                    if (onUpdateSale) {
+                                      onUpdateSale(completedSale, updatedSale).catch(() => {});
+                                    }
+                                  }}
+                                  placeholder="Código de garantía de este artículo..."
+                                  className="flex-1 px-2 py-1 bg-white border border-teal-300 rounded-md text-[11px] font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const generated = Array.from(
+                                      { length: Math.max(1, it.quantity) },
+                                      (_, uIdx) =>
+                                        generateUniqueWarrantyCode(
+                                          it.code,
+                                          it.quantity > 1 ? uIdx : undefined
+                                        )
+                                    );
+                                    const nextItems = completedSale.items.map((item, i) =>
+                                      i === idx
+                                        ? {
+                                            ...item,
+                                            hasWarranty: true,
+                                            warrantyCodes: generated,
+                                            warrantyCode: generated.join(', '),
+                                            warrantyDuration:
+                                              item.warrantyDuration ||
+                                              completedSale.warrantyInfo?.durationLabel ||
+                                              '30 Días',
+                                          }
+                                        : item
+                                    );
+                                    const updatedSale: SaleRecord = {
+                                      ...completedSale,
+                                      items: nextItems,
+                                    };
+                                    setCompletedSale(updatedSale);
+                                    if (onUpdateSale) {
+                                      onUpdateSale(completedSale, updatedSale).catch(() => {});
+                                    }
+                                  }}
+                                  className="px-2 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-md text-[10px] font-extrabold cursor-pointer shrink-0"
+                                  title="Generar código único de garantía para este artículo"
+                                >
+                                  ⚡ Generar
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
                     <input
                       type="text"
-                      placeholder="Serie / Modelo / IMEI del producto (Opcional)"
+                      placeholder="Serie / Modelo / IMEI general del producto (Opcional)"
                       value={completedSale.warrantyInfo?.serialOrModelNotes || ''}
                       onChange={(e) => {
                         const updatedSale: SaleRecord = {

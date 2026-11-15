@@ -3376,22 +3376,36 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
       timestamp: Number(data.timestamp) || Date.now(),
       date: data.date || '',
       items: Array.isArray(data.items)
-        ? data.items.map((it: any) => ({
-            productId: it.productId || '',
-            code: it.code || '',
-            name: it.name || '',
-            category: it.category || '',
-            size: it.size || '',
-            originalPrice:
-              it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
-            cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
-            creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
-            unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
-            price: Number(it.price) || 0,
-            cost: Number(it.cost) || 0,
-            quantity: Number(it.quantity) || 1,
-            subtotal: Number(it.subtotal) || 0,
-          }))
+        ? data.items.map((it: any) => {
+            const rawCodes = Array.isArray(it.warrantyCodes)
+              ? it.warrantyCodes.map((c: any) => String(c || '').trim()).filter(Boolean)
+              : [];
+            const singleCode = it.warrantyCode ? String(it.warrantyCode).trim() : rawCodes.join(', ');
+            const hasWarrantyFlag = Boolean(
+              it.hasWarranty || singleCode || rawCodes.length > 0 || it.warrantyDuration
+            );
+            return {
+              productId: it.productId || '',
+              code: it.code || '',
+              name: it.name || '',
+              category: it.category || '',
+              size: it.size || '',
+              originalPrice:
+                it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+              cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
+              creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
+              unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
+              price: Number(it.price) || 0,
+              cost: Number(it.cost) || 0,
+              quantity: Number(it.quantity) || 1,
+              subtotal: Number(it.subtotal) || 0,
+              ...(hasWarrantyFlag ? { hasWarranty: true } : {}),
+              ...(singleCode ? { warrantyCode: singleCode } : {}),
+              ...(rawCodes.length > 0 ? { warrantyCodes: rawCodes } : {}),
+              ...(it.warrantyDuration ? { warrantyDuration: String(it.warrantyDuration).trim() } : {}),
+              ...(it.warrantyNotes ? { warrantyNotes: String(it.warrantyNotes).trim() } : {}),
+            };
+          })
         : [],
       totalItems: Number(data.totalItems) || 0,
       subtotal: Number(data.subtotal) || 0,
@@ -3535,15 +3549,40 @@ function mergeSaleRecordsWithCache(
         byId.set(loc.id, loc);
         missingOnServer.push(loc);
       } else {
-        // Preserve signed creditContract or warrantyInfo if present in local cache and missing on server
+        // Preserve signed creditContract, warrantyInfo, and item-level warranty codes if present in local cache
         const mergedContract = srv.creditContract || loc.creditContract;
         const mergedWarranty = srv.warrantyInfo || loc.warrantyInfo;
+        const mergedItems = Array.isArray(srv.items)
+          ? srv.items.map((srvItem, idx) => {
+              const locItem =
+                loc.items?.[idx] &&
+                (loc.items[idx].code === srvItem.code || loc.items[idx].productId === srvItem.productId)
+                  ? loc.items[idx]
+                  : loc.items?.find(
+                      (li) => li.code === srvItem.code && li.name === srvItem.name
+                    );
+              if (!locItem) return srvItem;
+              return {
+                ...locItem,
+                ...srvItem,
+                hasWarranty: srvItem.hasWarranty ?? locItem.hasWarranty,
+                warrantyCode: srvItem.warrantyCode || locItem.warrantyCode,
+                warrantyCodes:
+                  srvItem.warrantyCodes && srvItem.warrantyCodes.length > 0
+                    ? srvItem.warrantyCodes
+                    : locItem.warrantyCodes,
+                warrantyDuration: srvItem.warrantyDuration || locItem.warrantyDuration,
+                warrantyNotes: srvItem.warrantyNotes || locItem.warrantyNotes,
+              };
+            })
+          : loc.items || [];
         const srvPaymentsLen = srv.creditPayments?.length || 0;
         const locPaymentsLen = loc.creditPayments?.length || 0;
         const useLocPayments = locPaymentsLen > srvPaymentsLen;
         byId.set(loc.id, {
           ...loc,
           ...srv,
+          items: mergedItems,
           creditContract: mergedContract,
           warrantyInfo: mergedWarranty,
           ...(useLocPayments
@@ -3759,21 +3798,35 @@ export async function recordSaleInFirestore(
     saleNumber: String(saleData.saleNumber || `VTA-${Date.now().toString().slice(-6)}`).slice(0, 50),
     timestamp: Number(saleData.timestamp) || Date.now(),
     date: String(saleData.date || new Date().toLocaleString()).slice(0, 100),
-    items: (saleData.items || []).map((it) => ({
-      productId: String(it.productId || ''),
-      code: String(it.code || '').trim(),
-      name: String(it.name || '').trim(),
-      category: String(it.category || 'General').trim(),
-      size: String(it.size || '').trim(),
-      originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
-      cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
-      creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
-      unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
-      price: Number(it.price) || 0,
-      cost: Number(it.cost) || 0,
-      quantity: Number(it.quantity) || 1,
-      subtotal: Number(it.subtotal) || 0,
-    })),
+    items: (saleData.items || []).map((it) => {
+      const cleanCodes = Array.isArray(it.warrantyCodes)
+        ? it.warrantyCodes.map((c) => String(c || '').trim()).filter(Boolean)
+        : [];
+      const singleCode = it.warrantyCode ? String(it.warrantyCode).trim() : cleanCodes.join(', ');
+      const hasWarrantyFlag = Boolean(
+        it.hasWarranty || singleCode || cleanCodes.length > 0 || it.warrantyDuration
+      );
+      return {
+        productId: String(it.productId || ''),
+        code: String(it.code || '').trim(),
+        name: String(it.name || '').trim(),
+        category: String(it.category || 'General').trim(),
+        size: String(it.size || '').trim(),
+        originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+        cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
+        creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
+        unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
+        price: Number(it.price) || 0,
+        cost: Number(it.cost) || 0,
+        quantity: Number(it.quantity) || 1,
+        subtotal: Number(it.subtotal) || 0,
+        ...(hasWarrantyFlag ? { hasWarranty: true } : {}),
+        ...(singleCode ? { warrantyCode: singleCode.slice(0, 200) } : {}),
+        ...(cleanCodes.length > 0 ? { warrantyCodes: cleanCodes } : {}),
+        ...(it.warrantyDuration ? { warrantyDuration: String(it.warrantyDuration).trim().slice(0, 60) } : {}),
+        ...(it.warrantyNotes ? { warrantyNotes: String(it.warrantyNotes).trim().slice(0, 300) } : {}),
+      };
+    }),
     totalItems: Math.round(Number(saleData.totalItems) || 0),
     subtotal: Number(saleData.subtotal) || 0,
     discount: Number(saleData.discount) || 0,
@@ -4015,21 +4068,35 @@ export async function updateSaleInFirestore(
     ? Math.max(0, updatedSale.balanceDue !== undefined ? Number(updatedSale.balanceDue) : totalVal - paidVal)
     : 0;
 
-  const cleanItems = (updatedSale.items || []).map((it) => ({
-    productId: String(it.productId || ''),
-    code: String(it.code || '').trim(),
-    name: String(it.name || '').trim(),
-    category: String(it.category || 'General').trim(),
-    size: String(it.size || '').trim(),
-    originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
-    cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
-    creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
-    unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
-    price: Number(it.price) || 0,
-    cost: Number(it.cost) || 0,
-    quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
-    subtotal: Number(it.subtotal) || 0,
-  }));
+  const cleanItems = (updatedSale.items || []).map((it) => {
+    const cleanCodes = Array.isArray(it.warrantyCodes)
+      ? it.warrantyCodes.map((c) => String(c || '').trim()).filter(Boolean)
+      : [];
+    const singleCode = it.warrantyCode ? String(it.warrantyCode).trim() : cleanCodes.join(', ');
+    const hasWarrantyFlag = Boolean(
+      it.hasWarranty || singleCode || cleanCodes.length > 0 || it.warrantyDuration
+    );
+    return {
+      productId: String(it.productId || ''),
+      code: String(it.code || '').trim(),
+      name: String(it.name || '').trim(),
+      category: String(it.category || 'General').trim(),
+      size: String(it.size || '').trim(),
+      originalPrice: it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) || 0,
+      cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
+      creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
+      unitDiscount: Math.max(0, Number(it.unitDiscount) || 0),
+      price: Number(it.price) || 0,
+      cost: Number(it.cost) || 0,
+      quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
+      subtotal: Number(it.subtotal) || 0,
+      ...(hasWarrantyFlag ? { hasWarranty: true } : {}),
+      ...(singleCode ? { warrantyCode: singleCode.slice(0, 200) } : {}),
+      ...(cleanCodes.length > 0 ? { warrantyCodes: cleanCodes } : {}),
+      ...(it.warrantyDuration ? { warrantyDuration: String(it.warrantyDuration).trim().slice(0, 60) } : {}),
+      ...(it.warrantyNotes ? { warrantyNotes: String(it.warrantyNotes).trim().slice(0, 300) } : {}),
+    };
+  });
 
   const payload: any = {
     companyId: originalSale.companyId || slug,

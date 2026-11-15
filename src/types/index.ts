@@ -381,6 +381,11 @@ export interface SaleItem {
   cost?: number;
   quantity: number;
   subtotal: number;
+  hasWarranty?: boolean;
+  warrantyCode?: string;
+  warrantyCodes?: string[];
+  warrantyDuration?: string;
+  warrantyNotes?: string;
 }
 
 export interface CreditPaymentAbone {

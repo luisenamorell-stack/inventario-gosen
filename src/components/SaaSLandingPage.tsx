@@ -36,10 +36,10 @@ const PLANS: PlanItem[] = [
   {
     id: 'prueba15',
     t: 'Acceso inmediato',
-    n: 'Demo prueba 15 días',
+    n: 'Demo prueba 7 días',
     d: 'Conoce todas las funciones en tu propio negocio sin compromiso',
     p: '0',
-    per: '15 días de prueba real',
+    per: '7 días de prueba real',
     l: 'Hasta 100 productos y 2 usuarios',
     f: [
       'Enlace propio y aislado para tu negocio',
@@ -48,7 +48,7 @@ const PLANS: PlanItem[] = [
       'App instalable en celular Android, iPhone y PC',
       'Plantilla inicial de artículos según tu rubro',
     ],
-    b: 'Solicitar demo de 15 días',
+    b: 'Solicitar demo de 7 días',
   },
   {
     id: 'emprendedor',
@@ -342,9 +342,6 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
     setIsSent(false);
   };
 
-  // Mobile/Tablet Showcase Scene focus ('all' | 'left' | 'center' | 'right')
-  const [showcaseFocus, setShowcaseFocus] = useState<'all' | 'left' | 'center' | 'right'>('center');
-
   return (
     <div className="miapphn-landing">
       {/* Embedded Vector Symbol Definition for MIAPPHN Logo */}
@@ -413,9 +410,13 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
 
       {/* MAIN */}
       <main id="top">
-        {/* HERO */}
+        {/* HERO — Clean, Centered & Adapted for Every Screen Without Image */}
         <div className="wrap hero">
           <div className="hero-copy">
+            <div className="hero-pill">
+              <span className="dot-emerald"></span>
+              <span>Sistema POS, Control de Inventario, Facturación y Multi-Bodegas en la Nube</span>
+            </div>
             <h1>Elige el plan ideal para el tamaño de tu negocio o empieza con tu demo gratis</h1>
             <p>
               Todos los planes incluyen tu enlace exclusivo aislado, respaldo en la nube, actualizaciones
@@ -423,73 +424,30 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
             </p>
             <div className="cta">
               <a className="btn pri" href="#demo">
-                Solicitar demo de 15 días
+                Solicitar demo de 7 días
               </a>
               <a className="btn" href="#planes">
                 Ver planes y precios
               </a>
             </div>
-            <div className="note">15 días de prueba real, sin compromiso.</div>
-          </div>
+            <div className="note">7 días de prueba real, sin compromiso.</div>
 
-          <div className="hero-showcase">
-            <div className="hero-showcase-frame">
-              <div className="hero-showcase-bar">
-                <div className="hero-showcase-dots">
-                  <span className="dot dot-emerald"></span>
-                  <span className="hero-showcase-badge">
-                    Aquí usamos nuestra App de Ventas POS • Control de Inventario y Facturación
-                  </span>
-                </div>
-                <span className="hero-showcase-live">EN VIVO EN COMERCIOS</span>
+            <div className="hero-highlights">
+              <div className="hero-highlight-item">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Enlace propio y aislado</span>
               </div>
-
-              {/* Mobile & Tablet Interactive Scene Switcher (< 900px) so the 3-panel wide image looks large and crisp on phones & tablets */}
-              <div className="hero-showcase-mobile-tabs">
-                <button
-                  type="button"
-                  onClick={() => setShowcaseFocus('left')}
-                  className={`showcase-tab-btn ${showcaseFocus === 'left' ? 'active' : ''}`}
-                >
-                  1. Tu Tienda
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowcaseFocus('center')}
-                  className={`showcase-tab-btn ${showcaseFocus === 'center' ? 'active' : ''}`}
-                >
-                  2. En Tablet / Móvil
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowcaseFocus('right')}
-                  className={`showcase-tab-btn ${showcaseFocus === 'right' ? 'active' : ''}`}
-                >
-                  3. Caja POS
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowcaseFocus('all')}
-                  className={`showcase-tab-btn ${showcaseFocus === 'all' ? 'active' : ''}`}
-                >
-                  Panorámica
-                </button>
+              <div className="hero-highlight-item">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Punto de Venta y Multi-Bodegas</span>
               </div>
-
-              <div className={`hero-showcase-img-wrap focus-${showcaseFocus}`}>
-                <picture>
-                  <source srcSet="/assets/aistudio/image_0e512b8a.webp" type="image/webp" />
-                  <img
-                    src="/assets/aistudio/image_0e512b8a.webp"
-                    alt="Comercios operando con nuestra App de Ventas POS, escáner e impresora térmica"
-                    width={1024}
-                    height={209}
-                    loading="eager"
-                    decoding="sync"
-                    fetchPriority="high"
-                    className="hero-showcase-img"
-                  />
-                </picture>
+              <div className="hero-highlight-item">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Celular Android, iPhone y PC</span>
+              </div>
+              <div className="hero-highlight-item">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Respaldo en la nube 24/7</span>
               </div>
             </div>
           </div>
@@ -498,7 +456,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         {/* PLANES */}
         <section id="planes">
           <div className="wrap">
-            <div className="head">
+            <div className="head head-centered">
               <h2>Planes transparentes para cada etapa de tu negocio</h2>
               <p>
                 Empieza gratis y cambia de plan cuando tu inventario, tus bodegas o tu equipo lo pidan.
@@ -555,7 +513,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
               <div className="head" style={{ margin: 0 }}>
                 <h2>Pide tu demo y pruébalo con tu propio negocio</h2>
                 <p>
-                  Déjanos tus datos y te escribimos por WhatsApp para activar tu prueba de 15 días.
+                  Déjanos tus datos y te escribimos por WhatsApp para activar tu prueba de 7 días.
                 </p>
               </div>
               <ol className="steps">
@@ -856,14 +814,11 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           text-wrap: balance;
         }
         .miapphn-landing .wrap {
-          max-width: 1180px;
+          width: 100%;
+          max-width: 1200px;
           margin: 0 auto;
-          padding: 0 16px;
-        }
-        @media (min-width: 640px) {
-          .miapphn-landing .wrap {
-            padding: 0 24px;
-          }
+          padding-inline: clamp(16px, 4vw, 32px);
+          box-sizing: border-box;
         }
         .miapphn-landing a {
           color: inherit;
@@ -962,104 +917,38 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           background: #34d399;
           box-shadow: 0 10px 30px -8px rgba(16, 185, 129, 0.6);
         }
-        /* Hero */
+        /* Hero — Centered & Balanced for Any Screen Without Image */
         .miapphn-landing .hero {
-          display: grid;
-          gap: 24px;
-          padding: 28px 16px 40px;
-          align-items: center;
-        }
-        @media (min-width: 640px) {
-          .miapphn-landing .hero {
-            gap: 32px;
-            padding: 40px 24px 56px;
-          }
-        }
-        @media (min-width: 1024px) {
-          .miapphn-landing .hero {
-            gap: 36px;
-            padding: 48px 24px 64px;
-          }
-        }
-        .miapphn-landing .hero-copy {
-          max-width: 780px;
-        }
-        .miapphn-landing .hero h1 {
-          font-size: clamp(1.75rem, 5.2vw, 3.5rem);
-          line-height: 1.08;
-          font-weight: 800;
-          max-width: 22ch;
-        }
-        .miapphn-landing .hero p {
-          color: var(--mut);
-          font-size: clamp(0.96rem, 2.2vw, 1.1rem);
-          line-height: 1.55;
-          max-width: 60ch;
-          margin: 14px 0 22px;
-        }
-        .miapphn-landing .cta {
           display: flex;
           flex-direction: column;
-          gap: 10px;
-        }
-        @media (min-width: 540px) {
-          .miapphn-landing .cta {
-            flex-direction: row;
-            flex-wrap: wrap;
-            gap: 12px;
-          }
-        }
-        .miapphn-landing .cta .btn {
-          width: 100%;
-        }
-        @media (min-width: 540px) {
-          .miapphn-landing .cta .btn {
-            width: auto;
-          }
-        }
-        .miapphn-landing .note {
-          margin-top: 14px;
-          color: var(--mut);
-          font-size: 0.88rem;
-        }
-        /* Hero Showcase Image Banner — Responsive for Mobile, Tablet & Desktop */
-        .miapphn-landing .hero-showcase {
-          width: 100%;
-        }
-        .miapphn-landing .hero-showcase-frame {
-          border-radius: 18px;
-          background: linear-gradient(180deg, rgba(16, 185, 129, 0.14), rgba(15, 23, 42, 0.92));
-          border: 1px solid rgba(16, 185, 129, 0.35);
-          box-shadow:
-            0 24px 60px -20px rgba(0, 0, 0, 0.75),
-            0 0 36px -12px rgba(16, 185, 129, 0.28);
-          overflow: hidden;
-        }
-        @media (min-width: 640px) {
-          .miapphn-landing .hero-showcase-frame {
-            border-radius: 22px;
-          }
-        }
-        .miapphn-landing .hero-showcase-bar {
-          display: flex;
           align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-          padding: 9px 12px;
-          background: rgba(10, 17, 32, 0.92);
-          border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+          justify-content: center;
+          text-align: center;
+          padding-top: clamp(28px, 5vw, 56px);
+          padding-bottom: clamp(24px, 4vw, 44px);
         }
-        @media (min-width: 640px) {
-          .miapphn-landing .hero-showcase-bar {
-            padding: 10px 16px;
-            gap: 12px;
-          }
-        }
-        .miapphn-landing .hero-showcase-dots {
+        .miapphn-landing .hero-copy {
+          width: 100%;
+          max-width: 860px;
+          margin: 0 auto;
           display: flex;
+          flex-direction: column;
+          align-items: center;
+          text-align: center;
+        }
+        .miapphn-landing .hero-pill {
+          display: inline-flex;
           align-items: center;
           gap: 8px;
-          min-width: 0;
+          padding: 6px 14px;
+          border-radius: 999px;
+          background: rgba(16, 185, 129, 0.12);
+          border: 1px solid rgba(16, 185, 129, 0.32);
+          color: #d1fae5;
+          font-size: clamp(0.74rem, 1.8vw, 0.84rem);
+          font-weight: 700;
+          margin-bottom: 18px;
+          max-width: 100%;
         }
         .miapphn-landing .dot-emerald {
           width: 8px;
@@ -1069,117 +958,70 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
           box-shadow: 0 0 10px var(--brand);
           flex-shrink: 0;
         }
-        .miapphn-landing .hero-showcase-badge {
-          font-size: 0.72rem;
-          font-weight: 700;
-          color: #e2e8f0;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        @media (min-width: 640px) {
-          .miapphn-landing .hero-showcase-badge {
-            font-size: 0.78rem;
-          }
-        }
-        .miapphn-landing .hero-showcase-live {
-          font-size: 0.62rem;
+        .miapphn-landing .hero h1 {
+          font-size: clamp(1.75rem, 4.8vw, 3.35rem);
+          line-height: 1.1;
           font-weight: 800;
-          letter-spacing: 0.05em;
-          color: var(--brand);
-          background: rgba(16, 185, 129, 0.12);
-          border: 1px solid rgba(16, 185, 129, 0.35);
-          padding: 3px 8px;
-          border-radius: 999px;
-          flex-shrink: 0;
-          white-space: nowrap;
+          max-width: 24ch;
+          margin: 0 auto;
         }
-        @media (min-width: 640px) {
-          .miapphn-landing .hero-showcase-live {
-            font-size: 0.68rem;
-            padding: 3px 10px;
-          }
-        }
-        /* Mobile/Tablet Scene Switcher Tabs (< 900px) */
-        .miapphn-landing .hero-showcase-mobile-tabs {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 4px;
-          padding: 6px;
-          background: rgba(15, 23, 42, 0.95);
-          border-bottom: 1px solid rgba(148, 163, 184, 0.14);
-        }
-        @media (min-width: 900px) {
-          .miapphn-landing .hero-showcase-mobile-tabs {
-            display: none;
-          }
-        }
-        .miapphn-landing .showcase-tab-btn {
-          min-height: 36px;
-          padding: 6px 4px;
-          border-radius: 10px;
-          border: 1px solid transparent;
-          background: transparent;
+        .miapphn-landing .hero p {
           color: var(--mut);
-          font: 700 0.7rem "Hanken Grotesk", sans-serif;
-          cursor: pointer;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          transition: all 0.2s ease;
+          font-size: clamp(0.96rem, 2.1vw, 1.12rem);
+          line-height: 1.6;
+          max-width: 62ch;
+          margin: 16px auto 24px;
         }
-        @media (min-width: 640px) {
-          .miapphn-landing .showcase-tab-btn {
-            font-size: 0.78rem;
-            padding: 7px 10px;
-          }
-        }
-        .miapphn-landing .showcase-tab-btn.active {
-          background: rgba(16, 185, 129, 0.16);
-          color: #34d399;
-          border-color: rgba(16, 185, 129, 0.4);
-        }
-        .miapphn-landing .hero-showcase-img-wrap {
+        .miapphn-landing .cta {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
           width: 100%;
-          background: #0a101d;
-          line-height: 0;
-          overflow: hidden;
-          position: relative;
         }
-        .miapphn-landing .hero-showcase-img {
+        @media (min-width: 540px) {
+          .miapphn-landing .cta {
+            flex-direction: row;
+            flex-wrap: wrap;
+            gap: 14px;
+            width: auto;
+          }
+        }
+        .miapphn-landing .cta .btn {
           width: 100%;
-          height: auto;
-          display: block;
-          transition: object-position 0.35s ease, transform 0.35s ease;
+          max-width: 320px;
         }
-        /* On Mobile & Tablet (< 900px), allow zoomed-in single scene focus OR full panoramic view */
-        @media (max-width: 899px) {
-          .miapphn-landing .hero-showcase-img-wrap.focus-left .hero-showcase-img,
-          .miapphn-landing .hero-showcase-img-wrap.focus-center .hero-showcase-img,
-          .miapphn-landing .hero-showcase-img-wrap.focus-right .hero-showcase-img {
-            height: 220px;
-            object-fit: cover;
-          }
-          .miapphn-landing .hero-showcase-img-wrap.focus-left .hero-showcase-img {
-            object-position: 8% center;
-          }
-          .miapphn-landing .hero-showcase-img-wrap.focus-center .hero-showcase-img {
-            object-position: 50% center;
-          }
-          .miapphn-landing .hero-showcase-img-wrap.focus-right .hero-showcase-img {
-            object-position: 92% center;
-          }
-          .miapphn-landing .hero-showcase-img-wrap.focus-all .hero-showcase-img {
-            height: auto;
-            object-fit: contain;
+        @media (min-width: 540px) {
+          .miapphn-landing .cta .btn {
+            width: auto;
+            max-width: none;
+            min-width: 210px;
           }
         }
-        @media (min-width: 600px) and (max-width: 899px) {
-          .miapphn-landing .hero-showcase-img-wrap.focus-left .hero-showcase-img,
-          .miapphn-landing .hero-showcase-img-wrap.focus-center .hero-showcase-img,
-          .miapphn-landing .hero-showcase-img-wrap.focus-right .hero-showcase-img {
-            height: 290px;
-          }
+        .miapphn-landing .note {
+          margin-top: 14px;
+          color: var(--mut);
+          font-size: 0.88rem;
+        }
+        .miapphn-landing .hero-highlights {
+          margin-top: 24px;
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: center;
+          gap: 10px 18px;
+          padding-top: 20px;
+          border-top: 1px solid rgba(148, 163, 184, 0.14);
+          width: 100%;
+        }
+        .miapphn-landing .hero-highlight-item {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          font-size: clamp(0.8rem, 1.8vw, 0.88rem);
+          font-weight: 600;
+          color: #cbd5e1;
         }
         /* Planes Section — 1 col on mobile, 2x2 grid on tablet, 4 cols on desktop */
         .miapphn-landing section {
@@ -1187,16 +1029,21 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         }
         @media (min-width: 768px) {
           .miapphn-landing section {
-            padding: 24px 0 80px;
+            padding: 28px 0 80px;
           }
         }
         .miapphn-landing .head {
           max-width: 60ch;
           margin-bottom: 28px;
         }
+        .miapphn-landing .head.head-centered {
+          margin-left: auto;
+          margin-right: auto;
+          text-align: center;
+        }
         @media (min-width: 768px) {
           .miapphn-landing .head {
-            margin-bottom: 40px;
+            margin-bottom: 42px;
           }
         }
         .miapphn-landing .head h2 {
