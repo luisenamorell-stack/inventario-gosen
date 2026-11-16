@@ -2094,45 +2094,49 @@ export const App: React.FC = () => {
       baseInventory.forEach((p) => workingByCode.set(p.code.trim().toLowerCase(), p));
       const updatedByCode = new Map<string, Product>();
 
-      for (const soldItem of saleData.items || []) {
-        const key = (soldItem.code || '').trim().toLowerCase();
-        if (!key) continue;
-        const currentProd =
-          workingByCode.get(key) ||
-          baseInventory.find((p) => p.id && soldItem.productId && p.id === soldItem.productId);
-        if (!currentProd) continue;
+      if (!saleData.skipInventoryDeduction) {
+        for (const soldItem of saleData.items || []) {
+          const key = (soldItem.code || '').trim().toLowerCase();
+          if (!key) continue;
+          const currentProd =
+            workingByCode.get(key) ||
+            baseInventory.find((p) => p.id && soldItem.productId && p.id === soldItem.productId);
+          if (!currentProd) continue;
 
-        const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
-          currentProd,
-          -(Number(soldItem.quantity) || 1),
-          saleData.warehouseId,
-          warehousesData.warehouses
-        );
-        const updatedProd: Product = {
-          ...currentProd,
-          stock: newStock,
-          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
-        };
-        workingByCode.set(key, updatedProd);
-        updatedByCode.set(key, updatedProd);
+          const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+            currentProd,
+            -(Number(soldItem.quantity) || 1),
+            saleData.warehouseId,
+            warehousesData.warehouses
+          );
+          const updatedProd: Product = {
+            ...currentProd,
+            stock: newStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          };
+          workingByCode.set(key, updatedProd);
+          updatedByCode.set(key, updatedProd);
+        }
       }
 
       const recorded = await recordSaleInFirestore(payload, baseInventory, activeCompanyId);
 
-      updatedByCode.forEach((updatedProd) => {
-        recordLocalProductSave(updatedProd, updatedProd.code, activeCompanyId);
-        pushProductSaveToBackendHub(updatedProd, updatedProd.code, activeCompanyId).catch(() => {});
-      });
-
-      // Update local inventory stock & warehouseStocks & cache idempotently
-      setInventory((prev) => {
-        const nextInv = prev.map((prod) => {
-          const key = prod.code.trim().toLowerCase();
-          return updatedByCode.get(key) || prod;
+      if (updatedByCode.size > 0) {
+        updatedByCode.forEach((updatedProd) => {
+          recordLocalProductSave(updatedProd, updatedProd.code, activeCompanyId);
+          pushProductSaveToBackendHub(updatedProd, updatedProd.code, activeCompanyId).catch(() => {});
         });
-        setCachedInventory(nextInv, Date.now(), activeCompanyId);
-        return nextInv;
-      });
+
+        // Update local inventory stock & warehouseStocks & cache idempotently
+        setInventory((prev) => {
+          const nextInv = prev.map((prod) => {
+            const key = prod.code.trim().toLowerCase();
+            return updatedByCode.get(key) || prod;
+          });
+          setCachedInventory(nextInv, Date.now(), activeCompanyId);
+          return nextInv;
+        });
+      }
 
       // Prepend sale to local sales state & cache (deduplicated with real-time listener)
       setSales((prev) => {
@@ -2160,50 +2164,55 @@ export const App: React.FC = () => {
   const handleCancelSale = async (sale: SaleRecord) => {
     setIsSyncing(true);
     try {
+      // Pre-compute restored stock unless sale skipped inventory deduction (e.g. pre-app historical account)
       const baseInventory = inventory;
       const workingByCode = new Map<string, Product>();
       baseInventory.forEach((p) => workingByCode.set(p.code.trim().toLowerCase(), p));
       const updatedByCode = new Map<string, Product>();
 
-      for (const soldItem of sale.items || []) {
-        const key = (soldItem.code || '').trim().toLowerCase();
-        if (!key) continue;
-        const currentProd =
-          workingByCode.get(key) ||
-          baseInventory.find((p) => p.id && soldItem.productId && p.id === soldItem.productId);
-        if (!currentProd) continue;
+      if (!sale.skipInventoryDeduction) {
+        for (const soldItem of sale.items || []) {
+          const key = (soldItem.code || '').trim().toLowerCase();
+          if (!key) continue;
+          const currentProd =
+            workingByCode.get(key) ||
+            baseInventory.find((p) => p.id && soldItem.productId && p.id === soldItem.productId);
+          if (!currentProd) continue;
 
-        const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
-          currentProd,
-          Number(soldItem.quantity) || 1,
-          sale.warehouseId,
-          warehousesData.warehouses
-        );
-        const updatedProd: Product = {
-          ...currentProd,
-          stock: newStock,
-          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
-        };
-        workingByCode.set(key, updatedProd);
-        updatedByCode.set(key, updatedProd);
+          const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+            currentProd,
+            Number(soldItem.quantity) || 1,
+            sale.warehouseId,
+            warehousesData.warehouses
+          );
+          const updatedProd: Product = {
+            ...currentProd,
+            stock: newStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          };
+          workingByCode.set(key, updatedProd);
+          updatedByCode.set(key, updatedProd);
+        }
       }
 
       await cancelSaleInFirestore(sale, baseInventory, activeCompanyId);
 
-      updatedByCode.forEach((updatedProd) => {
-        recordLocalProductSave(updatedProd, updatedProd.code, activeCompanyId);
-        pushProductSaveToBackendHub(updatedProd, updatedProd.code, activeCompanyId).catch(() => {});
-      });
-
-      // Restore local inventory stock & warehouseStocks & cache idempotently
-      setInventory((prev) => {
-        const nextInv = prev.map((prod) => {
-          const key = prod.code.trim().toLowerCase();
-          return updatedByCode.get(key) || prod;
+      if (updatedByCode.size > 0) {
+        updatedByCode.forEach((updatedProd) => {
+          recordLocalProductSave(updatedProd, updatedProd.code, activeCompanyId);
+          pushProductSaveToBackendHub(updatedProd, updatedProd.code, activeCompanyId).catch(() => {});
         });
-        setCachedInventory(nextInv, Date.now(), activeCompanyId);
-        return nextInv;
-      });
+
+        // Restore local inventory stock & warehouseStocks & cache idempotently
+        setInventory((prev) => {
+          const nextInv = prev.map((prod) => {
+            const key = prod.code.trim().toLowerCase();
+            return updatedByCode.get(key) || prod;
+          });
+          setCachedInventory(nextInv, Date.now(), activeCompanyId);
+          return nextInv;
+        });
+      }
 
       setSales((prev) => {
         const nextSales = prev.map((s) => (s.id === sale.id ? { ...s, status: 'cancelled' as const } : s));

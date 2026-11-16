@@ -449,6 +449,7 @@ export interface CreditPaymentAbone {
   date: string;
   receivedBy: string;
   notes?: string;
+  isHistoricalPreApp?: boolean;
 }
 
 export type OnlineSaleChannel =
@@ -558,6 +559,8 @@ export interface SaleRecord {
   creditDueDate?: string;
   creditPayments?: CreditPaymentAbone[];
   creditContract?: CreditContractData;
+  isHistoricalPreApp?: boolean;
+  skipInventoryDeduction?: boolean;
   warrantyInfo?: SaleWarrantyInfo;
   customerName?: string;
   customerPhone?: string;

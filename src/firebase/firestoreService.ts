@@ -3508,12 +3508,15 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
             date: String(cp.date || ''),
             receivedBy: String(cp.receivedBy || 'Administrador'),
             notes: cp.notes ? String(cp.notes) : '',
+            ...(cp.isHistoricalPreApp ? { isHistoricalPreApp: true } : {}),
           }))
         : [],
       creditContract:
         data.creditContract && typeof data.creditContract === 'object'
           ? data.creditContract
           : undefined,
+      ...(data.isHistoricalPreApp ? { isHistoricalPreApp: true } : {}),
+      ...(data.skipInventoryDeduction ? { skipInventoryDeduction: true } : {}),
       warrantyInfo:
         data.warrantyInfo && typeof data.warrantyInfo === 'object'
           ? {
@@ -3906,6 +3909,8 @@ export async function recordSaleInFirestore(
     creditDueDate: String(saleData.creditDueDate || '').trim().slice(0, 50),
     creditPayments: Array.isArray(saleData.creditPayments) ? saleData.creditPayments : [],
     creditContract: saleData.creditContract ? saleData.creditContract : undefined,
+    isHistoricalPreApp: saleData.isHistoricalPreApp ? true : undefined,
+    skipInventoryDeduction: saleData.skipInventoryDeduction ? true : undefined,
     warrantyInfo: saleData.warrantyInfo ? saleData.warrantyInfo : undefined,
     customerName: String(saleData.customerName || 'Consumidor Final').trim().slice(0, 200),
     customerPhone: String(saleData.customerPhone || '').trim().slice(0, 50),
@@ -3968,68 +3973,77 @@ export async function recordSaleInFirestore(
     }
   }
 
-  // 2. Deduct stock in inventory (and in the chosen warehouse) using setDoc(..., { merge: true })
-  try {
-    const storeWhData = getCachedStoreWarehouses(slug);
-    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
-    const invBatch = writeBatch(db);
-    const qtyByCode = new Map<string, { qty: number; item: SaleRecord['items'][number] }>();
+  // 2. Deduct stock in inventory (and in the chosen warehouse) unless skipped for pre-app historical sales
+  if (!saleData.skipInventoryDeduction) {
+    try {
+      const storeWhData = getCachedStoreWarehouses(slug);
+      const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
+      const invBatch = writeBatch(db);
+      const qtyByCode = new Map<string, { qty: number; item: SaleRecord['items'][number] }>();
 
-    for (const item of saleData.items || []) {
-      const codeKey = item.code.trim().toLowerCase();
-      if (!codeKey) continue;
-      const prev = qtyByCode.get(codeKey);
-      if (prev) {
-        prev.qty += Number(item.quantity) || 1;
-      } else {
-        qtyByCode.set(codeKey, { qty: Number(item.quantity) || 1, item });
+      for (const item of saleData.items || []) {
+        const codeKey = item.code.trim().toLowerCase();
+        if (!codeKey) continue;
+        const prev = qtyByCode.get(codeKey);
+        if (prev) {
+          prev.qty += Number(item.quantity) || 1;
+        } else {
+          qtyByCode.set(codeKey, { qty: Number(item.quantity) || 1, item });
+        }
       }
-    }
 
-    for (const [, { qty, item }] of qtyByCode.entries()) {
-      const currentProd = currentInventory.find(
-        (p) =>
-          p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
-          (item.productId && p.id === item.productId)
-      );
-      const canonicalDocId = getScopedDocId(currentProd?.code || item.code, slug);
-      const productRef = doc(db, 'inventory', canonicalDocId);
+      let hasInventoryUpdates = false;
+      for (const [, { qty, item }] of qtyByCode.entries()) {
+        const currentProd = currentInventory.find(
+          (p) =>
+            p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
+            (item.productId && p.id === item.productId)
+        );
+        if (!currentProd && item.code.trim().toUpperCase() === 'CREDITO') {
+          continue;
+        }
+        hasInventoryUpdates = true;
+        const canonicalDocId = getScopedDocId(currentProd?.code || item.code, slug);
+        const productRef = doc(db, 'inventory', canonicalDocId);
 
-      const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
-        currentProd,
-        -qty,
-        saleData.warehouseId,
-        activeWhList
-      );
+        const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+          currentProd,
+          -qty,
+          saleData.warehouseId,
+          activeWhList
+        );
 
-      const productPayload: Record<string, any> = {
-        companyId: slug,
-        code: (currentProd?.code || item.code).trim().slice(0, 100),
-        name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
-        category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
-        price: Number(currentProd?.price ?? item.originalPrice ?? item.price) || 0,
-        cost: Number(currentProd?.cost ?? item.cost) || 0,
-        stock: newStock,
-        ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
-      };
+        const productPayload: Record<string, any> = {
+          companyId: slug,
+          code: (currentProd?.code || item.code).trim().slice(0, 100),
+          name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
+          category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
+          price: Number(currentProd?.price ?? item.originalPrice ?? item.price) || 0,
+          cost: Number(currentProd?.cost ?? item.cost) || 0,
+          stock: newStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+        };
 
-      invBatch.set(productRef, productPayload, { merge: true });
+        invBatch.set(productRef, productPayload, { merge: true });
 
-      // If the product was loaded from Firestore under a different non-numeric doc ID, keep it updated too
-      if (
-        currentProd?.id &&
-        currentProd.id !== canonicalDocId &&
-        !/^\d+$/.test(currentProd.id)
-      ) {
-        const altRef = doc(db, 'inventory', currentProd.id);
-        invBatch.set(altRef, productPayload, { merge: true });
+        // If the product was loaded from Firestore under a different non-numeric doc ID, keep it updated too
+        if (
+          currentProd?.id &&
+          currentProd.id !== canonicalDocId &&
+          !/^\d+$/.test(currentProd.id)
+        ) {
+          const altRef = doc(db, 'inventory', currentProd.id);
+          invBatch.set(altRef, productPayload, { merge: true });
+        }
       }
-    }
 
-    await touchInventorySyncStamp(invBatch, slug);
-    await invBatch.commit();
-  } catch (invError) {
-    console.warn('Warning updating inventory stock after sale:', invError);
+      if (hasInventoryUpdates) {
+        await touchInventorySyncStamp(invBatch, slug);
+        await invBatch.commit();
+      }
+    } catch (invError) {
+      console.warn('Warning updating inventory stock after sale:', invError);
+    }
   }
 
   return {
@@ -4055,6 +4069,7 @@ export async function recordCreditPaymentInFirestore(
     date: String(newAbone.date || new Date().toLocaleString()),
     receivedBy: String(newAbone.receivedBy || 'Administrador'),
     notes: newAbone.notes ? String(newAbone.notes).trim() : '',
+    ...(newAbone.isHistoricalPreApp ? { isHistoricalPreApp: true } : {}),
   };
   const existingPayments = Array.isArray(sale.creditPayments)
     ? sale.creditPayments.map((cp) => ({
@@ -4067,6 +4082,7 @@ export async function recordCreditPaymentInFirestore(
         date: String(cp.date || ''),
         receivedBy: String(cp.receivedBy || 'Administrador'),
         notes: cp.notes ? String(cp.notes).trim() : '',
+        ...(cp.isHistoricalPreApp ? { isHistoricalPreApp: true } : {}),
       }))
     : [];
   const updatedPayments = [...existingPayments, cleanAbone];
@@ -4362,46 +4378,55 @@ export async function cancelSaleInFirestore(
     }
   }
 
-  try {
-    const storeWhData = getCachedStoreWarehouses(slug);
-    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
-    const batch = writeBatch(db);
-    for (const item of sale.items || []) {
-      const currentProd = currentInventory.find(
-        (p) =>
-          p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
-          p.id === item.productId
-      );
-      const productDocId = getScopedDocId(currentProd?.code || item.code, slug);
-      const productRef = doc(db, 'inventory', productDocId);
+  if (!sale.skipInventoryDeduction) {
+    try {
+      const storeWhData = getCachedStoreWarehouses(slug);
+      const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
+      const batch = writeBatch(db);
+      let hasRestoredItems = false;
+      for (const item of sale.items || []) {
+        const currentProd = currentInventory.find(
+          (p) =>
+            p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
+            p.id === item.productId
+        );
+        if (!currentProd && item.code.trim().toUpperCase() === 'CREDITO') {
+          continue;
+        }
+        hasRestoredItems = true;
+        const productDocId = getScopedDocId(currentProd?.code || item.code, slug);
+        const productRef = doc(db, 'inventory', productDocId);
 
-      const { newStock: restoredStock, newWarehouseStocks } = applyWarehouseStockDelta(
-        currentProd,
-        Number(item.quantity) || 1,
-        sale.warehouseId,
-        activeWhList
-      );
+        const { newStock: restoredStock, newWarehouseStocks } = applyWarehouseStockDelta(
+          currentProd,
+          Number(item.quantity) || 1,
+          sale.warehouseId,
+          activeWhList
+        );
 
-      batch.set(
-        productRef,
-        {
-          companyId: slug,
-          code: (currentProd?.code || item.code).trim().slice(0, 100),
-          name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
-          category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
-          price: Number(currentProd?.price ?? item.price) || 0,
-          cost: Number(currentProd?.cost ?? item.cost) || 0,
-          stock: restoredStock,
-          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
-        },
-        { merge: true }
-      );
+        batch.set(
+          productRef,
+          {
+            companyId: slug,
+            code: (currentProd?.code || item.code).trim().slice(0, 100),
+            name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
+            category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
+            price: Number(currentProd?.price ?? item.price) || 0,
+            cost: Number(currentProd?.cost ?? item.cost) || 0,
+            stock: restoredStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          },
+          { merge: true }
+        );
+      }
+
+      if (hasRestoredItems) {
+        await touchInventorySyncStamp(batch, slug);
+        await batch.commit();
+      }
+    } catch (invError) {
+      console.warn('Warning restoring stock on sale cancel:', invError);
     }
-
-    await touchInventorySyncStamp(batch, slug);
-    await batch.commit();
-  } catch (invError) {
-    console.warn('Warning restoring stock on sale cancel:', invError);
   }
 }
 

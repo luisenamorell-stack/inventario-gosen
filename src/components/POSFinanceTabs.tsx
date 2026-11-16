@@ -179,8 +179,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     sales.forEach((s) => {
       if (s.status !== 'completed') return;
 
-      // Sales created during this shift
-      if (s.timestamp >= activeShift.openedAt) {
+      // Sales created during this shift (exclude pre-app historical accounts)
+      if (!s.isHistoricalPreApp && s.timestamp >= activeShift.openedAt) {
         salesCount += 1;
         if (s.paymentMethod === 'cash') {
           cashSales += Number(s.total) || 0;
@@ -198,10 +198,10 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         }
       }
 
-      // Credit abonos received in cash during this shift (even from older credit sales)
+      // Credit abonos received in cash during this shift (exclude pre-app historical abonos)
       if (Array.isArray(s.creditPayments)) {
         s.creditPayments.forEach((cp) => {
-          if (cp.timestamp >= activeShift.openedAt && cp.paymentMethod === 'cash') {
+          if (!cp.isHistoricalPreApp && cp.timestamp >= activeShift.openedAt && cp.paymentMethod === 'cash') {
             creditAbonosCash += Number(cp.amount) || 0;
           }
         });
@@ -397,6 +397,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [aboneMethod, setAboneMethod] = useState<'cash' | 'transfer' | 'card'>('cash');
   const [aboneNotes, setAboneNotes] = useState<string>('');
   const [aboneNextDate, setAboneNextDate] = useState<string>('');
+  const [aboneIsHistorical, setAboneIsHistorical] = useState<boolean>(false);
+  const [aboneCustomDate, setAboneCustomDate] = useState<string>('');
   const [isSubmittingAbone, setIsSubmittingAbone] = useState<boolean>(false);
 
   // Control de Costo, Alerta de Cobro y Registro de Avisos Modal State
@@ -513,8 +515,30 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [collectorAlertNextDate, setCollectorAlertNextDate] = useState<string>('');
   const [isSendingCollectorAlert, setIsSendingCollectorAlert] = useState<boolean>(false);
 
-  // Direct Create New Credit Debt Modal (from Cuentas por Cobrar)
+  // Direct Create New Credit Debt Modal (from Cuentas por Cobrar — Nuevo o Histórico con Abonos Previos)
   const [showCreateDebtModal, setShowCreateDebtModal] = useState<boolean>(false);
+  const [newDebtMode, setNewDebtMode] = useState<'new' | 'historical'>('new');
+  const [newDebtOriginalSaleDate, setNewDebtOriginalSaleDate] = useState<string>('');
+  const [newDebtCustomSaleNumber, setNewDebtCustomSaleNumber] = useState<string>('');
+  const [newDebtCustomCost, setNewDebtCustomCost] = useState<string>('');
+  const [newDebtDeductStock, setNewDebtDeductStock] = useState<boolean>(false);
+  const [newDebtHistoricalAbonosMode, setNewDebtHistoricalAbonosMode] = useState<
+    'detailed' | 'summary'
+  >('detailed');
+  const [newDebtHistoricalAbonos, setNewDebtHistoricalAbonos] = useState<
+    Array<{
+      id: string;
+      date: string;
+      amount: string;
+      paymentMethod: 'cash' | 'transfer' | 'card';
+      notes: string;
+    }>
+  >([{ id: 'hist_1', date: '', amount: '', paymentMethod: 'cash', notes: '' }]);
+  const [newDebtHistoricalSummaryTotal, setNewDebtHistoricalSummaryTotal] = useState<string>('');
+  const [newDebtHistoricalSummaryDate, setNewDebtHistoricalSummaryDate] = useState<string>('');
+  const [newDebtHistoricalSummaryNotes, setNewDebtHistoricalSummaryNotes] = useState<string>(
+    'Abonos acumulados antes de usar la app'
+  );
   const [newDebtCustomerName, setNewDebtCustomerName] = useState<string>('');
   const [newDebtCustomerPhone, setNewDebtCustomerPhone] = useState<string>('');
   const [newDebtCustomerAddress, setNewDebtCustomerAddress] = useState<string>('');
@@ -905,6 +929,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     );
     setAboneMethod('cash');
     setAboneNotes('');
+    setAboneIsHistorical(false);
+    setAboneCustomDate(addDaysToIso(-7));
     if (routeCollectorConfig.autoCalculateNextDateOnAbone !== false) {
       const nextAutoDate = calculateNextDateByFrequency(
         analytics.controlMeta?.paymentFrequency,
@@ -1270,6 +1296,94 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     );
   };
 
+  const parseIsoDateToNoonMs = (isoStr: string, fallbackDaysAgo = 0): number => {
+    if (isoStr && /^\d{4}-\d{2}-\d{2}$/.test(isoStr.trim())) {
+      const parsed = new Date(`${isoStr.trim()}T12:00:00`).getTime();
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+    return Date.now() - fallbackDaysAgo * 24 * 60 * 60 * 1000;
+  };
+
+  const formatHistoricalDateEs = (ms: number): string => {
+    return new Date(ms).toLocaleDateString('es-HN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
+  const openCreateDebtModal = (mode: 'new' | 'historical') => {
+    const defaultFreq = routeCollectorConfig.defaultPaymentFrequency || 'weekly';
+    setNewDebtMode(mode);
+    setNewDebtOriginalSaleDate(addDaysToIso(-30));
+    setNewDebtCustomSaleNumber('');
+    setNewDebtCustomCost('');
+    setNewDebtDeductStock(mode === 'new');
+    setNewDebtHistoricalAbonosMode('detailed');
+    setNewDebtHistoricalAbonos([
+      {
+        id: `hist_${Date.now()}`,
+        date: addDaysToIso(-15),
+        amount: '',
+        paymentMethod: 'cash',
+        notes: '',
+      },
+    ]);
+    setNewDebtHistoricalSummaryTotal('');
+    setNewDebtHistoricalSummaryDate(addDaysToIso(-7));
+    setNewDebtHistoricalSummaryNotes('Abonos acumulados antes de usar la app');
+    setNewDebtInitialAbono('0');
+    setNewDebtFrequency(defaultFreq);
+    setNewDebtNextPaymentDate(calculateNextDateByFrequency(defaultFreq));
+    setShowCreateDebtModal(true);
+  };
+
+  const createDebtLiveBreakdown = useMemo(() => {
+    const totalAmt = Math.max(0, parseFloat(newDebtTotalAmount) || 0);
+    const primaAmt = Math.max(0, parseFloat(newDebtInitialAbono) || 0);
+    let priorAbonosAmt = 0;
+    let priorAbonosCount = 0;
+
+    if (newDebtMode === 'historical') {
+      if (newDebtHistoricalAbonosMode === 'detailed') {
+        newDebtHistoricalAbonos.forEach((row) => {
+          const val = parseFloat(row.amount);
+          if (!Number.isNaN(val) && val > 0) {
+            priorAbonosAmt += val;
+            priorAbonosCount += 1;
+          }
+        });
+      } else {
+        const sumVal = parseFloat(newDebtHistoricalSummaryTotal);
+        if (!Number.isNaN(sumVal) && sumVal > 0) {
+          priorAbonosAmt = sumVal;
+          priorAbonosCount = 1;
+        }
+      }
+    }
+
+    const totalPaidSoFar = primaAmt + priorAbonosAmt;
+    const balanceDue = Math.max(0, Number((totalAmt - totalPaidSoFar).toFixed(2)));
+    const totalRecordsCount = (primaAmt > 0 ? 1 : 0) + priorAbonosCount;
+
+    return {
+      totalAmt,
+      primaAmt,
+      priorAbonosAmt,
+      priorAbonosCount,
+      totalPaidSoFar,
+      balanceDue,
+      totalRecordsCount,
+    };
+  }, [
+    newDebtTotalAmount,
+    newDebtInitialAbono,
+    newDebtMode,
+    newDebtHistoricalAbonosMode,
+    newDebtHistoricalAbonos,
+    newDebtHistoricalSummaryTotal,
+  ]);
+
   const handleCreateDirectCreditDebt = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!onRecordSale) {
@@ -1286,61 +1400,134 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       showToast('Ingresa el monto total de la deuda / artículo al crédito.', 'warning');
       return;
     }
-    const initAbono = Math.max(0, Math.min(totalAmt, parseFloat(newDebtInitialAbono) || 0));
-    const balance = Math.max(0, totalAmt - initAbono);
-    if (balance <= 0.01) {
-      showToast('El saldo pendiente a cobrar debe ser mayor a L. 0.00.', 'warning');
+
+    const isHistorical = newDebtMode === 'historical';
+    const primaAmt = Math.max(0, parseFloat(newDebtInitialAbono) || 0);
+
+    const now = new Date();
+    const saleTs = isHistorical
+      ? parseIsoDateToNoonMs(newDebtOriginalSaleDate, 30)
+      : now.getTime();
+    const saleDateFormatted = isHistorical
+      ? formatHistoricalDateEs(saleTs)
+      : now.toLocaleString('es-HN', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+
+    const initialPayments: CreditPaymentAbone[] = [];
+
+    if (primaAmt > 0) {
+      initialPayments.push({
+        id: `abn_init_${Date.now()}`,
+        amount: primaAmt,
+        paymentMethod: 'cash',
+        timestamp: saleTs,
+        date: saleDateFormatted,
+        receivedBy: currentUserName,
+        notes: isHistorical
+          ? 'Prima / Enganche inicial (anterior a la app)'
+          : 'Prima / Abono inicial al crear cuenta por cobrar',
+        ...(isHistorical ? { isHistoricalPreApp: true } : {}),
+      });
+    }
+
+    if (isHistorical) {
+      if (newDebtHistoricalAbonosMode === 'detailed') {
+        newDebtHistoricalAbonos.forEach((row, idx) => {
+          const rowAmt = parseFloat(row.amount);
+          if (Number.isNaN(rowAmt) || rowAmt <= 0) return;
+          const rowTs = parseIsoDateToNoonMs(row.date || newDebtOriginalSaleDate, Math.max(1, 20 - idx));
+          initialPayments.push({
+            id: `abn_hist_${Date.now()}_${idx}`,
+            amount: Number(rowAmt.toFixed(2)),
+            paymentMethod: row.paymentMethod || 'cash',
+            timestamp: rowTs + idx,
+            date: formatHistoricalDateEs(rowTs),
+            receivedBy: currentUserName,
+            notes: row.notes.trim() || `Abono previo #${idx + 1} (antes de la app)`,
+            isHistoricalPreApp: true,
+          });
+        });
+      } else {
+        const summaryAmt = parseFloat(newDebtHistoricalSummaryTotal);
+        if (!Number.isNaN(summaryAmt) && summaryAmt > 0) {
+          const summaryTs = parseIsoDateToNoonMs(
+            newDebtHistoricalSummaryDate || newDebtOriginalSaleDate,
+            7
+          );
+          initialPayments.push({
+            id: `abn_hist_sum_${Date.now()}`,
+            amount: Number(summaryAmt.toFixed(2)),
+            paymentMethod: 'cash',
+            timestamp: summaryTs,
+            date: formatHistoricalDateEs(summaryTs),
+            receivedBy: currentUserName,
+            notes:
+              newDebtHistoricalSummaryNotes.trim() || 'Abonos acumulados antes de usar la app',
+            isHistoricalPreApp: true,
+          });
+        }
+      }
+      // Sort historical payments chronologically
+      initialPayments.sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    const totalPaidAmount = Number(
+      initialPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0).toFixed(2)
+    );
+    if (totalPaidAmount >= totalAmt - 0.01) {
+      showToast(
+        'La suma de prima y abonos previos iguala o supera el valor total. El saldo pendiente debe ser mayor a L. 0.00.',
+        'warning'
+      );
       return;
     }
+    const balance = Number(Math.max(0, totalAmt - totalPaidAmount).toFixed(2));
 
     const matchedProduct = inventory.find((p) => p.id === newDebtProductId);
     const articleTitle =
       newDebtCustomItemName.trim() ||
       (matchedProduct ? matchedProduct.name : 'Artículo Financiado al Crédito');
 
+    const parsedCostVal = parseFloat(newDebtCustomCost);
+    const effectiveCost =
+      !Number.isNaN(parsedCostVal) && parsedCostVal >= 0
+        ? parsedCostVal
+        : matchedProduct
+        ? Number(matchedProduct.cost) || 0
+        : 0;
+
     setIsCreatingDebt(true);
     try {
-      const now = new Date();
-      const dateStr = now.toLocaleString('es-HN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
       const saleId = `sale_crd_${Date.now()}`;
-      const saleNumber = `CRD-${String(Date.now()).slice(-6)}`;
-
-      const initialPayments: CreditPaymentAbone[] =
-        initAbono > 0
-          ? [
-              {
-                id: `abn_init_${Date.now()}`,
-                amount: initAbono,
-                paymentMethod: 'cash',
-                timestamp: now.getTime(),
-                date: dateStr,
-                receivedBy: currentUserName,
-                notes: 'Prima / Abono inicial al crear cuenta por cobrar',
-              },
-            ]
-          : [];
+      const cleanCustomNum = newDebtCustomSaleNumber.trim().slice(0, 40);
+      const saleNumber =
+        cleanCustomNum ||
+        (isHistorical
+          ? `CRD-ANT-${String(Date.now()).slice(-5)}`
+          : `CRD-${String(Date.now()).slice(-6)}`);
 
       const effectiveFirstDate =
         newDebtNextPaymentDate.trim() || calculateNextDateByFrequency(newDebtFrequency);
 
+      const shouldSkipStock = isHistorical ? !newDebtDeductStock : !matchedProduct || !newDebtDeductStock;
+
       const newCreditSaleData: Omit<SaleRecord, 'id'> = {
         saleNumber,
         companyId: storeSettings.companyId || 'gosen',
-        date: dateStr,
-        timestamp: now.getTime(),
+        date: saleDateFormatted,
+        timestamp: saleTs,
         items: [
           {
             productId: matchedProduct?.id || `custom_${Date.now()}`,
             code: matchedProduct?.code || 'CREDITO',
             name: articleTitle,
             category: matchedProduct?.category || 'Crédito',
-            cost: matchedProduct ? Number(matchedProduct.cost) || 0 : 0,
+            cost: effectiveCost,
             price: totalAmt,
             creditPrice: totalAmt,
             unitDiscount: 0,
@@ -1357,18 +1544,24 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         customerName: cleanCust,
         customerPhone: newDebtCustomerPhone.trim() || undefined,
         customerAddress: newDebtCustomerAddress.trim() || undefined,
-        notes: newDebtNotes.trim() || `Cuenta por cobrar (${newDebtFrequency})`,
+        notes:
+          newDebtNotes.trim() ||
+          (isHistorical
+            ? `Cuenta histórica ingresada con ${initialPayments.length} abono(s) previo(s) (${newDebtFrequency})`
+            : `Cuenta por cobrar (${newDebtFrequency})`),
         status: 'completed',
         cashier: currentUserName,
         cashierUserId: userSession?.userId,
         cashierUsername: userSession?.username,
         cashierRole: userSession?.role || 'admin',
-        amountPaid: initAbono,
+        amountPaid: totalPaidAmount,
         change: 0,
         balanceDue: balance,
         creditDueDate: effectiveFirstDate,
         creditStatus: 'pending',
         creditPayments: initialPayments,
+        ...(isHistorical ? { isHistoricalPreApp: true } : {}),
+        ...(shouldSkipStock ? { skipInventoryDeduction: true } : {}),
       };
 
       const recordedResult = await onRecordSale(newCreditSaleData);
@@ -1386,7 +1579,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
       const newControlMeta: CreditAccountControlMeta = {
         saleId: recordedSaleId,
-        customTotalCost: matchedProduct ? Number(matchedProduct.cost) || 0 : 0,
+        customTotalCost: effectiveCost,
         nextPaymentDate: effectiveFirstDate,
         paymentFrequency: newDebtFrequency,
         installmentAmount:
@@ -1457,7 +1650,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       });
 
       showToast(
-        `¡Cuenta por cobrar creada para ${cleanCust}! Saldo: L. ${balance.toFixed(2)} • Próximo cobro: ${effectiveFirstDate}`,
+        isHistorical
+          ? `¡Cuenta histórica de ${cleanCust} ingresada! Ya abonado: L. ${totalPaidAmount.toFixed(2)} • Saldo pendiente: L. ${balance.toFixed(2)}`
+          : `¡Cuenta por cobrar creada para ${cleanCust}! Saldo: L. ${balance.toFixed(2)} • Próximo cobro: ${effectiveFirstDate}`,
         'success'
       );
       setShowCreateDebtModal(false);
@@ -1468,9 +1663,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       setNewDebtProductId('');
       setNewDebtCustomItemName('');
       setNewDebtTotalAmount('');
+      setNewDebtCustomCost('');
+      setNewDebtCustomSaleNumber('');
       setNewDebtInitialAbono('0');
       setNewDebtInstallmentAmount('');
       setNewDebtNotes('');
+      setNewDebtHistoricalSummaryTotal('');
     } finally {
       setIsCreatingDebt(false);
     }
@@ -1673,21 +1871,30 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     setIsSubmittingAbone(true);
     try {
       const now = new Date();
-      const dateStr = now.toLocaleString('es-HN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+      const useHistoricalAbone = isAdminSession && aboneIsHistorical;
+      const aboneTs = useHistoricalAbone
+        ? parseIsoDateToNoonMs(aboneCustomDate, 7)
+        : now.getTime();
+      const dateStr = useHistoricalAbone
+        ? formatHistoricalDateEs(aboneTs)
+        : now.toLocaleString('es-HN', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
       const newAbone: CreditPaymentAbone = {
         id: `abn_${Date.now()}`,
         amount: Math.min(currentBal, amt),
         paymentMethod: aboneMethod,
-        timestamp: now.getTime(),
+        timestamp: aboneTs,
         date: dateStr,
         receivedBy: currentUserName,
-        notes: aboneNotes.trim() || '',
+        notes:
+          aboneNotes.trim() ||
+          (useHistoricalAbone ? 'Abono histórico anterior a la app' : ''),
+        ...(useHistoricalAbone ? { isHistoricalPreApp: true } : {}),
       };
 
       const analyticsBefore = getSaleCreditAnalytics(selectedSaleForAbone);
@@ -1701,6 +1908,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       const resolvedNextPaymentDate =
         newRemainingBalance <= 0.01
           ? undefined
+          : useHistoricalAbone
+          ? aboneNextDate.trim() || analyticsBefore.effectiveNextDate || existingMeta.nextPaymentDate
           : aboneNextDate.trim() ||
             (routeCollectorConfig.autoCalculateNextDateOnAbone !== false
               ? calculateNextDateByFrequency(
@@ -1766,12 +1975,13 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       setAboneAmount('');
       setAboneNotes('');
       setAboneNextDate('');
+      setAboneIsHistorical(false);
       showToast(
         newRemainingBalance <= 0.01
           ? `¡Cuenta de ${updatedSale.customerName} liquidada en su totalidad!`
           : crossedIntoProfit
           ? `Abono registrado. ¡Precio Costo (L. ${analyticsBefore.totalCost.toFixed(2)}) 100% recuperado! Los L. ${newRemainingBalance.toFixed(2)} que restan son 100% GANANCIA.`
-          : `Abono de L. ${newAbone.amount.toFixed(2)} registrado. Nuevo saldo: L. ${newRemainingBalance.toFixed(2)}${
+          : `${useHistoricalAbone ? 'Abono histórico' : 'Abono'} de L. ${newAbone.amount.toFixed(2)} registrado. Nuevo saldo: L. ${newRemainingBalance.toFixed(2)}${
               resolvedNextPaymentDate ? ` • Próximo cobro: ${resolvedNextPaymentDate}` : ''
             }`,
         'success'
@@ -1894,7 +2104,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     let salesCount = 0;
 
     sales.forEach((s) => {
-      if (s.status !== 'completed' || !matchesPeriod(s.timestamp || 0)) return;
+      if (s.status !== 'completed' || s.isHistoricalPreApp || !matchesPeriod(s.timestamp || 0)) return;
       salesCount += 1;
       const netRev = Math.max(
         0,
@@ -3960,22 +4170,25 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
               <div className="flex flex-wrap items-center gap-2">
                 {onRecordSale && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewDebtFrequency(routeCollectorConfig.defaultPaymentFrequency || 'weekly');
-                      setNewDebtNextPaymentDate(
-                        calculateNextDateByFrequency(
-                          routeCollectorConfig.defaultPaymentFrequency || 'weekly'
-                        )
-                      );
-                      setShowCreateDebtModal(true);
-                    }}
-                    className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
-                  >
-                    <Plus className="w-4 h-4 shrink-0" />
-                    <span>Crear Deuda a Cliente</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openCreateDebtModal('new')}
+                      className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                    >
+                      <Plus className="w-4 h-4 shrink-0" />
+                      <span>Crear Deuda a Cliente</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openCreateDebtModal('historical')}
+                      className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap border border-indigo-400/40"
+                      title="Ingresar una venta al crédito de antes de usar la app con su historial de abonos previos"
+                    >
+                      <History className="w-4 h-4 shrink-0" />
+                      <span>Ingresar Crédito con Abonos Previos</span>
+                    </button>
+                  </>
                 )}
 
                 <button
@@ -4511,10 +4724,22 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 No hay cuentas por cobrar en esta vista
               </p>
               <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-                Para registrar una deuda de un artículo para un cliente, presiona{' '}
-                <strong>"Crear Deuda a Cliente"</strong> arriba o selecciona{' '}
-                <strong>"Crédito / Fiado"</strong> al facturar en Nueva Venta (POS).
+                Para registrar una deuda nueva o ingresar una venta al crédito anterior con historial de abonos previos, presiona{' '}
+                <strong>"Crear Deuda a Cliente"</strong> o{' '}
+                <strong>"Ingresar Crédito con Abonos Previos"</strong> arriba.
               </p>
+              {isAdminSession && onRecordSale && (
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+                  <button
+                    type="button"
+                    onClick={() => openCreateDebtModal('historical')}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <History className="w-4 h-4" />
+                    <span>Ingresar Crédito con Abonos Previos</span>
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4629,6 +4854,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   : isCostRecovered
                                   ? 'Costo Cubierto · En Ganancia'
                                   : 'Recuperando Costo'}
+                              </span>
+                            )}
+                            {sale.isHistoricalPreApp && (
+                              <span className="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10px] font-bold">
+                                📜 Cuenta Histórica
                               </span>
                             )}
                             {controlMeta?.assignedCollectorName && (
@@ -5100,18 +5330,34 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             {abonos.map((cp) => (
                               <div
                                 key={cp.id}
-                                className="flex items-center justify-between text-[11px] bg-emerald-50/60 border border-emerald-100 px-2.5 py-1 rounded-lg tabular-nums"
+                                className={`flex items-center justify-between gap-2 text-[11px] px-2.5 py-1 rounded-lg tabular-nums border ${
+                                  cp.isHistoricalPreApp
+                                    ? 'bg-indigo-50/70 border-indigo-200'
+                                    : 'bg-emerald-50/60 border-emerald-100'
+                                }`}
                               >
-                                <span className="text-slate-600">
-                                  {cp.date} (
-                                  {cp.paymentMethod === 'cash'
-                                    ? 'Efectivo'
-                                    : cp.paymentMethod === 'transfer'
-                                    ? 'Transf.'
-                                    : 'Tarjeta'}
-                                  {cp.receivedBy ? ` · ${cp.receivedBy}` : ''})
+                                <span className="text-slate-600 flex flex-wrap items-center gap-1">
+                                  <span>
+                                    {cp.date} (
+                                    {cp.paymentMethod === 'cash'
+                                      ? 'Efectivo'
+                                      : cp.paymentMethod === 'transfer'
+                                      ? 'Transf.'
+                                      : 'Tarjeta'}
+                                    {cp.receivedBy ? ` · ${cp.receivedBy}` : ''})
+                                  </span>
+                                  {cp.isHistoricalPreApp && (
+                                    <span className="px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-800 font-bold text-[9px]">
+                                      Previo a la app
+                                    </span>
+                                  )}
+                                  {cp.notes && (
+                                    <span className="text-[10px] text-slate-400 italic">
+                                      · {cp.notes}
+                                    </span>
+                                  )}
                                 </span>
-                                <span className="font-bold text-emerald-700">
+                                <span className="font-bold text-emerald-700 shrink-0">
                                   + L. {cp.amount.toFixed(2)}
                                 </span>
                               </div>
@@ -5415,6 +5661,40 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         onChange={(e) => setAboneNextDate(e.target.value)}
                         className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 text-xs font-black text-slate-900"
                       />
+                    </div>
+                  )}
+
+                  {isAdminSession && (
+                    <div className="p-3 rounded-xl bg-indigo-50/80 border border-indigo-200 space-y-2">
+                      <label className="flex items-start gap-2 cursor-pointer text-xs">
+                        <input
+                          type="checkbox"
+                          checked={aboneIsHistorical}
+                          onChange={(e) => setAboneIsHistorical(e.target.checked)}
+                          className="mt-0.5 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <div>
+                          <span className="font-black text-indigo-950 block">
+                            📜 Es un abono histórico anterior a la app
+                          </span>
+                          <span className="text-[11px] text-indigo-800">
+                            Se guardará con la fecha anterior que elijas y <strong>no sumará</strong> efectivo al Arqueo de Caja de hoy.
+                          </span>
+                        </div>
+                      </label>
+                      {aboneIsHistorical && (
+                        <div>
+                          <label className="block text-[11px] font-bold text-indigo-950 mb-1">
+                            Fecha real en que se recibió este abono
+                          </label>
+                          <input
+                            type="date"
+                            value={aboneCustomDate}
+                            onChange={(e) => setAboneCustomDate(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-indigo-300 text-xs font-bold text-slate-900"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -6457,17 +6737,25 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             </div>
           )}
 
-          {/* ==================== MODAL 7: CREAR NUEVA DEUDA DE ARTÍCULO PARA CLIENTE ==================== */}
+          {/* ==================== MODAL 7: CREAR NUEVA DEUDA O INGRESAR CRÉDITO HISTÓRICO CON ABONOS PREVIOS ==================== */}
           {showCreateDebtModal && (
             <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden max-h-[92vh] flex flex-col">
-                <div className="px-5 py-4 bg-emerald-700 text-white flex items-center justify-between shrink-0">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden max-h-[92vh] flex flex-col">
+                <div
+                  className={`px-5 py-4 text-white flex items-center justify-between shrink-0 ${
+                    newDebtMode === 'historical' ? 'bg-indigo-700' : 'bg-emerald-700'
+                  }`}
+                >
                   <div>
                     <h3 className="font-black text-sm sm:text-base">
-                      Crear Nueva Deuda de Artículo para Cliente
+                      {newDebtMode === 'historical'
+                        ? 'Ingresar Crédito con Historial de Abonos Previos'
+                        : 'Crear Nueva Deuda de Artículo para Cliente'}
                     </h3>
-                    <p className="text-xs text-emerald-100">
-                      Registra una cuenta por cobrar, programa su fecha estimada de cobro y asígnala a un Cobrador de Ruta.
+                    <p className="text-xs text-white/85">
+                      {newDebtMode === 'historical'
+                        ? 'Registra ventas al crédito anteriores a usar la app ya con sus abonos previos y saldo pendiente real.'
+                        : 'Registra una cuenta por cobrar, programa su fecha estimada de cobro y asígnala a un Cobrador de Ruta.'}
                     </p>
                   </div>
                   <button
@@ -6483,6 +6771,41 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   onSubmit={handleCreateDirectCreditDebt}
                   className="p-5 overflow-y-auto space-y-4"
                 >
+                  {/* Mode Switcher: Nueva vs Histórica con Abonos Previos */}
+                  <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewDebtMode('new');
+                        setNewDebtDeductStock(Boolean(newDebtProductId));
+                      }}
+                      className={`py-2 px-3 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        newDebtMode === 'new'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      🆕 Cuenta Nueva
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewDebtMode('historical');
+                        setNewDebtDeductStock(false);
+                        if (!newDebtOriginalSaleDate) {
+                          setNewDebtOriginalSaleDate(addDaysToIso(-30));
+                        }
+                      }}
+                      className={`py-2 px-3 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        newDebtMode === 'historical'
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      📜 Ya Tiene Abonos Previos (Antes de App)
+                    </button>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -6510,6 +6833,48 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       />
                     </div>
                   </div>
+
+                  {newDebtMode === 'historical' && (
+                    <div className="p-3 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-indigo-950 mb-1">
+                            Fecha Original de la Venta al Crédito *
+                          </label>
+                          <input
+                            type="date"
+                            required
+                            value={newDebtOriginalSaleDate}
+                            onChange={(e) => setNewDebtOriginalSaleDate(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-indigo-300 text-xs font-bold text-slate-900"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-indigo-950 mb-1">
+                            N° Boleta / Tarjeta Anterior (Opcional)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ej. TARJ-045 o FAC-108"
+                            value={newDebtCustomSaleNumber}
+                            onChange={(e) => setNewDebtCustomSaleNumber(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-indigo-300 text-xs font-bold text-slate-900"
+                          />
+                        </div>
+                      </div>
+                      <label className="flex items-start gap-2 cursor-pointer text-xs">
+                        <input
+                          type="checkbox"
+                          checked={!newDebtDeductStock}
+                          onChange={(e) => setNewDebtDeductStock(!e.target.checked)}
+                          className="mt-0.5 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-[11px] text-indigo-950 font-semibold">
+                          No descontar del inventario actual (recomendado si la mercancía ya fue entregada al cliente antes de tener la app).
+                        </span>
+                      </label>
+                    </div>
+                  )}
 
                   <div>
                     <div className="flex items-center justify-between gap-2 mb-1">
@@ -6562,6 +6927,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             setNewDebtTotalAmount(
                               String(prod.creditPrice && prod.creditPrice > 0 ? prod.creditPrice : prod.price)
                             );
+                            setNewDebtCustomCost(String(Number(prod.cost) || 0));
                           }
                         }}
                         className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
@@ -6606,20 +6972,37 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           className="w-full px-3 py-2 rounded-xl bg-white border border-amber-400 text-sm font-black text-slate-900"
                         />
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Prima / Abono Inicial (L.)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          placeholder="0.00"
-                          value={newDebtInitialAbono}
-                          onChange={(e) => setNewDebtInitialAbono(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-bold text-slate-900"
-                        />
-                      </div>
+                      {newDebtMode === 'new' ? (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Prima / Abono Inicial (L.)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="0.00"
+                            value={newDebtInitialAbono}
+                            onChange={(e) => setNewDebtInitialAbono(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-bold text-slate-900"
+                          />
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Precio Costo (L., opcional)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="0.00"
+                            value={newDebtCustomCost}
+                            onChange={(e) => setNewDebtCustomCost(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-bold text-slate-900"
+                          />
+                        </div>
+                      )}
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-1">
                           Cuota por Cobro (L.)
@@ -6636,6 +7019,271 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       </div>
                     </div>
                   </div>
+
+                  {/* ==================== HISTORIAL DE ABONOS PREVIOS (SOLO EN MODO HISTÓRICO) ==================== */}
+                  {newDebtMode === 'historical' && (
+                    <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-300 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="text-xs font-black text-amber-950 block">
+                            📜 Historial de Abonos Anteriores a la App
+                          </span>
+                          <span className="text-[11px] text-amber-800">
+                            Ingresa los abonos que el cliente ya realizó antes de pasar su cuenta al sistema.
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Prima / Enganche Inicial (L., si dio aparte)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="0.00"
+                            value={newDebtInitialAbono}
+                            onChange={(e) => setNewDebtInitialAbono(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            ¿Cómo deseas ingresar los abonos previos?
+                          </label>
+                          <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-white border border-amber-200">
+                            <button
+                              type="button"
+                              onClick={() => setNewDebtHistoricalAbonosMode('detailed')}
+                              className={`py-1.5 px-2 rounded-lg text-[11px] font-black cursor-pointer ${
+                                newDebtHistoricalAbonosMode === 'detailed'
+                                  ? 'bg-amber-600 text-white'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              Abono por abono
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setNewDebtHistoricalAbonosMode('summary')}
+                              className={`py-1.5 px-2 rounded-lg text-[11px] font-black cursor-pointer ${
+                                newDebtHistoricalAbonosMode === 'summary'
+                                  ? 'bg-amber-600 text-white'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              Total acumulado
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {newDebtHistoricalAbonosMode === 'detailed' ? (
+                        <div className="space-y-2">
+                          {newDebtHistoricalAbonos.map((row, idx) => (
+                            <div
+                              key={row.id}
+                              className="p-2.5 rounded-xl bg-white border border-amber-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                            >
+                              <div className="sm:col-span-3">
+                                <label className="block text-[10px] font-bold text-slate-500 mb-0.5">
+                                  Fecha Abono #{idx + 1}
+                                </label>
+                                <input
+                                  type="date"
+                                  value={row.date}
+                                  onChange={(e) =>
+                                    setNewDebtHistoricalAbonos((prev) =>
+                                      prev.map((r) =>
+                                        r.id === row.id ? { ...r, date: e.target.value } : r
+                                      )
+                                    )
+                                  }
+                                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-900"
+                                />
+                              </div>
+                              <div className="sm:col-span-3">
+                                <label className="block text-[10px] font-bold text-slate-500 mb-0.5">
+                                  Monto (L.) *
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  placeholder="0.00"
+                                  value={row.amount}
+                                  onChange={(e) =>
+                                    setNewDebtHistoricalAbonos((prev) =>
+                                      prev.map((r) =>
+                                        r.id === row.id ? { ...r, amount: e.target.value } : r
+                                      )
+                                    )
+                                  }
+                                  className="w-full px-2 py-1.5 rounded-lg border border-amber-300 text-xs font-black text-slate-900 tabular-nums"
+                                />
+                              </div>
+                              <div className="sm:col-span-2">
+                                <label className="block text-[10px] font-bold text-slate-500 mb-0.5">
+                                  Método
+                                </label>
+                                <select
+                                  value={row.paymentMethod}
+                                  onChange={(e) =>
+                                    setNewDebtHistoricalAbonos((prev) =>
+                                      prev.map((r) =>
+                                        r.id === row.id
+                                          ? {
+                                              ...r,
+                                              paymentMethod: e.target.value as
+                                                | 'cash'
+                                                | 'transfer'
+                                                | 'card',
+                                            }
+                                          : r
+                                      )
+                                    )
+                                  }
+                                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-900"
+                                >
+                                  <option value="cash">Efectivo</option>
+                                  <option value="transfer">Transf.</option>
+                                  <option value="card">Tarjeta</option>
+                                </select>
+                              </div>
+                              <div className="sm:col-span-3">
+                                <label className="block text-[10px] font-bold text-slate-500 mb-0.5">
+                                  Nota (Opcional)
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Ej. Cuota #1"
+                                  value={row.notes}
+                                  onChange={(e) =>
+                                    setNewDebtHistoricalAbonos((prev) =>
+                                      prev.map((r) =>
+                                        r.id === row.id ? { ...r, notes: e.target.value } : r
+                                      )
+                                    )
+                                  }
+                                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs"
+                                />
+                              </div>
+                              <div className="sm:col-span-1 flex justify-end">
+                                <button
+                                  type="button"
+                                  disabled={newDebtHistoricalAbonos.length <= 1}
+                                  onClick={() =>
+                                    setNewDebtHistoricalAbonos((prev) =>
+                                      prev.length > 1 ? prev.filter((r) => r.id !== row.id) : prev
+                                    )
+                                  }
+                                  className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 disabled:opacity-30 cursor-pointer"
+                                  title="Quitar abono"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setNewDebtHistoricalAbonos((prev) => [
+                                ...prev,
+                                {
+                                  id: `hist_${Date.now()}_${prev.length}`,
+                                  date: addDaysToIso(-7),
+                                  amount: '',
+                                  paymentMethod: 'cash',
+                                  notes: '',
+                                },
+                              ])
+                            }
+                            className="w-full py-2 rounded-xl border border-dashed border-amber-400 bg-white hover:bg-amber-50 text-amber-900 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Agregar otro abono previo al historial</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-xl bg-white border border-amber-200 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                              Total Ya Abonado Antes (L.) *
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="0.00"
+                              value={newDebtHistoricalSummaryTotal}
+                              onChange={(e) => setNewDebtHistoricalSummaryTotal(e.target.value)}
+                              className="w-full px-2.5 py-2 rounded-lg border border-amber-300 text-xs font-black text-slate-900 tabular-nums"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                              Fecha Último Abono
+                            </label>
+                            <input
+                              type="date"
+                              value={newDebtHistoricalSummaryDate}
+                              onChange={(e) => setNewDebtHistoricalSummaryDate(e.target.value)}
+                              className="w-full px-2.5 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-900"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                              Detalle / Nota
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. 5 abonos previos en libreta"
+                              value={newDebtHistoricalSummaryNotes}
+                              onChange={(e) => setNewDebtHistoricalSummaryNotes(e.target.value)}
+                              className="w-full px-2.5 py-2 rounded-lg border border-slate-300 text-xs"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Live Summary Box */}
+                      <div className="p-3 rounded-xl bg-white border border-slate-200 text-xs space-y-1 tabular-nums">
+                        <div className="flex items-center justify-between text-slate-600">
+                          <span>Valor Total al Crédito:</span>
+                          <span className="font-bold text-slate-900">
+                            L. {createDebtLiveBreakdown.totalAmt.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-emerald-700">
+                          <span>
+                            (-) Prima + Abonos Previos ({createDebtLiveBreakdown.totalRecordsCount} reg.):
+                          </span>
+                          <span className="font-bold">
+                            - L. {createDebtLiveBreakdown.totalPaidSoFar.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 text-sm font-black">
+                          <span className="text-slate-900">(=) Saldo Pendiente Actual por Cobrar:</span>
+                          <span
+                            className={
+                              createDebtLiveBreakdown.balanceDue > 0.01
+                                ? 'text-amber-700'
+                                : 'text-rose-600'
+                            }
+                          >
+                            L. {createDebtLiveBreakdown.balanceDue.toFixed(2)}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 pt-1">
+                          Estos abonos previos quedarán en el historial y Estado de Cuenta PDF del cliente, sin alterar tu Arqueo de Caja de hoy.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
@@ -6660,7 +7308,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Fecha 1er Cobro
+                        {newDebtMode === 'historical' ? 'Fecha Próximo Cobro' : 'Fecha 1er Cobro'}
                       </label>
                       <input
                         type="date"
@@ -6689,6 +7337,19 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     </div>
                   </div>
 
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Notas Adicionales de la Cuenta (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej. Referencias, fiador, acuerdo de pago..."
+                      value={newDebtNotes}
+                      onChange={(e) => setNewDebtNotes(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                    />
+                  </div>
+
                   <div className="flex items-center justify-end gap-2 pt-2">
                     <button
                       type="button"
@@ -6700,9 +7361,17 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     <button
                       type="submit"
                       disabled={isCreatingDebt}
-                      className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs cursor-pointer shadow-md"
+                      className={`px-5 py-2.5 rounded-xl text-white font-black text-xs cursor-pointer shadow-md ${
+                        newDebtMode === 'historical'
+                          ? 'bg-indigo-600 hover:bg-indigo-700'
+                          : 'bg-emerald-600 hover:bg-emerald-700'
+                      }`}
                     >
-                      {isCreatingDebt ? 'Creando Cuenta...' : 'Crear Cuenta por Cobrar'}
+                      {isCreatingDebt
+                        ? 'Guardando...'
+                        : newDebtMode === 'historical'
+                        ? 'Guardar Crédito con Abonos Previos'
+                        : 'Crear Cuenta por Cobrar'}
                     </button>
                   </div>
                 </form>
