@@ -18,6 +18,8 @@ import {
   SaaSGlobalConfig,
   CreditContractData,
   CreditAccountControlMeta,
+  KitchenCommandTicket,
+  RestaurantTableOrder,
   getEffectiveInvoiceTemplate,
   resolveInvoiceIssuerName,
 } from '../types';
@@ -6407,6 +6409,193 @@ export function formatCreditContractWhatsAppMessage(
 
   return msg;
 }
+
+// ============================================================================
+// MÓDULO RESTAURANTE: COMANDA DE COCINA Y PRE-CUENTA DE MESA
+// ============================================================================
+
+export function buildKitchenCommandHtml(
+  ticket: KitchenCommandTicket,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat
+): string {
+  const isThermal = format === '80mm' || format === '58mm';
+  const storeName = (storeSettings.storeName || 'Restaurante').toUpperCase();
+  const timeStr = new Date(ticket.createdAt).toLocaleTimeString('es-HN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const dateStr = new Date(ticket.createdAt).toLocaleDateString('es-HN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  });
+  const orderTypeLabel =
+    ticket.orderType === 'takeout'
+      ? 'PARA LLEVAR'
+      : ticket.orderType === 'delivery'
+      ? 'A DOMICILIO'
+      : 'EN SALÓN';
+
+  return `
+    <div style="font-family:${isThermal ? "'Courier New', Courier, monospace" : 'Inter, system-ui, sans-serif'};">
+      <div class="text-center">
+        <div style="font-size:${isThermal ? '11px' : '13px'};font-weight:800;letter-spacing:0.06em;">${storeName}</div>
+        <div style="font-size:${format === '58mm' ? '15px' : '18px'};font-weight:900;border:2px solid #000;padding:3px 6px;margin:4px 0;text-transform:uppercase;">
+          COMANDA ${ticket.ticketNumber}
+        </div>
+        <div style="font-size:${format === '58mm' ? '13px' : '16px'};font-weight:900;background:#0f172a;color:#fff;padding:4px 6px;border-radius:4px;">
+          ${ticket.tableName.toUpperCase()}${ticket.zone ? ` • ${ticket.zone.toUpperCase()}` : ''}
+        </div>
+      </div>
+      <div class="dashed-line"></div>
+      <div style="font-size:${format === '58mm' ? '10px' : '11.5px'};line-height:1.45;">
+        <div style="display:flex;justify-content:space-between;"><span>Tipo:</span><strong>${orderTypeLabel}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Orden:</span><strong>${ticket.orderNumber}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Mesero:</span><strong>${ticket.waiterName}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Personas:</span><strong>${ticket.guests}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Hora:</span><strong>${dateStr} ${timeStr}</strong></div>
+      </div>
+      <div class="solid-line"></div>
+      <table style="width:100%;border-collapse:collapse;font-size:${format === '58mm' ? '11.5px' : '13px'};">
+        <thead>
+          <tr style="border-bottom:1.5px solid #000;">
+            <th style="width:36px;padding:3px 2px;">CANT</th>
+            <th style="padding:3px 2px;">PLATILLO / DETALLE</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(ticket.items || [])
+            .map(
+              (item) => `
+              <tr style="border-bottom:1px dashed #94a3b8;">
+                <td style="padding:5px 2px;font-weight:900;font-size:${format === '58mm' ? '14px' : '16px'};vertical-align:top;">
+                  ${item.quantity}x
+                </td>
+                <td style="padding:5px 2px;vertical-align:top;">
+                  <div style="font-weight:800;text-transform:uppercase;">${item.name}</div>
+                  ${
+                    item.notes
+                      ? `<div style="margin-top:2px;font-size:${format === '58mm' ? '10.5px' : '11.5px'};font-weight:800;border-left:3px solid #000;padding-left:5px;">
+                          NOTA: ${item.notes}
+                        </div>`
+                      : ''
+                  }
+                </td>
+              </tr>
+            `
+            )
+            .join('')}
+        </tbody>
+      </table>
+      ${
+        ticket.orderNotes
+          ? `<div class="dashed-line"></div>
+             <div style="font-size:11px;font-weight:800;border:1.5px dashed #000;padding:4px 6px;">
+               OBS. GENERAL: ${ticket.orderNotes}
+             </div>`
+          : ''
+      }
+      <div class="dashed-line"></div>
+      <div class="text-center" style="font-size:10px;font-weight:700;margin-top:4px;">
+        Total Unidades: ${(ticket.items || []).reduce((sum, i) => sum + (Number(i.quantity) || 0), 0)}
+      </div>
+    </div>
+  `;
+}
+
+export function buildTablePreBillHtml(
+  order: RestaurantTableOrder,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat,
+  suggestedTipPercent = 10
+): string {
+  const isThermal = format === '80mm' || format === '58mm';
+  const storeName = (storeSettings.storeName || 'Restaurante').toUpperCase();
+  const subtotal = (order.items || []).reduce(
+    (sum, it) => sum + (Number(it.price) || 0) * (Number(it.quantity) || 0),
+    0
+  );
+  const discount = Number(order.discount) || 0;
+  const totalNet = Math.max(0, subtotal - discount);
+  const suggestedTip = Math.round(totalNet * (suggestedTipPercent / 100) * 100) / 100;
+  const dateStr = new Date().toLocaleString('es-HN');
+
+  return `
+    <div style="font-family:${isThermal ? "'Courier New', Courier, monospace" : 'Inter, system-ui, sans-serif'};">
+      <div class="text-center">
+        <div style="font-size:${format === '58mm' ? '13px' : '15px'};font-weight:900;">${storeName}</div>
+        ${storeSettings.phone ? `<div style="font-size:10px;">Tel: ${storeSettings.phone}</div>` : ''}
+        ${storeSettings.address ? `<div style="font-size:10px;">${storeSettings.address}</div>` : ''}
+        <div style="font-size:13px;font-weight:900;border:1.5px solid #000;padding:3px;margin:5px 0;">
+          PRE-CUENTA DE CONSUMO
+        </div>
+        <div style="font-size:10px;font-weight:700;">Documento no fiscal • Revisión de Mesa</div>
+      </div>
+      <div class="dashed-line"></div>
+      <div style="font-size:${format === '58mm' ? '10px' : '11px'};">
+        <div style="display:flex;justify-content:space-between;"><span>Mesa / Área:</span><strong>${order.tableName}${order.zone ? ` (${order.zone})` : ''}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Orden N°:</span><strong>${order.orderNumber}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Atendido por:</span><strong>${order.waiterName}</strong></div>
+        <div style="display:flex;justify-content:space-between;"><span>Personas:</span><span>${order.guests}</span></div>
+        ${order.customerName ? `<div style="display:flex;justify-content:space-between;"><span>Cliente:</span><strong>${order.customerName}</strong></div>` : ''}
+        <div style="display:flex;justify-content:space-between;"><span>Fecha/Hora:</span><span>${dateStr}</span></div>
+      </div>
+      <div class="dashed-line"></div>
+      <table style="width:100%;font-size:${format === '58mm' ? '10px' : '11px'};">
+        <thead>
+          <tr style="border-bottom:1px solid #000;">
+            <th>CANT / DESCRIPCIÓN</th>
+            <th class="text-right">IMPORTE</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(order.items || [])
+            .map(
+              (it) => `
+              <tr>
+                <td style="padding-top:3px;">
+                  <strong>${it.quantity}x</strong> ${it.name}
+                  <div style="font-size:9.5px;color:#475569;">@ ${formatCurrencyL(it.price)}</div>
+                </td>
+                <td class="text-right font-bold" style="padding-top:3px;white-space:nowrap;">
+                  ${formatCurrencyL(it.price * it.quantity)}
+                </td>
+              </tr>
+            `
+            )
+            .join('')}
+        </tbody>
+      </table>
+      <div class="dashed-line"></div>
+      <div style="font-size:${format === '58mm' ? '11px' : '12px'};">
+        <div style="display:flex;justify-content:space-between;"><span>Subtotal Consumo:</span><span>${formatCurrencyL(subtotal)}</span></div>
+        ${discount > 0 ? `<div style="display:flex;justify-content:space-between;"><span>Descuento:</span><span>-${formatCurrencyL(discount)}</span></div>` : ''}
+        <div style="display:flex;justify-content:space-between;font-size:${format === '58mm' ? '13px' : '14.5px'};font-weight:900;border-top:1px dashed #000;padding-top:4px;margin-top:4px;">
+          <span>TOTAL A PAGAR:</span>
+          <span>${formatCurrencyL(totalNet)}</span>
+        </div>
+        ${
+          suggestedTipPercent > 0
+            ? `<div style="display:flex;justify-content:space-between;font-size:10px;margin-top:4px;color:#334155;">
+                <span>Propina sugerida (${suggestedTipPercent}%):</span>
+                <span>${formatCurrencyL(suggestedTip)}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:10.5px;font-weight:800;">
+                <span>Total c/ propina sugerida:</span>
+                <span>${formatCurrencyL(totalNet + suggestedTip)}</span>
+              </div>`
+            : ''
+        }
+      </div>
+      <div class="dashed-line"></div>
+      <div class="text-center" style="font-size:10px;margin-top:6px;">
+        ¡Gracias por preferirnos! Solicite su factura final al cancelar en caja.
+      </div>
+    </div>
+  `;
+}
+
 
 
 

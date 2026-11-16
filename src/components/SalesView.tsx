@@ -20,9 +20,12 @@ import {
   CreditContractData,
   SaleWarrantyInfo,
   isStoreCreditContractEnabled,
+  isStoreWarrantyModuleEnabled,
   isGenericSystemAdminIssuer,
   resolveInvoiceIssuerName,
   doesSaleBelongToCollaborator,
+  isCollaboratorRouteCollector,
+  normalizeCollectorIdentifier,
 } from '../types';
 import {
   getProductStockInWarehouse,
@@ -108,6 +111,7 @@ import {
   Award,
   Gift,
   Star,
+  UtensilsCrossed,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -143,12 +147,14 @@ export type SalesSubTab =
 interface SalesViewProps {
   inventory: Product[];
   sales: SaleRecord[];
+  allStoreSales?: SaleRecord[];
   storeSettings: StoreSettings;
   warehousesData?: StoreWarehousesData;
   userSession?: UserSession | null;
   users?: UserAccount[];
   isLoading?: boolean;
   initialSubTab?: SalesSubTab;
+  onSubTabChange?: (subTab: SalesSubTab) => void;
   posFinanceData?: POSFinanceStoreData;
   onSavePOSFinanceData?: (updated: POSFinanceStoreData) => Promise<void>;
   onRecordCreditPayment?: (sale: SaleRecord, abone: CreditPaymentAbone) => Promise<SaleRecord>;
@@ -156,18 +162,22 @@ interface SalesViewProps {
   onUpdateSale?: (originalSale: SaleRecord, updatedSale: SaleRecord) => Promise<void>;
   onCancelSale: (sale: SaleRecord) => Promise<void>;
   onSaveStoreSettings?: (settings: StoreSettings) => Promise<void>;
+  onSaveUser?: (user: UserAccount) => Promise<void>;
+  onOpenRestaurant?: () => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
 export const SalesView: React.FC<SalesViewProps> = ({
   inventory,
   sales,
+  allStoreSales,
   storeSettings,
   warehousesData,
   userSession,
   users = [],
   isLoading = false,
   initialSubTab = 'pos',
+  onSubTabChange,
   posFinanceData,
   onSavePOSFinanceData,
   onRecordCreditPayment,
@@ -175,17 +185,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
   onUpdateSale,
   onCancelSale,
   onSaveStoreSettings,
+  onSaveUser,
+  onOpenRestaurant,
   showToast,
 }) => {
   // Resolve granular Collaborator POS permissions (real-time from users list or session)
   const isAdminUser = !userSession || userSession.role === 'admin';
   const matchedCollabAccount = useMemo(() => {
     if (isAdminUser || !userSession) return undefined;
-    return users.find(
-      (u) =>
-        u.id === userSession.userId ||
-        u.username.trim().toLowerCase() === (userSession.username || '').trim().toLowerCase()
-    );
+    const sId = String(userSession.userId || '').trim().toLowerCase();
+    const sUname = normalizeCollectorIdentifier(userSession.username);
+    const sName = normalizeCollectorIdentifier(userSession.userName);
+    return users.find((u) => {
+      const uId = String(u.id || '').trim().toLowerCase();
+      const uUname = normalizeCollectorIdentifier(u.username);
+      const uName = normalizeCollectorIdentifier(u.name);
+      if (sId && uId && (uId === sId || uId.endsWith(`__${sId}`) || sId.endsWith(`__${uId}`))) {
+        return true;
+      }
+      if (sUname && uUname === sUname) return true;
+      if (sName && (uName === sName || uUname === sName)) return true;
+      return false;
+    });
   }, [isAdminUser, userSession, users]);
 
   const effectiveSalesPerms = matchedCollabAccount?.salesPermissions || userSession?.salesPermissions;
@@ -196,6 +217,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const canViewCostsAndProfits =
     isAdminUser || Boolean(effectiveSalesPerms?.canViewCostsAndProfits);
 
+  // Whether the logged-in collaborator has the Exclusive Route Collector panel enabled
+  const isRouteCollectorCollab = useMemo(() => {
+    return isCollaboratorRouteCollector(userSession, users, posFinanceData);
+  }, [userSession, users, posFinanceData]);
+
   // Strict Collaborator Isolation: each collaborator ONLY sees their own sales (never global sales)
   const visibleSales = useMemo<SaleRecord[]>(() => {
     if (isAdminUser) return sales;
@@ -204,14 +230,43 @@ export const SalesView: React.FC<SalesViewProps> = ({
     );
   }, [sales, isAdminUser, userSession, matchedCollabAccount]);
 
+  // For Cuentas por Cobrar / Panel de Cobrador de Ruta: Admin and authorized Route Collectors receive the store sales
+  // (POSFinanceTabs applies the collector's 'all' vs 'assigned' route filter)
+  const salesForCreditsView = useMemo<SaleRecord[]>(() => {
+    if (isAdminUser || isRouteCollectorCollab) {
+      return allStoreSales && allStoreSales.length > 0 ? allStoreSales : sales;
+    }
+    return visibleSales;
+  }, [isAdminUser, isRouteCollectorCollab, allStoreSales, sales, visibleSales]);
+
   // Navigation between POS Terminal, Cash Register, Credits, Expenses and Sales History
-  const [activeSubTab, setActiveSubTab] = useState<SalesSubTab>(initialSubTab);
+  const [activeSubTab, setActiveSubTabState] = useState<SalesSubTab>(() =>
+    !isAdminUser && isCollaboratorRouteCollector(userSession, users, posFinanceData)
+      ? 'credits'
+      : initialSubTab
+  );
+  const hasAutoOpenedCollectorTabRef = useRef<boolean>(false);
+
+  const setActiveSubTab = (next: SalesSubTab) => {
+    setActiveSubTabState(next);
+    if (onSubTabChange) onSubTabChange(next);
+  };
 
   useEffect(() => {
     if (initialSubTab) {
-      setActiveSubTab(initialSubTab);
+      setActiveSubTabState(initialSubTab);
+      if (onSubTabChange) onSubTabChange(initialSubTab);
     }
   }, [initialSubTab]);
+
+  // Auto-open the Route Collector panel once when a Route Collector collaborator logs in or gets assigned
+  useEffect(() => {
+    if (!isAdminUser && isRouteCollectorCollab && !hasAutoOpenedCollectorTabRef.current) {
+      hasAutoOpenedCollectorTabRef.current = true;
+      setActiveSubTabState('credits');
+      if (onSubTabChange) onSubTabChange('credits');
+    }
+  }, [isAdminUser, isRouteCollectorCollab]);
 
   // Mobile / Tablet POS active view: 'catalog' | 'cart' | 'split' (split available on md+ tablets)
   const [mobilePosTab, setMobilePosTab] = useState<'catalog' | 'cart' | 'split'>(() =>
@@ -313,6 +368,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
     return isStoreCreditContractEnabled(storeSettings);
   }, [storeSettings]);
 
+  const canUseWarrantyModule = useMemo(() => {
+    return isStoreWarrantyModuleEnabled(storeSettings);
+  }, [storeSettings]);
+
   // Helper to get available stock of a product in the currently selected POS warehouse
   const getPosWarehouseStock = (product: Product | undefined, whIdOverride?: string): number => {
     if (!product) return 0;
@@ -354,6 +413,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [creditCustomQuota, setCreditCustomQuota] = useState<string>('');
   const [creditArticleBrand, setCreditArticleBrand] = useState<string>('');
   const [creditArticleModel, setCreditArticleModel] = useState<string>('');
+  const [creditPaymentFrequencyPos, setCreditPaymentFrequencyPos] = useState<
+    'daily' | 'weekly' | 'biweekly' | 'monthly'
+  >('weekly');
+  const [creditAssignedCollectorPos, setCreditAssignedCollectorPos] = useState<string>('');
   const [receiptModalTab, setReceiptModalTab] = useState<'both' | 'ticket' | 'contract'>('both');
   const [showInvoiceTemplateModal, setShowInvoiceTemplateModal] = useState<boolean>(false);
   const [draftInvoiceTemplate, setDraftInvoiceTemplate] = useState<InvoiceTemplateConfig>(() =>
@@ -1108,6 +1171,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setCreditCustomQuota('');
     setCreditArticleBrand('');
     setCreditArticleModel('');
+    setCreditPaymentFrequencyPos('weekly');
+    setCreditAssignedCollectorPos('');
     setSaleNotes('');
     setPosIncludeWarranty(false);
     setPosWarrantyDuration('30 Días');
@@ -1641,22 +1706,85 @@ export const SalesView: React.FC<SalesViewProps> = ({
         }
 
         const nextControls = { ...(posFinanceData.creditAccountControls || {}) };
+        let nextRouteConfig = posFinanceData.routeCollectorConfig;
         if (isCredit && initialCreditContract) {
+          const cleanAssignedUname = normalizeCollectorIdentifier(creditAssignedCollectorPos);
+          const matchedCollector = users.find(
+            (u) =>
+              u.role === 'collaborator' &&
+              (normalizeCollectorIdentifier(u.username) === cleanAssignedUname ||
+                normalizeCollectorIdentifier(u.name) === cleanAssignedUname)
+          );
           nextControls[recorded.id] = {
             ...(nextControls[recorded.id] || {}),
             saleId: recorded.id,
             installmentAmount: initialCreditContract.installmentValue,
             numberOfInstallments: initialCreditContract.numberOfInstallments,
-            nextPaymentDate: initialCreditContract.firstPaymentDate,
-            paymentFrequency: 'monthly',
+            nextPaymentDate: creditDueDate || initialCreditContract.firstPaymentDate,
+            paymentFrequency: creditPaymentFrequencyPos || 'weekly',
+            assignedCollectorId: matchedCollector?.id || undefined,
+            assignedCollectorUsername:
+              matchedCollector?.username || (cleanAssignedUname || undefined),
+            assignedCollectorName: matchedCollector?.name || undefined,
+            customerAddressOrRoute: cleanCustAddress || undefined,
+            autoAdvanceNextDate: true,
             creditContract: initialCreditContract,
           };
+
+          if (cleanAssignedUname) {
+            const currentEnabled = new Set(
+              (posFinanceData.routeCollectorConfig?.enabledCollectorUsernames || []).map((u) =>
+                normalizeCollectorIdentifier(u)
+              )
+            );
+            currentEnabled.add(
+              normalizeCollectorIdentifier(matchedCollector?.username || cleanAssignedUname)
+            );
+            nextRouteConfig = {
+              autoCalculateNextDateOnAbone:
+                posFinanceData.routeCollectorConfig?.autoCalculateNextDateOnAbone !== false,
+              defaultPaymentFrequency:
+                posFinanceData.routeCollectorConfig?.defaultPaymentFrequency || 'weekly',
+              upcomingAlertDays: posFinanceData.routeCollectorConfig?.upcomingAlertDays || 3,
+              notifyAdminOnEveryAbone:
+                posFinanceData.routeCollectorConfig?.notifyAdminOnEveryAbone !== false,
+              notifyAdminOnReschedule:
+                posFinanceData.routeCollectorConfig?.notifyAdminOnReschedule !== false,
+              enabledCollectorUsernames: Array.from(currentEnabled),
+            };
+
+            if (matchedCollector && onSaveUser) {
+              onSaveUser({
+                ...matchedCollector,
+                allowedTabs: matchedCollector.allowedTabs?.includes('sales')
+                  ? matchedCollector.allowedTabs
+                  : [...(matchedCollector.allowedTabs || []), 'sales'],
+                salesPermissions: {
+                  canEditSales:
+                    matchedCollector.salesPermissions?.canEditSales !== undefined
+                      ? matchedCollector.salesPermissions.canEditSales
+                      : true,
+                  canCancelSales: Boolean(matchedCollector.salesPermissions?.canCancelSales),
+                  canViewCostsAndProfits: Boolean(
+                    matchedCollector.salesPermissions?.canViewCostsAndProfits
+                  ),
+                  allowedWarehouseIds:
+                    matchedCollector.salesPermissions?.allowedWarehouseIds ||
+                    matchedCollector.allowedWarehouseIds,
+                  isRouteCollector: true,
+                  routeCollectorScope:
+                    matchedCollector.salesPermissions?.routeCollectorScope || 'all',
+                },
+              }).catch(() => {});
+            }
+          }
         }
 
         await onSavePOSFinanceData({
           ...posFinanceData,
           loyaltyCustomers: updatedCustomersList,
           creditAccountControls: nextControls,
+          ...(nextRouteConfig ? { routeCollectorConfig: nextRouteConfig } : {}),
           updatedAt: nowMs,
         });
       }
@@ -2605,190 +2733,242 @@ export const SalesView: React.FC<SalesViewProps> = ({
     showToast('Excel (.xlsx) de ventas exportado con todas las columnas organizadas.', 'success');
   };
 
+  // For a Route Collector Collaborator, lock them directly into their Exclusive Route Collector Panel ('credits')
+  // and hide the POS sub-tabs (Caja/Arqueo, Consultar Garantía, Clientes VIP, Mis Ventas)
+  const effectiveSubTab: SalesSubTab = !isAdminUser
+    ? isRouteCollectorCollab
+      ? 'credits'
+      : 'pos'
+    : activeSubTab === 'warranty' && !canUseWarrantyModule
+    ? 'pos'
+    : activeSubTab;
+
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 w-full bg-slate-100/80 overflow-hidden">
-      {/* Top Bar / Navigation Tabs — Centered container with balanced margins on any screen */}
-      <div className="bg-white border-b border-slate-200 shrink-0 shadow-2xs">
-        <div className="w-full max-w-[1680px] mx-auto px-3 sm:px-6 lg:px-8 py-2 sm:py-2.5 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2">
-          <div className="hidden sm:flex items-center justify-between min-w-0 shrink-0">
-            <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2 truncate">
-              <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
-              <span className="truncate">Ventas &amp; Facturación</span>
-            </h1>
-          </div>
+      {/* Top Bar / Navigation Tabs — Hidden for Route Collector Collaborators so they only see their Exclusive Route Collector Panel */}
+      {(isAdminUser || !isRouteCollectorCollab) && (
+        <div className="bg-white border-b border-slate-200 shrink-0 shadow-2xs">
+          <div className="w-full max-w-[1680px] mx-auto px-3 sm:px-6 lg:px-8 py-2 sm:py-2.5 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2">
+            <div className="hidden sm:flex items-center justify-between min-w-0 shrink-0">
+              <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2 truncate">
+                <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
+                <span className="truncate">Ventas &amp; Facturación</span>
+              </h1>
+            </div>
 
-          {/* View Switcher Tabs — Centered & balanced */}
-          <div className="flex items-center justify-start sm:justify-center lg:justify-end gap-1.5 sm:gap-2 bg-slate-100/90 p-1 sm:p-1.5 rounded-2xl border border-slate-200/80 overflow-x-auto max-w-full no-scrollbar">
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('pos')}
-              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-                activeSubTab === 'pos'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-              }`}
-            >
-              <ShoppingCart className="w-4 h-4 shrink-0" />
-              <span>Nueva Venta (POS)</span>
-              {cart.length > 0 && (
-                <span className="bg-white text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 shadow-2xs">
-                  {totalCartItemsCount}
-                </span>
+            {/* View Switcher Tabs — Centered & balanced */}
+            <div className="flex items-center justify-start sm:justify-center lg:justify-end gap-1.5 sm:gap-2 bg-slate-100/90 p-1 sm:p-1.5 rounded-2xl border border-slate-200/80 overflow-x-auto max-w-full no-scrollbar">
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('pos')}
+                className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                  effectiveSubTab === 'pos'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                }`}
+              >
+                <ShoppingCart className="w-4 h-4 shrink-0" />
+                <span>Nueva Venta (POS)</span>
+                {cart.length > 0 && (
+                  <span className="bg-white text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 shadow-2xs">
+                    {totalCartItemsCount}
+                  </span>
+                )}
+              </button>
+
+              {onOpenRestaurant && (
+                <button
+                  type="button"
+                  onClick={onOpenRestaurant}
+                  className="min-h-[38px] flex items-center justify-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 bg-orange-50 text-orange-800 hover:bg-orange-100 border border-orange-300 shadow-2xs"
+                  title="Abrir Salón de Mesas y Comandera de Cocina"
+                >
+                  <UtensilsCrossed className="w-4 h-4 text-orange-600 shrink-0" />
+                  <span>Mesas / Comandera</span>
+                </button>
               )}
-            </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('warranty')}
-              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-                activeSubTab === 'warranty'
-                  ? 'bg-teal-600 text-white shadow-xs'
-                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-              }`}
-            >
-              <ShieldCheck className="w-4 h-4 shrink-0" />
-              <span>Consultar Garantía</span>
-              {visibleSales.reduce(
-                (acc, s) =>
-                  acc +
-                  (s.items || []).filter(
-                    (it) =>
-                      it.hasWarranty ||
-                      Boolean(it.warrantyCode) ||
-                      Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
-                      Boolean(s.warrantyInfo?.enabled)
-                  ).length,
-                0
-              ) > 0 && (
-                <span className="bg-teal-100 text-teal-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-                  {visibleSales.reduce(
-                    (acc, s) =>
-                      acc +
-                      (s.items || []).filter(
-                        (it) =>
-                          it.hasWarranty ||
-                          Boolean(it.warrantyCode) ||
-                          Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
-                          Boolean(s.warrantyInfo?.enabled)
-                      ).length,
-                    0
+              {isAdminUser && (
+                <>
+                  {canUseWarrantyModule && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveSubTab('warranty')}
+                      className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                        effectiveSubTab === 'warranty'
+                          ? 'bg-teal-600 text-white shadow-xs'
+                          : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                      }`}
+                    >
+                      <ShieldCheck className="w-4 h-4 shrink-0" />
+                      <span>Consultar Garantía</span>
+                      {visibleSales.reduce(
+                        (acc, s) =>
+                          acc +
+                          (s.items || []).filter(
+                            (it) =>
+                              it.hasWarranty ||
+                              Boolean(it.warrantyCode) ||
+                              Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
+                              Boolean(s.warrantyInfo?.enabled)
+                          ).length,
+                        0
+                      ) > 0 && (
+                        <span className="bg-teal-100 text-teal-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                          {visibleSales.reduce(
+                            (acc, s) =>
+                              acc +
+                              (s.items || []).filter(
+                                (it) =>
+                                  it.hasWarranty ||
+                                  Boolean(it.warrantyCode) ||
+                                  Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
+                                  Boolean(s.warrantyInfo?.enabled)
+                              ).length,
+                            0
+                          )}
+                        </span>
+                      )}
+                    </button>
                   )}
-                </span>
-              )}
-            </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('cash-register')}
-              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-                activeSubTab === 'cash-register'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-              }`}
-            >
-              <Wallet className="w-4 h-4 shrink-0" />
-              <span>Caja / Arqueo</span>
-              {(posFinanceData?.shifts || []).some((s) => s.status === 'open') && (
-                <span
-                  className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0 ring-2 ring-emerald-300"
-                  title="Caja Abierta"
-                />
-              )}
-            </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('cash-register')}
+                    className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                      effectiveSubTab === 'cash-register'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                    }`}
+                  >
+                    <Wallet className="w-4 h-4 shrink-0" />
+                    <span>Caja / Arqueo</span>
+                    {(posFinanceData?.shifts || []).some((s) => s.status === 'open') && (
+                      <span
+                        className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0 ring-2 ring-emerald-300"
+                        title="Caja Abierta"
+                      />
+                    )}
+                  </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('credits')}
-              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-                activeSubTab === 'credits'
-                  ? 'bg-amber-600 text-white shadow-xs'
-                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-              }`}
-            >
-              <Users className="w-4 h-4 shrink-0" />
-              <span>Cuentas por Cobrar</span>
-              {visibleSales.filter(
-                (s) =>
-                  s.status === 'completed' &&
-                  (s.balanceDue ??
-                    (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01
-              ).length > 0 && (
-                <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-                  {
-                    visibleSales.filter(
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('credits')}
+                    className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                      effectiveSubTab === 'credits'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                    }`}
+                  >
+                    <Users className="w-4 h-4 shrink-0" />
+                    <span>Cuentas por Cobrar</span>
+                    {salesForCreditsView.filter(
                       (s) =>
                         s.status === 'completed' &&
                         (s.balanceDue ??
                           (s.paymentMethod === 'credit' ? s.total - (s.amountPaid || 0) : 0)) > 0.01
-                    ).length
-                  }
-                </span>
+                    ).length > 0 && (
+                      <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                        {
+                          salesForCreditsView.filter(
+                            (s) =>
+                              s.status === 'completed' &&
+                              (s.balanceDue ??
+                                (s.paymentMethod === 'credit'
+                                  ? s.total - (s.amountPaid || 0)
+                                  : 0)) > 0.01
+                          ).length
+                        }
+                      </span>
+                    )}
+                    {(posFinanceData?.routeCollectorAlerts || []).filter(
+                      (a) => a.status === 'unread'
+                    ).length > 0 && (
+                      <span
+                        className="bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 animate-pulse"
+                        title="Alertas nuevas de Cobradores de Ruta"
+                      >
+                        🔔{' '}
+                        {
+                          (posFinanceData?.routeCollectorAlerts || []).filter(
+                            (a) => a.status === 'unread'
+                          ).length
+                        }
+                      </span>
+                    )}
+                  </button>
+                </>
               )}
-            </button>
 
-            {canViewCostsAndProfits && (
-              <button
-                type="button"
-                onClick={() => setActiveSubTab('expenses')}
-                className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-                  activeSubTab === 'expenses'
-                    ? 'bg-rose-600 text-white shadow-xs'
-                    : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-                }`}
-              >
-                <TrendingUp className="w-4 h-4 shrink-0" />
-                <span>Gastos y Utilidad</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('loyalty')}
-              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-                activeSubTab === 'loyalty'
-                  ? 'bg-amber-500 text-slate-950 shadow-xs'
-                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-              }`}
-            >
-              <Award className="w-4 h-4 shrink-0" />
-              <span>Clientes VIP / Puntos</span>
-              {loyaltyCustomers.length > 0 && (
-                <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-                  {loyaltyCustomers.length}
-                </span>
+              {canViewCostsAndProfits && (
+                <button
+                  type="button"
+                  onClick={() => setActiveSubTab('expenses')}
+                  className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                    effectiveSubTab === 'expenses'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                  }`}
+                >
+                  <TrendingUp className="w-4 h-4 shrink-0" />
+                  <span>Gastos y Utilidad</span>
+                </button>
               )}
-            </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('history')}
-              className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
-                activeSubTab === 'history'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
-              }`}
-            >
-              <History className="w-4 h-4 shrink-0" />
-              <span>{isAdminUser ? 'Historial' : 'Mis Ventas'}</span>
-              <span className="bg-slate-200 text-slate-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-                {visibleSales.length}
-              </span>
-            </button>
+              {isAdminUser && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('loyalty')}
+                    className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                      effectiveSubTab === 'loyalty'
+                        ? 'bg-amber-500 text-slate-950 shadow-xs'
+                        : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                    }`}
+                  >
+                    <Award className="w-4 h-4 shrink-0" />
+                    <span>Clientes VIP / Puntos</span>
+                    {loyaltyCustomers.length > 0 && (
+                      <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                        {loyaltyCustomers.length}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('history')}
+                    className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                      effectiveSubTab === 'history'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                    }`}
+                  >
+                    <History className="w-4 h-4 shrink-0" />
+                    <span>Historial</span>
+                    <span className="bg-slate-200 text-slate-800 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                      {visibleSales.length}
+                    </span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Main Content Area */}
-      {activeSubTab === 'cash-register' ||
-      activeSubTab === 'credits' ||
-      activeSubTab === 'expenses' ||
-      activeSubTab === 'loyalty' ? (
+      {effectiveSubTab === 'cash-register' ||
+      effectiveSubTab === 'credits' ||
+      effectiveSubTab === 'expenses' ||
+      effectiveSubTab === 'loyalty' ? (
         <POSFinanceTabs
-          mode={activeSubTab}
+          mode={effectiveSubTab}
           inventory={inventory}
-          sales={visibleSales}
+          sales={effectiveSubTab === 'credits' ? salesForCreditsView : visibleSales}
           storeSettings={storeSettings}
           userSession={userSession}
+          users={users}
           posFinanceData={
             posFinanceData || {
               companyId: storeSettings.companyId || 'gosen',
@@ -2804,13 +2984,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
             if (onRecordCreditPayment) return await onRecordCreditPayment(sale, abone);
             return sale;
           }}
+          onRecordSale={onRecordSale}
+          onSaveUser={onSaveUser}
           onViewSaleTicket={(sale) => {
             setCompletedSale(sale);
             setShowReceiptModal(true);
           }}
           showToast={showToast}
         />
-      ) : activeSubTab === 'pos' ? (
+      ) : effectiveSubTab === 'pos' ? (
         /* ==================== POS TERMINAL VIEW (CENTERED & SYMMETRICAL ON ANY SCREEN) ==================== */
         <div className="flex-1 min-h-0 w-full max-w-[1680px] mx-auto px-2.5 sm:px-5 lg:px-8 py-2 sm:py-3.5 flex flex-col md:flex-row items-stretch justify-center gap-3 lg:gap-5 overflow-hidden relative">
           {/* Mobile Segmented POS Switcher (< md) */}
@@ -3449,6 +3631,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       </div>
 
                       {/* Row 3: Per-Article Individual Warranty Code & Duration */}
+                      {canUseWarrantyModule && (
                       <div className="pt-1.5 border-t border-dashed border-slate-200/80">
                         <div className="flex flex-wrap items-center justify-between gap-1.5">
                           <button
@@ -3619,6 +3802,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           </div>
                         )}
                       </div>
+                      )}
                     </div>
                   );
                 })
@@ -4012,6 +4196,51 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </div>
 
                   <div className="grid grid-cols-2 gap-1.5">
+                    <div>
+                      <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
+                        Frecuencia Cobro
+                      </label>
+                      <select
+                        value={creditPaymentFrequencyPos}
+                        onChange={(e) =>
+                          setCreditPaymentFrequencyPos(
+                            e.target.value as 'daily' | 'weekly' | 'biweekly' | 'monthly'
+                          )
+                        }
+                        className="w-full px-2 py-1 bg-white border border-amber-300 rounded-lg text-[11px] font-bold text-slate-900"
+                      >
+                        <option value="daily">Diario (+1d)</option>
+                        <option value="weekly">Semanal (+7d)</option>
+                        <option value="biweekly">Quincenal (+15d)</option>
+                        <option value="monthly">Mensual (+30d)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
+                        Cobrador de Ruta
+                      </label>
+                      <select
+                        value={creditAssignedCollectorPos}
+                        onChange={(e) => setCreditAssignedCollectorPos(e.target.value)}
+                        className="w-full px-2 py-1 bg-white border border-amber-300 rounded-lg text-[11px] font-bold text-slate-900"
+                      >
+                        <option value="">-- Sin asignar --</option>
+                        {users
+                          .filter(
+                            (u) =>
+                              u.role === 'collaborator' &&
+                              (u.companyId || 'gosen') === (storeSettings.companyId || 'gosen')
+                          )
+                          .map((col) => (
+                            <option key={col.id} value={col.username}>
+                              🛵 {col.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1.5">
                     <input
                       type="text"
                       placeholder="Marca Artículo (Opcional, ej. Mabe)"
@@ -4138,6 +4367,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
               )}
 
               {/* Product Warranty Option Bar (Available for ANY product / invoice / ticket) */}
+              {canUseWarrantyModule && (
               <div className="p-2 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-1.5">
                   <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -4205,6 +4435,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Compact Discount + ISV + Subtotal Row */}
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 pt-1.5 border-t border-slate-100">
@@ -4312,7 +4543,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
             </div>
           </div>
         </div>
-      ) : activeSubTab === 'history' ? (
+      ) : effectiveSubTab === 'history' ? (
         /* ==================== SALES HISTORY VIEW (CENTERED MARGINS) ==================== */
         <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-40 md:pb-24">
           <div className="w-full max-w-[1640px] mx-auto space-y-4 sm:space-y-5">
@@ -4912,15 +5143,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
                               <span>WhatsApp</span>
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleSendWarrantyWhatsApp(sale, sale.customerPhone)}
-                              className="min-h-[40px] px-3 py-2 text-xs font-bold text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-300 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs col-span-2 sm:col-span-1"
-                              title="Mandar Certificado de Garantía por WhatsApp"
-                            >
-                              <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
-                              <span>Mandar Garantía</span>
-                            </button>
+                            {canUseWarrantyModule && (
+                              <button
+                                type="button"
+                                onClick={() => handleSendWarrantyWhatsApp(sale, sale.customerPhone)}
+                                className="min-h-[40px] px-3 py-2 text-xs font-bold text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-300 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs col-span-2 sm:col-span-1"
+                                title="Mandar Certificado de Garantía por WhatsApp"
+                              >
+                                <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
+                                <span>Mandar Garantía</span>
+                              </button>
+                            )}
                             {!isCancelled && canEditSales && onUpdateSale && (
                               <button
                                 type="button"
@@ -5153,14 +5386,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               </button>
 
                               {/* Send Product Warranty via WhatsApp */}
-                              <button
-                                type="button"
-                                onClick={() => handleSendWarrantyWhatsApp(sale, sale.customerPhone)}
-                                className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
-                                title="Mandar Garantía del Producto por WhatsApp"
-                              >
-                                <ShieldCheck className="w-4 h-4" />
-                              </button>
+                              {canUseWarrantyModule && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSendWarrantyWhatsApp(sale, sale.customerPhone)}
+                                  className="p-1.5 text-teal-600 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Mandar Garantía del Producto por WhatsApp"
+                                >
+                                  <ShieldCheck className="w-4 h-4" />
+                                </button>
+                              )}
 
                               {/* Edit sale button */}
                               {!isCancelled && canEditSales && onUpdateSale && (
@@ -6487,6 +6722,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
               </div>
 
               {/* Interactive Product Warranty Card (Toggle, Customize, Send via WhatsApp, Print & PDF for ANY Product) */}
+              {canUseWarrantyModule && (
               <div className="bg-teal-50/90 border border-teal-300 rounded-xl p-3 space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -6788,13 +7024,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </button>
                 </div>
               </div>
+              )}
 
               {/* WhatsApp Digital Ticket Card */}
               <div className="bg-emerald-50 border border-emerald-200/90 rounded-xl p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
                     <WhatsAppIcon className="w-4 h-4 fill-emerald-600 shrink-0" />
-                    <span>Enviar Ticket y/o Garantía por WhatsApp</span>
+                    <span>{canUseWarrantyModule ? 'Enviar Ticket y/o Garantía por WhatsApp' : 'Enviar Ticket por WhatsApp'}</span>
                   </span>
                   <span className="text-[10px] text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-full font-bold">
                     Directo
@@ -6833,15 +7070,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       <span>Enviar Ticket</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleSendWarrantyWhatsApp(completedSale)}
-                      className="flex-1 min-w-[130px] py-2 px-2.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs rounded-lg transition-all shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
-                      title="Mandar Certificado de Garantía al WhatsApp del cliente"
-                    >
-                      <ShieldCheck className="w-3.5 h-3.5 text-teal-200 shrink-0" />
-                      <span>Mandar Garantía</span>
-                    </button>
+                    {canUseWarrantyModule && (
+                      <button
+                        type="button"
+                        onClick={() => handleSendWarrantyWhatsApp(completedSale)}
+                        className="flex-1 min-w-[130px] py-2 px-2.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs rounded-lg transition-all shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="Mandar Certificado de Garantía al WhatsApp del cliente"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-teal-200 shrink-0" />
+                        <span>Mandar Garantía</span>
+                      </button>
+                    )}
 
                     <button
                       type="button"

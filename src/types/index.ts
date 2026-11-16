@@ -72,6 +72,7 @@ export type ActiveTab =
   | 'inventory'
   | 'warehouses'
   | 'sales'
+  | 'restaurant'
   | 'online-sales'
   | 'purchases'
   | 'audit'
@@ -86,6 +87,7 @@ export type ActiveTab =
 export const ALL_COMPANY_MODULES: ActiveTab[] = [
   'dashboard',
   'sales',
+  'restaurant',
   'online-sales',
   'inventory',
   'warehouses',
@@ -98,6 +100,53 @@ export const ALL_COMPANY_MODULES: ActiveTab[] = [
   'activity',
   'settings',
 ];
+
+export function resolveCompanyAllowedModules(
+  rawModules?: ActiveTab[] | null,
+  options?: {
+    enableOnlineSales?: boolean;
+    enableRestaurantModule?: boolean;
+  }
+): ActiveTab[] {
+  const base: ActiveTab[] =
+    Array.isArray(rawModules) && rawModules.length > 0
+      ? [...rawModules]
+      : [...ALL_COMPANY_MODULES];
+
+  const isOnlineEnabled =
+    options?.enableOnlineSales !== undefined
+      ? Boolean(options.enableOnlineSales)
+      : Array.isArray(rawModules) && rawModules.length > 0
+      ? rawModules.includes('online-sales')
+      : true;
+
+  const isRestaurantEnabled =
+    options?.enableRestaurantModule !== undefined
+      ? Boolean(options.enableRestaurantModule)
+      : true;
+
+  let next = [...base];
+  if (isOnlineEnabled) {
+    if (!next.includes('online-sales')) next.push('online-sales');
+  } else {
+    next = next.filter((m) => m !== 'online-sales');
+  }
+
+  if (isRestaurantEnabled) {
+    if (!next.includes('restaurant')) {
+      const salesIdx = next.indexOf('sales');
+      if (salesIdx >= 0) {
+        next.splice(salesIdx + 1, 0, 'restaurant');
+      } else {
+        next.push('restaurant');
+      }
+    }
+  } else {
+    next = next.filter((m) => m !== 'restaurant');
+  }
+
+  return next;
+}
 
 export type UserRole = 'admin' | 'collaborator';
 
@@ -259,8 +308,10 @@ export interface CompanyTenant {
   allowedModules?: ActiveTab[];
   enableDeliveryDvolada?: boolean;
   enableOnlineSales?: boolean;
+  enableRestaurantModule?: boolean;
   enableCreditContract?: boolean;
   enableDigitalSignature?: boolean;
+  enableWarrantyModule?: boolean;
   maxProducts?: number; // 0 or undefined = Ilimitado
   maxUsers?: number; // 0 or undefined = Ilimitado
   paymentHistory?: SubscriptionPaymentRecord[];
@@ -274,6 +325,8 @@ export interface CollaboratorSalesPermissions {
   canCancelSales?: boolean;
   canViewCostsAndProfits?: boolean;
   allowedWarehouseIds?: string[];
+  isRouteCollector?: boolean;
+  routeCollectorScope?: 'all' | 'assigned';
 }
 
 export interface UserAccount {
@@ -313,7 +366,7 @@ export interface ActivityLogRecord {
   userName: string;
   userRole: UserRole;
   action: string;
-  module: 'sales' | 'online-sales' | 'inventory' | 'warehouses' | 'purchases' | 'audit' | 'suppliers' | 'settings' | 'users' | 'catalog';
+  module: 'sales' | 'restaurant' | 'online-sales' | 'inventory' | 'warehouses' | 'purchases' | 'audit' | 'suppliers' | 'settings' | 'users' | 'catalog';
   details?: string;
 }
 
@@ -651,6 +704,18 @@ export interface CreditAccountControlMeta {
   installmentAmount?: number;
   numberOfInstallments?: number;
   collectionNotes?: string;
+  assignedCollectorId?: string;
+  assignedCollectorUsername?: string;
+  assignedCollectorName?: string;
+  customerAddressOrRoute?: string;
+  customerGpsLat?: number;
+  customerGpsLng?: number;
+  customerGpsAccuracy?: number;
+  customerGpsCapturedAt?: number;
+  customerGpsCapturedBy?: string;
+  customerGpsFormattedAddress?: string;
+  customerGpsPlusCode?: string;
+  autoAdvanceNextDate?: boolean;
   creditContract?: CreditContractData;
   lastNoticeAt?: number;
   lastNoticeTimestamp?: number;
@@ -660,11 +725,52 @@ export interface CreditAccountControlMeta {
   notices?: CreditCollectionNoticeLog[];
 }
 
+export interface RouteCollectorAlert {
+  id: string;
+  saleId: string;
+  saleNumber: string;
+  customerName: string;
+  customerPhone?: string;
+  collectorId?: string;
+  collectorUsername: string;
+  collectorName: string;
+  alertType:
+    | 'abono_collected'
+    | 'rescheduled_date'
+    | 'customer_absent'
+    | 'promise_to_pay'
+    | 'refused_or_issue'
+    | 'gps_location_saved'
+    | 'custom_report';
+  title: string;
+  message: string;
+  amountCollected?: number;
+  scheduledNextDate?: string;
+  gpsLat?: number;
+  gpsLng?: number;
+  timestamp: number;
+  dateFormatted: string;
+  status: 'unread' | 'reviewed';
+  reviewedBy?: string;
+  reviewedAt?: number;
+}
+
+export interface RouteCollectorGlobalConfig {
+  autoCalculateNextDateOnAbone: boolean;
+  defaultPaymentFrequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+  upcomingAlertDays: number;
+  notifyAdminOnEveryAbone: boolean;
+  notifyAdminOnReschedule: boolean;
+  enabledCollectorUsernames?: string[];
+}
+
 export interface POSFinanceStoreData {
   companyId: string;
   shifts: CashRegisterShift[];
   expenses: StoreExpenseRecord[];
   creditAccountControls?: Record<string, CreditAccountControlMeta>;
+  routeCollectorConfig?: RouteCollectorGlobalConfig;
+  routeCollectorAlerts?: RouteCollectorAlert[];
   onlineCustomers?: OnlineCustomerProfile[];
   loyaltyConfig?: LoyaltyProgramConfig;
   loyaltyCustomers?: LoyaltyCustomerProfile[];
@@ -790,11 +896,34 @@ export interface StoreSettings {
   allowedModules?: ActiveTab[];
   enableDeliveryDvolada?: boolean;
   enableOnlineSales?: boolean;
+  enableRestaurantModule?: boolean;
   enableCreditContract?: boolean;
   enableDigitalSignature?: boolean;
+  enableWarrantyModule?: boolean;
   maxProducts?: number;
   maxUsers?: number;
   updatedAt?: number;
+}
+
+export function isStoreWarrantyModuleEnabled(
+  settings?: StoreSettings | null,
+  company?: CompanyTenant | null
+): boolean {
+  if (company?.enableWarrantyModule !== undefined) {
+    return Boolean(company.enableWarrantyModule);
+  }
+  if (settings?.enableWarrantyModule !== undefined) {
+    return Boolean(settings.enableWarrantyModule);
+  }
+  const slug = String(company?.slug || settings?.companyId || '').toLowerCase().trim();
+  return (
+    slug === 'gosen' ||
+    slug === 'tiendagyg' ||
+    slug === 'comercialgyg' ||
+    slug === 'comercial-gyg' ||
+    slug === 'comercial_gyg' ||
+    slug === 'gyg'
+  );
 }
 
 export function isStoreCreditContractEnabled(
@@ -1053,11 +1182,214 @@ export function doesSaleBelongToCollaborator(
   return false;
 }
 
+/**
+ * Normalizes a collaborator identifier (username or name) by trimming, lowercasing, and removing leading '@'.
+ */
+export function normalizeCollectorIdentifier(raw?: string | null): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '');
+}
+
+/**
+ * Checks whether a specific credit account control meta (or sale) is assigned to the given collaborator.
+ */
+export function doesCreditAccountBelongToCollector(
+  controlMeta?: CreditAccountControlMeta | null,
+  userSession?: UserSession | null,
+  collabAccount?: UserAccount | null
+): boolean {
+  if (!controlMeta) return false;
+  const myId = String(collabAccount?.id || userSession?.userId || '').trim().toLowerCase();
+  const myUsername = normalizeCollectorIdentifier(collabAccount?.username || userSession?.username);
+  const myName = normalizeCollectorIdentifier(collabAccount?.name || userSession?.userName);
+
+  const assignedId = String(controlMeta.assignedCollectorId || '').trim().toLowerCase();
+  const assignedUsername = normalizeCollectorIdentifier(controlMeta.assignedCollectorUsername);
+  const assignedName = normalizeCollectorIdentifier(controlMeta.assignedCollectorName);
+
+  if (myId && assignedId && (assignedId === myId || assignedId.endsWith(`__${myId}`) || myId.endsWith(`__${assignedId}`))) {
+    return true;
+  }
+  if (myUsername && (assignedUsername === myUsername || assignedName === myUsername)) {
+    return true;
+  }
+  if (myName && (assignedName === myName || assignedUsername === myName)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Determines whether the logged-in collaborator is an authorized Route Collector ("Cobrador de Ruta").
+ * Returns true if ANY of the following is true:
+ * 1. Their live UserAccount has `salesPermissions.isRouteCollector === true`
+ * 2. Their active UserSession has `salesPermissions.isRouteCollector === true`
+ * 3. Their username or name is in `posFinanceData.routeCollectorConfig.enabledCollectorUsernames`
+ * 4. At least one credit account in `posFinanceData.creditAccountControls` is assigned to them
+ */
+export function isCollaboratorRouteCollector(
+  userSession?: UserSession | null,
+  users?: UserAccount[],
+  posFinanceData?: POSFinanceStoreData | null
+): boolean {
+  if (!userSession || userSession.role === 'admin') return false;
+
+  const sessionUserId = String(userSession.userId || '').trim().toLowerCase();
+  const sessionUsername = normalizeCollectorIdentifier(userSession.username);
+  const sessionName = normalizeCollectorIdentifier(userSession.userName);
+
+  const matchedUser = (users || []).find((u) => {
+    const uId = String(u.id || '').trim().toLowerCase();
+    const uUsername = normalizeCollectorIdentifier(u.username);
+    const uName = normalizeCollectorIdentifier(u.name);
+    if (sessionUserId && uId && (uId === sessionUserId || uId.endsWith(`__${sessionUserId}`) || sessionUserId.endsWith(`__${uId}`))) {
+      return true;
+    }
+    if (sessionUsername && uUsername === sessionUsername) return true;
+    if (sessionName && (uName === sessionName || uUsername === sessionName)) return true;
+    return false;
+  });
+
+  if (matchedUser?.salesPermissions?.isRouteCollector) return true;
+  if (userSession.salesPermissions?.isRouteCollector) return true;
+
+  const enabledList = (posFinanceData?.routeCollectorConfig?.enabledCollectorUsernames || []).map(
+    (u) => normalizeCollectorIdentifier(u)
+  );
+  const collabUsername = normalizeCollectorIdentifier(matchedUser?.username || sessionUsername);
+  const collabName = normalizeCollectorIdentifier(matchedUser?.name || sessionName);
+
+  if (collabUsername && enabledList.includes(collabUsername)) return true;
+  if (collabName && enabledList.includes(collabName)) return true;
+
+  // Also check if any credit account in creditAccountControls was assigned to this collaborator
+  const controls = posFinanceData?.creditAccountControls || {};
+  for (const meta of Object.values(controls)) {
+    if (doesCreditAccountBelongToCollector(meta, userSession, matchedUser)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export type RestaurantTableStatus =
+  | 'available'
+  | 'occupied'
+  | 'kitchen'
+  | 'ready'
+  | 'bill_requested';
+
+export type RestaurantTableShape = 'square' | 'round' | 'rect';
+
+export interface RestaurantTable {
+  id: string;
+  number: string;
+  name: string;
+  zone: string;
+  capacity: number;
+  shape: RestaurantTableShape;
+  status: RestaurantTableStatus;
+  currentOrderId?: string;
+  isActive?: boolean;
+}
+
+export interface RestaurantOrderItem {
+  id: string;
+  productId: string;
+  code: string;
+  name: string;
+  category?: string;
+  price: number;
+  cost: number;
+  quantity: number;
+  sentToKitchenQty: number;
+  notes?: string;
+  prepStation?: 'cocina' | 'barra' | 'postres';
+  addedAt: number;
+}
+
+export type RestaurantOrderType = 'dine_in' | 'takeout' | 'delivery';
+
+export interface RestaurantTableOrder {
+  id: string;
+  companyId?: string;
+  orderNumber: string;
+  tableId?: string;
+  tableName: string;
+  zone?: string;
+  orderType: RestaurantOrderType;
+  guests: number;
+  waiterName: string;
+  customerName?: string;
+  customerPhone?: string;
+  deliveryAddress?: string;
+  notes?: string;
+  items: RestaurantOrderItem[];
+  discount?: number;
+  tipAmount?: number;
+  status: 'open' | 'bill_requested' | 'paid' | 'cancelled';
+  saleId?: string;
+  saleNumber?: string;
+  createdAt: number;
+  updatedAt: number;
+  paidAt?: number;
+}
+
+export type KitchenCommandStatus =
+  | 'pending'
+  | 'preparing'
+  | 'ready'
+  | 'delivered'
+  | 'cancelled';
+
+export interface KitchenCommandItem {
+  id: string;
+  productId: string;
+  code: string;
+  name: string;
+  category?: string;
+  quantity: number;
+  notes?: string;
+  prepStation?: 'cocina' | 'barra' | 'postres';
+}
+
+export interface KitchenCommandTicket {
+  id: string;
+  companyId?: string;
+  ticketNumber: string;
+  orderId: string;
+  orderNumber: string;
+  tableId?: string;
+  tableName: string;
+  zone?: string;
+  orderType: RestaurantOrderType;
+  waiterName: string;
+  guests: number;
+  items: KitchenCommandItem[];
+  orderNotes?: string;
+  status: KitchenCommandStatus;
+  createdAt: number;
+  startedAt?: number;
+  readyAt?: number;
+  deliveredAt?: number;
+}
+
+export interface RestaurantStoreData {
+  companyId: string;
+  zones: string[];
+  tables: RestaurantTable[];
+  orders: RestaurantTableOrder[];
+  kitchenTickets: KitchenCommandTicket[];
+  orderSequence: number;
+  ticketSequence: number;
+  updatedAt: number;
+}
+
 export interface ToastMessage {
   id: string;
   message: string;
   type: 'success' | 'error' | 'warning' | 'info';
 }
-
-
-

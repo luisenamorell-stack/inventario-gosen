@@ -13,12 +13,17 @@ import {
   UserSession,
   CompanyTenant,
   ALL_COMPANY_MODULES,
+  resolveCompanyAllowedModules,
   SaaSGlobalConfig,
   POSFinanceStoreData,
   CreditPaymentAbone,
   StoreWarehousesData,
+  RestaurantStoreData,
   resolveInvoiceIssuerName,
   doesSaleBelongToCollaborator,
+  isCollaboratorRouteCollector,
+  normalizeCollectorIdentifier,
+  doesCreditAccountBelongToCollector,
 } from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
@@ -26,6 +31,7 @@ import { SaaSLandingPage } from './components/SaaSLandingPage';
 import { ToastContainer } from './components/ToastContainer';
 import { LoginView } from './components/LoginView';
 import { SalesView, type SalesSubTab } from './components/SalesView';
+import { RestaurantView } from './components/RestaurantView';
 import { DashboardView } from './components/DashboardView';
 import { InventoryView } from './components/InventoryView';
 import { WarehousesView } from './components/WarehousesView';
@@ -122,6 +128,7 @@ import {
   fetchPurchasesOnce,
   fetchAuditHistoryOnce,
   fetchUsersOnce,
+  subscribeToUsers,
   fetchActivityLogsOnce,
   saveStoreSettingsToFirestore,
   DEFAULT_STORE_SETTINGS,
@@ -152,6 +159,10 @@ import {
   saveStoreWarehousesToFirestore,
   getDefaultWarehousesForStore,
   applyWarehouseStockDelta,
+  getCachedRestaurantData,
+  fetchRestaurantDataOnce,
+  subscribeToRestaurantData,
+  saveRestaurantDataToFirestore,
   seedInitialDataIfEmpty,
   pingFirestore,
   fetchBackendSyncStatus,
@@ -190,6 +201,8 @@ import {
   AlertTriangle,
   ArrowLeft,
   Megaphone,
+  Navigation,
+  UtensilsCrossed,
   X
 } from 'lucide-react';
 import { ConfirmDialog } from './components/ConfirmDialog';
@@ -295,6 +308,9 @@ export const App: React.FC = () => {
   );
   const [warehousesData, setWarehousesData] = useState<StoreWarehousesData>(() =>
     getCachedStoreWarehouses(getActiveCompanyId())
+  );
+  const [restaurantData, setRestaurantData] = useState<RestaurantStoreData>(() =>
+    getCachedRestaurantData(getActiveCompanyId())
   );
   const [salesSubTab, setSalesSubTab] = useState<SalesSubTab>('pos');
 
@@ -529,6 +545,7 @@ export const App: React.FC = () => {
               enableCreditContract: compObj?.enableCreditContract ?? false,
               enableDigitalSignature:
                 compObj?.enableDigitalSignature ?? compObj?.enableCreditContract ?? false,
+              enableWarrantyModule: compObj?.enableWarrantyModule ?? false,
             }
       );
     }
@@ -542,6 +559,7 @@ export const App: React.FC = () => {
     setUsers(getCachedUsers(cleanSlug) || []);
     setPosFinanceData(getCachedPOSFinanceData(cleanSlug));
     setWarehousesData(getCachedStoreWarehouses(cleanSlug));
+    setRestaurantData(getCachedRestaurantData(cleanSlug));
     setActivityLogs([]);
   }, [companies]);
 
@@ -576,11 +594,18 @@ export const App: React.FC = () => {
         : ALL_COMPANY_MODULES;
 
     if (session.role !== 'admin') {
-      const validCollabTabs = (session.allowedTabs || ['sales', 'inventory', 'price-checker']).filter(
-        (t) => compAllowed.includes(t)
-      );
-      const firstAllowed = validCollabTabs.length > 0 ? validCollabTabs[0] : compAllowed[0] || 'sales';
-      setActiveTab(firstAllowed);
+      const isCollabCollector = isCollaboratorRouteCollector(session, users, posFinanceData);
+      if (isCollabCollector || session.salesPermissions?.isRouteCollector) {
+        setSalesSubTab('credits');
+        setActiveTab('sales');
+      } else {
+        const validCollabTabs = (
+          session.allowedTabs || ['sales', 'inventory', 'price-checker']
+        ).filter((t) => compAllowed.includes(t));
+        const firstAllowed =
+          validCollabTabs.length > 0 ? validCollabTabs[0] : compAllowed[0] || 'sales';
+        setActiveTab(firstAllowed);
+      }
     } else if (session.isSuperAdmin) {
       setActiveTab('companies');
     } else {
@@ -724,9 +749,11 @@ export const App: React.FC = () => {
         activeComp?.enableOnlineSales === false ||
         storeSettings.enableOnlineSales === false ||
         !rawCompModules.includes('online-sales');
-      const compModules = isOnlineSalesOff
-        ? rawCompModules.filter((m) => m !== 'online-sales')
-        : rawCompModules;
+      const compModules = resolveCompanyAllowedModules(rawCompModules, {
+        enableOnlineSales: !isOnlineSalesOff,
+        enableRestaurantModule:
+          activeComp?.enableRestaurantModule ?? storeSettings.enableRestaurantModule,
+      });
 
       if (!compModules.includes(targetTab)) {
         showToast('Esta función no está incluida o habilitada en el plan de tu tienda.', 'warning');
@@ -735,7 +762,12 @@ export const App: React.FC = () => {
     }
 
     if (userSession.role !== 'admin') {
-      const allowed = userSession.allowedTabs || ['sales', 'inventory', 'price-checker'];
+      const isCollabCollector = isCollaboratorRouteCollector(userSession, users, posFinanceData);
+      const baseAllowed = userSession.allowedTabs || ['sales', 'inventory', 'price-checker'];
+      const allowed =
+        isCollabCollector && !baseAllowed.includes('sales')
+          ? ([...baseAllowed, 'sales'] as ActiveTab[])
+          : baseAllowed;
       if (!allowed.includes(targetTab)) {
         showToast('No tienes permiso para ingresar a este módulo. Contacta a tu Administrador.', 'warning');
         return;
@@ -854,16 +886,29 @@ export const App: React.FC = () => {
         const syncedSettings: StoreSettings = matchedTenant
           ? {
               ...settings,
-              allowedModules:
+              allowedModules: resolveCompanyAllowedModules(
                 matchedTenant.allowedModules && matchedTenant.allowedModules.length > 0
-                  ? matchedTenant.enableOnlineSales === false
-                    ? matchedTenant.allowedModules.filter((m) => m !== 'online-sales')
-                    : matchedTenant.allowedModules
+                  ? matchedTenant.allowedModules
                   : settings.allowedModules,
+                {
+                  enableOnlineSales:
+                    matchedTenant.enableOnlineSales !== undefined
+                      ? matchedTenant.enableOnlineSales
+                      : settings.enableOnlineSales,
+                  enableRestaurantModule:
+                    matchedTenant.enableRestaurantModule !== undefined
+                      ? matchedTenant.enableRestaurantModule
+                      : settings.enableRestaurantModule,
+                }
+              ),
               enableOnlineSales:
                 matchedTenant.enableOnlineSales !== undefined
                   ? matchedTenant.enableOnlineSales
                   : settings.enableOnlineSales,
+              enableRestaurantModule:
+                matchedTenant.enableRestaurantModule !== undefined
+                  ? matchedTenant.enableRestaurantModule
+                  : settings.enableRestaurantModule,
               enableDeliveryDvolada:
                 matchedTenant.enableDeliveryDvolada !== undefined
                   ? matchedTenant.enableDeliveryDvolada
@@ -876,6 +921,10 @@ export const App: React.FC = () => {
                 matchedTenant.enableDigitalSignature !== undefined
                   ? matchedTenant.enableDigitalSignature
                   : settings.enableDigitalSignature,
+              enableWarrantyModule:
+                matchedTenant.enableWarrantyModule !== undefined
+                  ? matchedTenant.enableWarrantyModule
+                  : settings.enableWarrantyModule,
               maxProducts: matchedTenant.maxProducts ?? settings.maxProducts ?? 0,
               maxUsers: matchedTenant.maxUsers ?? settings.maxUsers ?? 0,
             }
@@ -932,16 +981,20 @@ export const App: React.FC = () => {
             myTenant.enableOnlineSales !== undefined
               ? Boolean(myTenant.enableOnlineSales)
               : baseMods.includes('online-sales');
-          const effectiveMods: ActiveTab[] = isOnlineEnabled
-            ? baseMods.includes('online-sales')
-              ? baseMods
-              : [...baseMods, 'online-sales']
-            : baseMods.filter((m) => m !== 'online-sales');
+          const isRestaurantEnabled =
+            myTenant.enableRestaurantModule !== undefined
+              ? Boolean(myTenant.enableRestaurantModule)
+              : prev.enableRestaurantModule;
+          const effectiveMods = resolveCompanyAllowedModules(baseMods, {
+            enableOnlineSales: isOnlineEnabled,
+            enableRestaurantModule: isRestaurantEnabled,
+          });
 
           const updated: StoreSettings = {
             ...prev,
             allowedModules: effectiveMods,
             enableOnlineSales: isOnlineEnabled,
+            enableRestaurantModule: isRestaurantEnabled,
             enableDeliveryDvolada:
               myTenant.enableDeliveryDvolada !== undefined
                 ? myTenant.enableDeliveryDvolada
@@ -954,6 +1007,10 @@ export const App: React.FC = () => {
               myTenant.enableDigitalSignature !== undefined
                 ? myTenant.enableDigitalSignature
                 : prev.enableDigitalSignature,
+            enableWarrantyModule:
+              myTenant.enableWarrantyModule !== undefined
+                ? myTenant.enableWarrantyModule
+                : prev.enableWarrantyModule,
             maxProducts: myTenant.maxProducts ?? prev.maxProducts ?? 0,
             maxUsers: myTenant.maxUsers ?? prev.maxUsers ?? 0,
           };
@@ -985,7 +1042,9 @@ export const App: React.FC = () => {
     let unsubscribeSales: (() => void) | undefined;
     let unsubscribePosFinance: (() => void) | undefined;
     let unsubscribeWarehouses: (() => void) | undefined;
+    let unsubscribeRestaurant: (() => void) | undefined;
     let unsubscribeInventory: (() => void) | undefined;
+    let unsubscribeUsers: (() => void) | undefined;
 
     // Subscribe to real-time inventory & POS collections only when authenticated or in public catalog mode
     if (isAuthenticated || isPublicCatalogMode) {
@@ -1001,6 +1060,12 @@ export const App: React.FC = () => {
     }
 
     if (isAuthenticated && !isPublicCatalogMode) {
+      // Immediately load sales, posFinanceData, and users regardless of initial activeTab so Route Collector permissions & accounts are always available
+      fetchSalesOnce(false, activeCompanyId).then(setSales).catch(() => {});
+      fetchPOSFinanceDataOnce(activeCompanyId).then(setPosFinanceData).catch(() => {});
+      fetchUsersOnce(false, activeCompanyId).then(setUsers).catch(() => {});
+      fetchRestaurantDataOnce(activeCompanyId).then(setRestaurantData).catch(() => {});
+
       unsubscribeSales = subscribeToSales(
         (liveSales) => {
           setSales(liveSales);
@@ -1024,6 +1089,23 @@ export const App: React.FC = () => {
         },
         activeCompanyId
       );
+
+      unsubscribeRestaurant = subscribeToRestaurantData(
+        (liveRestaurant) => {
+          setRestaurantData(liveRestaurant);
+        },
+        activeCompanyId
+      );
+
+      unsubscribeUsers = subscribeToUsers(
+        (liveUsers) => {
+          setUsers(liveUsers);
+        },
+        (err) => {
+          console.warn('Users realtime listener warning:', err);
+        },
+        activeCompanyId
+      );
     }
 
     return () => {
@@ -1034,6 +1116,8 @@ export const App: React.FC = () => {
       if (unsubscribeSales) unsubscribeSales();
       if (unsubscribePosFinance) unsubscribePosFinance();
       if (unsubscribeWarehouses) unsubscribeWarehouses();
+      if (unsubscribeRestaurant) unsubscribeRestaurant();
+      if (unsubscribeUsers) unsubscribeUsers();
     };
   }, [activeCompanyId, isPublicCatalogMode, isSalesLandingMode, isAuthenticated]);
 
@@ -1072,7 +1156,7 @@ export const App: React.FC = () => {
             loadedModulesRef.current[`users${keySuffix}`] = true;
             fetchUsersOnce(false, activeCompanyId).then(setUsers).catch(console.warn);
           }
-        } else if (activeTab === 'sales' || activeTab === 'online-sales') {
+        } else if (activeTab === 'sales' || activeTab === 'online-sales' || activeTab === 'restaurant') {
           if (!loadedModulesRef.current[`sales${keySuffix}`]) {
             loadedModulesRef.current[`sales${keySuffix}`] = true;
             fetchSalesOnce(false, activeCompanyId).then(setSales).catch(console.warn);
@@ -1088,6 +1172,10 @@ export const App: React.FC = () => {
           if (!loadedModulesRef.current[`users${keySuffix}`]) {
             loadedModulesRef.current[`users${keySuffix}`] = true;
             fetchUsersOnce(false, activeCompanyId).then(setUsers).catch(console.warn);
+          }
+          if (activeTab === 'restaurant' && !loadedModulesRef.current[`restaurant${keySuffix}`]) {
+            loadedModulesRef.current[`restaurant${keySuffix}`] = true;
+            fetchRestaurantDataOnce(activeCompanyId).then(setRestaurantData).catch(console.warn);
           }
         } else if (activeTab === 'inventory') {
           if (!loadedModulesRef.current[`suppliers${keySuffix}`]) {
@@ -1180,15 +1268,29 @@ export const App: React.FC = () => {
           const isInitial = lastHubUpdatedAtRef.current === 0;
           lastHubUpdatedAtRef.current = serverTs;
           if (!isInitial || force) {
-            const [invRes, freshWarehouses, freshPurchases, freshSuppliers, freshSettings, freshCompanies] =
-              await Promise.all([
-                fetchInventorySmart(false, activeCompanyId),
-                fetchStoreWarehousesOnce(activeCompanyId),
-                fetchPurchasesOnce(false, activeCompanyId),
-                fetchSuppliersOnce(false, activeCompanyId),
-                fetchStoreSettingsOnce(activeCompanyId),
-                fetchCompaniesOnce(false),
-              ]);
+            const [
+              invRes,
+              freshWarehouses,
+              freshPurchases,
+              freshSuppliers,
+              freshSettings,
+              freshCompanies,
+              freshPosFinance,
+              freshUsers,
+              freshSales,
+              freshRestaurant,
+            ] = await Promise.all([
+              fetchInventorySmart(false, activeCompanyId),
+              fetchStoreWarehousesOnce(activeCompanyId),
+              fetchPurchasesOnce(false, activeCompanyId),
+              fetchSuppliersOnce(false, activeCompanyId),
+              fetchStoreSettingsOnce(activeCompanyId),
+              fetchCompaniesOnce(false),
+              fetchPOSFinanceDataOnce(activeCompanyId),
+              fetchUsersOnce(false, activeCompanyId),
+              fetchSalesOnce(false, activeCompanyId),
+              fetchRestaurantDataOnce(activeCompanyId),
+            ]);
             if (!isMounted) return;
             setInventory(invRes.items);
             setWarehousesData(freshWarehouses);
@@ -1196,6 +1298,10 @@ export const App: React.FC = () => {
             setSuppliers(freshSuppliers);
             setStoreSettings(freshSettings);
             setCompanies(freshCompanies);
+            setPosFinanceData(freshPosFinance);
+            setUsers(freshUsers);
+            setSales(freshSales);
+            setRestaurantData(freshRestaurant);
             setLastSyncTime(new Date());
           }
         }
@@ -1223,37 +1329,135 @@ export const App: React.FC = () => {
     };
   }, [activeCompanyId, isSalesLandingMode, isPublicCatalogMode]);
 
+  // Live-sync active collaborator session when Admin updates their permissions or Route Collector assignment
+  const prevRouteCollectorStatusRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (!userSession || userSession.role === 'admin') {
+      prevRouteCollectorStatusRef.current = false;
+      return;
+    }
+
+    const sId = String(userSession.userId || '').trim().toLowerCase();
+    const sUname = normalizeCollectorIdentifier(userSession.username);
+    const sName = normalizeCollectorIdentifier(userSession.userName);
+
+    const matchedUser = users.find((u) => {
+      const uId = String(u.id || '').trim().toLowerCase();
+      const uUname = normalizeCollectorIdentifier(u.username);
+      const uName = normalizeCollectorIdentifier(u.name);
+      if (sId && uId && (uId === sId || uId.endsWith(`__${sId}`) || sId.endsWith(`__${uId}`))) {
+        return true;
+      }
+      if (sUname && uUname === sUname) return true;
+      if (sName && (uName === sName || uUname === sName)) return true;
+      return false;
+    });
+
+    const isCollectorNow = isCollaboratorRouteCollector(userSession, users, posFinanceData);
+    const wasCollectorBefore = prevRouteCollectorStatusRef.current;
+    prevRouteCollectorStatusRef.current = isCollectorNow;
+
+    if (isCollectorNow && !wasCollectorBefore) {
+      setSalesSubTab('credits');
+      setActiveTab('sales');
+    }
+
+    const baseTabs: ActiveTab[] =
+      matchedUser?.allowedTabs && matchedUser.allowedTabs.length > 0
+        ? matchedUser.allowedTabs
+        : userSession.allowedTabs || ['sales', 'inventory', 'price-checker'];
+    const nextAllowedTabs: ActiveTab[] =
+      isCollectorNow && !baseTabs.includes('sales') ? ['sales', ...baseTabs] : baseTabs;
+
+    const nextSalesPerms = {
+      canEditSales:
+        matchedUser?.salesPermissions?.canEditSales ??
+        userSession.salesPermissions?.canEditSales ??
+        true,
+      canCancelSales: Boolean(
+        matchedUser?.salesPermissions?.canCancelSales ??
+          userSession.salesPermissions?.canCancelSales
+      ),
+      canViewCostsAndProfits: Boolean(
+        matchedUser?.salesPermissions?.canViewCostsAndProfits ??
+          userSession.salesPermissions?.canViewCostsAndProfits
+      ),
+      allowedWarehouseIds:
+        matchedUser?.salesPermissions?.allowedWarehouseIds ||
+        matchedUser?.allowedWarehouseIds ||
+        userSession.salesPermissions?.allowedWarehouseIds ||
+        userSession.allowedWarehouseIds,
+      isRouteCollector: isCollectorNow,
+      routeCollectorScope:
+        matchedUser?.salesPermissions?.routeCollectorScope ||
+        userSession.salesPermissions?.routeCollectorScope ||
+        'all',
+    };
+
+    const tabsChanged =
+      JSON.stringify(nextAllowedTabs) !== JSON.stringify(userSession.allowedTabs || []);
+    const permsChanged =
+      Boolean(userSession.salesPermissions?.isRouteCollector) !== isCollectorNow ||
+      userSession.salesPermissions?.routeCollectorScope !== nextSalesPerms.routeCollectorScope;
+
+    if (tabsChanged || permsChanged) {
+      const updatedSession: UserSession = {
+        ...userSession,
+        userId: matchedUser?.id || userSession.userId,
+        username: matchedUser?.username || userSession.username,
+        allowedTabs: nextAllowedTabs,
+        salesPermissions: nextSalesPerms,
+      };
+      setUserSession(updatedSession);
+      try {
+        if (localStorage.getItem('stockmaster_user_session')) {
+          localStorage.setItem('stockmaster_user_session', JSON.stringify(updatedSession));
+        } else {
+          sessionStorage.setItem('stockmaster_user_session', JSON.stringify(updatedSession));
+        }
+      } catch {}
+    }
+  }, [userSession, users, posFinanceData]);
+
   // Manual Cloud Sync Button Handler
   const handleManualSync = useCallback(async () => {
     if (isSyncing) return;
     setIsSyncing(true);
     try {
-      const [invResult, settings, freshWarehouses, freshSuppliers, freshPurchases] = await Promise.all([
+      const [
+        invResult,
+        settings,
+        freshWarehouses,
+        freshSuppliers,
+        freshPurchases,
+        freshSales,
+        freshPosFinance,
+        freshUsers,
+        freshRestaurant,
+      ] = await Promise.all([
         fetchInventorySmart(true, activeCompanyId),
         fetchStoreSettingsOnce(activeCompanyId),
         fetchStoreWarehousesOnce(activeCompanyId),
         fetchSuppliersOnce(true, activeCompanyId),
         fetchPurchasesOnce(true, activeCompanyId),
+        fetchSalesOnce(true, activeCompanyId),
+        fetchPOSFinanceDataOnce(activeCompanyId),
+        fetchUsersOnce(true, activeCompanyId),
+        fetchRestaurantDataOnce(activeCompanyId),
       ]);
       setInventory(invResult.items);
       setStoreSettings(settings);
       setWarehousesData(freshWarehouses);
       setSuppliers(freshSuppliers);
       setPurchases(freshPurchases);
+      setSales(freshSales);
+      setPosFinanceData(freshPosFinance);
+      setUsers(freshUsers);
+      setRestaurantData(freshRestaurant);
 
-      if (activeTab === 'sales' || activeTab === 'online-sales' || activeTab === 'dashboard') {
-        const [freshSales, freshPosFinance] = await Promise.all([
-          fetchSalesOnce(true, activeCompanyId),
-          fetchPOSFinanceDataOnce(activeCompanyId),
-        ]);
-        setSales(freshSales);
-        setPosFinanceData(freshPosFinance);
-      } else if (activeTab === 'audit') {
+      if (activeTab === 'audit') {
         const freshAudit = await fetchAuditHistoryOnce(true, activeCompanyId);
         setAuditHistory(freshAudit);
-      } else if (activeTab === 'users') {
-        const freshUsers = await fetchUsersOnce(true, activeCompanyId);
-        setUsers(freshUsers);
       } else if (activeTab === 'activity') {
         const freshLogs = await fetchActivityLogsOnce(activeCompanyId);
         setActivityLogs(freshLogs);
@@ -1345,11 +1549,27 @@ export const App: React.FC = () => {
           phone: saved.phone || prev.phone,
           address: saved.address || prev.address,
           accessPassword: saved.adminPassword || prev.accessPassword,
-          allowedModules: saved.allowedModules || prev.allowedModules || [...ALL_COMPANY_MODULES],
+          allowedModules: resolveCompanyAllowedModules(
+            saved.allowedModules || prev.allowedModules,
+            {
+              enableOnlineSales:
+                saved.enableOnlineSales !== undefined
+                  ? saved.enableOnlineSales
+                  : (saved.allowedModules || prev.allowedModules || ALL_COMPANY_MODULES).includes('online-sales'),
+              enableRestaurantModule:
+                saved.enableRestaurantModule !== undefined
+                  ? saved.enableRestaurantModule
+                  : prev.enableRestaurantModule,
+            }
+          ),
           enableOnlineSales:
             saved.enableOnlineSales !== undefined
               ? saved.enableOnlineSales
               : (saved.allowedModules || prev.allowedModules || ALL_COMPANY_MODULES).includes('online-sales'),
+          enableRestaurantModule:
+            saved.enableRestaurantModule !== undefined
+              ? saved.enableRestaurantModule
+              : prev.enableRestaurantModule,
           enableDeliveryDvolada:
             saved.enableDeliveryDvolada !== undefined
               ? saved.enableDeliveryDvolada
@@ -1362,6 +1582,10 @@ export const App: React.FC = () => {
             saved.enableDigitalSignature !== undefined
               ? saved.enableDigitalSignature
               : prev.enableDigitalSignature,
+          enableWarrantyModule:
+            saved.enableWarrantyModule !== undefined
+              ? saved.enableWarrantyModule
+              : prev.enableWarrantyModule,
           maxProducts: saved.maxProducts ?? prev.maxProducts ?? 0,
           maxUsers: saved.maxUsers ?? prev.maxUsers ?? 0,
         }));
@@ -2142,6 +2366,32 @@ export const App: React.FC = () => {
     );
   };
 
+  const handleSaveRestaurantData = async (nextData: RestaurantStoreData) => {
+    setIsSyncing(true);
+    try {
+      const saved = await saveRestaurantDataToFirestore(nextData, activeCompanyId);
+      setRestaurantData(saved);
+      setLastSyncTime(new Date());
+      return saved;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleLogRestaurantActivity = (action: string, details?: string) => {
+    logActivityInFirestore(
+      {
+        companyId: activeCompanyId,
+        userName: userSession?.userName || 'Usuario',
+        userRole: userSession?.role || 'collaborator',
+        action,
+        module: 'restaurant',
+        details,
+      },
+      activeCompanyId
+    );
+  };
+
   const handleRecordCreditPayment = async (sale: SaleRecord, abone: CreditPaymentAbone) => {
     setIsSyncing(true);
     try {
@@ -2807,9 +3057,18 @@ export const App: React.FC = () => {
       storeSettings.allowedModules.length > 0 &&
       !storeSettings.allowedModules.includes('online-sales'));
 
-  const companyAllowedModules: ActiveTab[] = isOnlineSalesDisabledForCompany
-    ? rawCompanyAllowedModules.filter((m) => m !== 'online-sales')
-    : rawCompanyAllowedModules;
+  const effectiveRestaurantFlag =
+    activeCompanyTenant?.enableRestaurantModule !== undefined
+      ? activeCompanyTenant.enableRestaurantModule
+      : storeSettings.enableRestaurantModule;
+
+  const companyAllowedModules: ActiveTab[] = resolveCompanyAllowedModules(
+    rawCompanyAllowedModules,
+    {
+      enableOnlineSales: !isOnlineSalesDisabledForCompany,
+      enableRestaurantModule: effectiveRestaurantFlag,
+    }
+  );
 
   const companyMaxProducts: number =
     activeCompanyTenant?.maxProducts ?? storeSettings.maxProducts ?? 0;
@@ -2832,11 +3091,23 @@ export const App: React.FC = () => {
       !dismissedAnnouncements.includes(ann.id)
   );
 
+  const isCurrentUserRouteCollector = isCollaboratorRouteCollector(
+    userSession,
+    users,
+    posFinanceData
+  );
+
   // Filter navigation & bottom nav items based on SaaS company permissions + collaborator allowedTabs
   const baseRoleTabs: ActiveTab[] =
     userSession.role === 'admin'
       ? ALL_COMPANY_MODULES
-      : (userSession.allowedTabs || ['sales', 'inventory', 'price-checker']);
+      : (() => {
+          const rawTabs = userSession.allowedTabs || ['sales', 'inventory', 'price-checker'];
+          if (isCurrentUserRouteCollector && !rawTabs.includes('sales')) {
+            return ['sales', ...rawTabs] as ActiveTab[];
+          }
+          return rawTabs;
+        })();
 
   const allowedTabsList: ActiveTab[] = isSuperAdminSession
     ? companyAllowedModules
@@ -2849,6 +3120,43 @@ export const App: React.FC = () => {
       : allowedTabsList.includes(activeTab)
       ? activeTab
       : allowedTabsList[0] || 'sales';
+
+  const handleOpenRouteCollectorPanel = () => {
+    setSalesSubTab('credits');
+    setActiveTab('sales');
+  };
+
+  const pendingRouteAccountsCount = sales.filter((s) => {
+    if (s.status !== 'completed') return false;
+    const bal =
+      s.balanceDue !== undefined
+        ? Number(s.balanceDue)
+        : s.paymentMethod === 'credit'
+        ? Number(s.total) - (Number(s.amountPaid) || 0)
+        : 0;
+    if (bal <= 0.01) return false;
+    if (userSession.role !== 'admin' && isCurrentUserRouteCollector) {
+      const meta = posFinanceData.creditAccountControls?.[s.id];
+      const matchedU = users.find(
+        (u) =>
+          normalizeCollectorIdentifier(u.username) ===
+          normalizeCollectorIdentifier(userSession.username)
+      );
+      if (matchedU?.salesPermissions?.routeCollectorScope === 'assigned') {
+        const anyAssignedToMe = sales.some((saleItem) =>
+          doesCreditAccountBelongToCollector(
+            posFinanceData.creditAccountControls?.[saleItem.id],
+            userSession,
+            matchedU
+          )
+        );
+        if (anyAssignedToMe) {
+          return doesCreditAccountBelongToCollector(meta, userSession, matchedU);
+        }
+      }
+    }
+    return true;
+  }).length;
 
   return (
     <div className="fixed inset-0 w-full h-full flex flex-col md:flex-row overflow-hidden text-slate-800 bg-slate-50">
@@ -2868,7 +3176,12 @@ export const App: React.FC = () => {
       {/* Main Sidebar */}
       <Sidebar
         activeTab={activeTabToRender}
-        onTabChange={handleTabChange}
+        onTabChange={(tab) => {
+          if (tab === 'sales' && isCurrentUserRouteCollector && activeTabToRender !== 'sales') {
+            setSalesSubTab('credits');
+          }
+          handleTabChange(tab);
+        }}
         onResetData={() => setShowResetConfirm(true)}
         storeSettings={storeSettings}
         userSession={userSession}
@@ -2881,6 +3194,10 @@ export const App: React.FC = () => {
         onUnlockSuperAdmin={handleUnlockSuperAdmin}
         onLockSuperAdmin={handleLockSuperAdmin}
         companyAllowedModules={companyAllowedModules}
+        isRouteCollector={isCurrentUserRouteCollector}
+        isRouteCollectorPanelActive={activeTabToRender === 'sales' && salesSubTab === 'credits'}
+        pendingRouteAccountsCount={pendingRouteAccountsCount}
+        onOpenRouteCollectorPanel={handleOpenRouteCollectorPanel}
       />
 
       {/* Main Content Area */}
@@ -3053,8 +3370,45 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Right Controls: Manual Cloud Sync Button, User Profile Badge, Install App & Logout */}
+          {/* Right Controls: Route Collector Quick Button, Manual Cloud Sync Button, User Profile Badge, Install App & Logout */}
           <div className="flex items-center gap-1.5 sm:gap-2 text-slate-600 shrink-0">
+            {userSession?.role !== 'admin' && isCurrentUserRouteCollector && (
+              <button
+                type="button"
+                onClick={handleOpenRouteCollectorPanel}
+                title="Abrir Panel Exclusivo de Cobrador de Ruta y Cuentas por Cobrar"
+                className={`inline-flex items-center justify-center gap-1.5 min-h-[40px] px-2.5 sm:px-3.5 py-2 rounded-xl text-xs font-extrabold border transition-all cursor-pointer shrink-0 shadow-xs active:scale-95 ${
+                  activeTabToRender === 'sales' && salesSubTab === 'credits'
+                    ? 'bg-amber-500 text-slate-950 border-amber-600 ring-2 ring-amber-300'
+                    : 'bg-amber-50 hover:bg-amber-100 text-amber-950 border-amber-300'
+                }`}
+              >
+                <span className="text-sm leading-none">🛵</span>
+                <span className="hidden xs:inline sm:inline">Panel Cobrador</span>
+                {pendingRouteAccountsCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-slate-900 text-amber-300 text-[10px] font-black leading-none">
+                    {pendingRouteAccountsCount}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {allowedTabsList.includes('restaurant') && (
+              <button
+                type="button"
+                onClick={() => handleTabChange('restaurant')}
+                title="Abrir Restaurante, Mesas y Comandera de Cocina"
+                className={`inline-flex items-center justify-center gap-1.5 min-h-[40px] px-2.5 sm:px-3.5 py-2 rounded-xl text-xs font-extrabold border transition-all cursor-pointer shrink-0 shadow-xs active:scale-95 ${
+                  activeTabToRender === 'restaurant'
+                    ? 'bg-orange-600 text-white border-orange-700 ring-2 ring-orange-200'
+                    : 'bg-orange-50 hover:bg-orange-100 text-orange-900 border-orange-300'
+                }`}
+              >
+                <UtensilsCrossed className="w-4 h-4 shrink-0" />
+                <span className="sm:hidden">Mesas</span>
+                <span className="hidden sm:inline">Mesas / Comandera</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -3074,7 +3428,7 @@ export const App: React.FC = () => {
             {userSession && (
               <div
                 className="flex items-center justify-center gap-1.5 min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-slate-100 border border-slate-200/80 text-xs font-bold shrink-0"
-                title={`${userSession.userName} (${userSession.role === 'admin' ? 'Admin' : 'Colaborador'})`}
+                title={`${userSession.userName} (${userSession.role === 'admin' ? 'Admin' : isCurrentUserRouteCollector ? 'Cobrador de Ruta' : 'Colaborador'})`}
               >
                 {userSession.role === 'admin' ? (
                   <ShieldCheck className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-amber-600 shrink-0" />
@@ -3085,7 +3439,7 @@ export const App: React.FC = () => {
                   {userSession.userName}
                 </span>
                 <span className="hidden md:inline text-[10px] text-slate-500 uppercase font-mono">
-                  ({userSession.role === 'admin' ? 'Admin' : 'Colaborador'})
+                  ({userSession.role === 'admin' ? 'Admin' : isCurrentUserRouteCollector ? '🛵 Cobrador' : 'Colaborador'})
                 </span>
               </div>
             )}
@@ -3128,8 +3482,10 @@ export const App: React.FC = () => {
                   ? users.find(
                       (u) =>
                         u.id === userSession.userId ||
-                        u.username.trim().toLowerCase() ===
-                          (userSession.username || '').trim().toLowerCase()
+                        normalizeCollectorIdentifier(u.username) ===
+                          normalizeCollectorIdentifier(userSession.username) ||
+                        normalizeCollectorIdentifier(u.name) ===
+                          normalizeCollectorIdentifier(userSession.userName)
                     )
                   : undefined;
 
@@ -3176,12 +3532,14 @@ export const App: React.FC = () => {
                     <SalesView
                       inventory={inventory}
                       sales={visibleSalesForSession}
+                      allStoreSales={sales}
                       storeSettings={storeSettings}
                       warehousesData={warehousesData}
                       userSession={userSession}
                       users={users}
                       isLoading={isInventoryLoading}
                       initialSubTab={salesSubTab}
+                      onSubTabChange={setSalesSubTab}
                       posFinanceData={posFinanceData}
                       onRecordSale={handleRecordSale}
                       onUpdateSale={handleUpdateSale}
@@ -3189,6 +3547,12 @@ export const App: React.FC = () => {
                       onSavePOSFinanceData={handleSavePOSFinanceData}
                       onRecordCreditPayment={handleRecordCreditPayment}
                       onSaveStoreSettings={handleSaveStoreSettings}
+                      onSaveUser={handleSaveUser}
+                      onOpenRestaurant={
+                        allowedTabsList.includes('restaurant')
+                          ? () => handleTabChange('restaurant')
+                          : undefined
+                      }
                       showToast={showToast}
                     />
                   )}
@@ -3206,6 +3570,26 @@ export const App: React.FC = () => {
                         onUpdateSale={handleUpdateSale}
                         onCancelSale={handleCancelSale}
                         onSavePOSFinanceData={handleSavePOSFinanceData}
+                        showToast={showToast}
+                      />
+                    )}
+
+                  {activeTabToRender === 'restaurant' &&
+                    allowedTabsList.includes('restaurant') && (
+                      <RestaurantView
+                        inventory={inventory}
+                        sales={sales}
+                        storeSettings={storeSettings}
+                        warehousesData={warehousesData}
+                        userSession={userSession}
+                        restaurantData={restaurantData}
+                        onSaveRestaurantData={handleSaveRestaurantData}
+                        onRecordSale={handleRecordSale}
+                        onRecordActivity={handleLogRestaurantActivity}
+                        onNavigateToPOS={() => {
+                          setSalesSubTab('pos');
+                          handleTabChange('sales');
+                        }}
                         showToast={showToast}
                       />
                     )}
@@ -3477,21 +3861,43 @@ export const App: React.FC = () => {
               </span>
             </button>
 
-            {/* 5. Right Outer: CONTEO (Audit) */}
-            <button
-              type="button"
-              onClick={() => handleTabChange('audit')}
-              className={`flex flex-col items-center justify-center h-12 px-1 rounded-xl transition-all cursor-pointer ${
-                activeTab === 'audit'
-                  ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-2xs'
-                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
-              } ${!allowedTabsList.includes('audit') ? 'opacity-45' : ''}`}
-            >
-              <ClipboardCheck className="w-5 h-5 stroke-[2.1] shrink-0" />
-              <span className="text-[9px] font-extrabold tracking-wide uppercase mt-1 leading-none whitespace-nowrap">
-                CONTEO
-              </span>
-            </button>
+            {/* 5. Right Outer: RUTA DE COBRO (for Route Collectors) OR CONTEO (Audit) */}
+            {isCurrentUserRouteCollector ? (
+              <button
+                type="button"
+                onClick={handleOpenRouteCollectorPanel}
+                className={`flex flex-col items-center justify-center h-12 px-1 rounded-xl transition-all cursor-pointer relative ${
+                  activeTab === 'sales' && salesSubTab === 'credits'
+                    ? 'bg-amber-500 text-slate-950 border border-amber-600 shadow-xs'
+                    : 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 active:scale-95'
+                }`}
+              >
+                <Navigation className="w-5 h-5 stroke-[2.2] shrink-0" />
+                <span className="text-[8px] font-black tracking-tight uppercase mt-1 leading-none whitespace-nowrap">
+                  🛵 RUTA COBRO
+                </span>
+                {pendingRouteAccountsCount > 0 && (
+                  <span className="absolute -top-1 right-1 px-1.5 py-0.2 rounded-full bg-slate-950 text-amber-300 text-[9px] font-black">
+                    {pendingRouteAccountsCount}
+                  </span>
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleTabChange('audit')}
+                className={`flex flex-col items-center justify-center h-12 px-1 rounded-xl transition-all cursor-pointer ${
+                  activeTab === 'audit'
+                    ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200/80 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 active:scale-95'
+                } ${!allowedTabsList.includes('audit') ? 'opacity-45' : ''}`}
+              >
+                <ClipboardCheck className="w-5 h-5 stroke-[2.1] shrink-0" />
+                <span className="text-[9px] font-extrabold tracking-wide uppercase mt-1 leading-none whitespace-nowrap">
+                  CONTEO
+                </span>
+              </button>
+            )}
           </div>
         </nav>
       </main>

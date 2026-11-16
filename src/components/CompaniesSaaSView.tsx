@@ -3,6 +3,7 @@ import {
   CompanyTenant,
   ActiveTab,
   ALL_COMPANY_MODULES,
+  resolveCompanyAllowedModules,
   SubscriptionPaymentRecord,
   SaaSAnnouncement,
   SaaSBankAccount,
@@ -13,6 +14,7 @@ import {
   getOfficialAppBaseUrl,
   isStoreCreditContractEnabled,
   isStoreDigitalSignatureEnabled,
+  isStoreWarrantyModuleEnabled,
 } from '../types';
 import {
   normalizeCompanySlug,
@@ -79,6 +81,7 @@ import {
   Video,
   PenTool,
   ScrollText,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
@@ -95,6 +98,7 @@ export const SAAS_MODULE_OPTIONS: {
 }[] = [
   { id: 'dashboard', label: 'Dashboard y Ganancias', desc: 'Métricas financieras, utilidad neta y resumen', icon: PieChart },
   { id: 'sales', label: 'Ventas y Facturación (POS)', desc: 'Caja registradora, tickets y cobros', icon: ShoppingCart },
+  { id: 'restaurant', label: 'Restaurante, Mesas y Comandera', desc: 'Salón visual de mesas, comandas de cocina KDS y POS integrado', icon: UtensilsCrossed },
   { id: 'online-sales', label: 'Ventas Online / Live (TikTok y Redes)', desc: 'Control de ventas por redes, clientes, envíos, costo de guías y ganancias', icon: Video },
   { id: 'inventory', label: 'Control de Inventario', desc: 'Artículos, fotos, tallas y carga Excel', icon: List },
   { id: 'warehouses', label: 'Bodegas y Traslados', desc: 'Múltiples bodegas, sucursales y traslados con comprobante', icon: Package },
@@ -120,6 +124,7 @@ export const SAAS_PLAN_PRESETS: {
   enableDvolada: boolean;
   enableCreditContract: boolean;
   enableDigitalSignature: boolean;
+  enableWarrantyModule: boolean;
   desc: string;
 }[] = [
   {
@@ -134,6 +139,7 @@ export const SAAS_PLAN_PRESETS: {
     enableDvolada: false,
     enableCreditContract: false,
     enableDigitalSignature: false,
+    enableWarrantyModule: false,
     desc: 'Ideal para negocios pequeños: Inventario + Caja POS (Hasta 250 prod. y 2 colab.)',
   },
   {
@@ -160,7 +166,8 @@ export const SAAS_PLAN_PRESETS: {
     enableDvolada: false,
     enableCreditContract: false,
     enableDigitalSignature: false,
-    desc: 'Incluye Ventas Online/Live, Bodegas, Catálogo QR, Compras y Proveedores (Hasta 1,500 prod. y 5 colab.)',
+    enableWarrantyModule: true,
+    desc: 'Incluye Garantías por Código, Ventas Online/Live, Bodegas, Catálogo QR, Compras y Proveedores (Hasta 1,500 prod. y 5 colab.)',
   },
   {
     id: 'empresarial',
@@ -174,7 +181,8 @@ export const SAAS_PLAN_PRESETS: {
     enableDvolada: true,
     enableCreditContract: true,
     enableDigitalSignature: true,
-    desc: 'Todos los módulos + Contrato de Crédito + Firma Digital en Pantalla + Ventas Online/Live + D’Volada + Ilimitado',
+    enableWarrantyModule: true,
+    desc: 'Todos los módulos + Garantías por Código + Contrato de Crédito + Firma Digital + Ventas Online/Live + D’Volada + Ilimitado',
   },
   {
     id: 'prueba15',
@@ -188,6 +196,7 @@ export const SAAS_PLAN_PRESETS: {
     enableDvolada: false,
     enableCreditContract: false,
     enableDigitalSignature: false,
+    enableWarrantyModule: true,
     desc: 'Acceso de demostración por 7 días con corte automático al vencer',
   },
 ];
@@ -414,6 +423,19 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     }
     if (lower.includes('farmac') || lower.includes('cosmet') || lower.includes('perfum')) {
       return 'farmacia_cosmeticos';
+    }
+    if (
+      lower.includes('restaur') ||
+      lower.includes('comed') ||
+      lower.includes('cafe') ||
+      lower.includes('pizza') ||
+      lower.includes('pollo') ||
+      lower.includes('baleada') ||
+      lower.includes('pupusa') ||
+      lower.includes('comida') ||
+      lower.includes('bar')
+    ) {
+      return 'restaurante_cafeteria';
     }
     return 'ropa_calzado';
   };
@@ -656,6 +678,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [enableDeliveryDvolada, setEnableDeliveryDvolada] = useState<boolean>(false);
   const [enableCreditContract, setEnableCreditContract] = useState<boolean>(false);
   const [enableDigitalSignature, setEnableDigitalSignature] = useState<boolean>(false);
+  const [enableWarrantyModule, setEnableWarrantyModule] = useState<boolean>(false);
   const [maxProducts, setMaxProducts] = useState<string>('0'); // 0 = Ilimitado
   const [maxUsers, setMaxUsers] = useState<string>('0'); // 0 = Ilimitado
   const [initialStarterTemplate, setInitialStarterTemplate] = useState<string>('none');
@@ -666,6 +689,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [permDeliveryDvolada, setPermDeliveryDvolada] = useState<boolean>(false);
   const [permCreditContract, setPermCreditContract] = useState<boolean>(false);
   const [permDigitalSignature, setPermDigitalSignature] = useState<boolean>(false);
+  const [permWarrantyModule, setPermWarrantyModule] = useState<boolean>(false);
   const [permMaxProducts, setPermMaxProducts] = useState<string>('0');
   const [permMaxUsers, setPermMaxUsers] = useState<string>('0');
   const [isSavingPerms, setIsSavingPerms] = useState<boolean>(false);
@@ -766,6 +790,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setEnableDeliveryDvolada(preset.enableDvolada);
     setEnableCreditContract(preset.enableCreditContract);
     setEnableDigitalSignature(preset.enableDigitalSignature);
+    setEnableWarrantyModule(preset.enableWarrantyModule);
     if (preset.plan === 'prueba') {
       const in7Days = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
       setNextBillingDate(in7Days);
@@ -795,6 +820,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setEnableDeliveryDvolada(false);
     setEnableCreditContract(false);
     setEnableDigitalSignature(false);
+    setEnableWarrantyModule(true);
     setMaxProducts('0');
     setMaxUsers('0');
     setInitialStarterTemplate('none');
@@ -818,14 +844,10 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setStatus(comp.status || 'active');
     setMoraReason(comp.moraReason || '');
     setAutoSuspendClient(comp.autoSuspend !== false);
-    const baseMods =
-      Array.isArray(comp.allowedModules) && comp.allowedModules.length > 0
-        ? [...comp.allowedModules]
-        : [...ALL_COMPANY_MODULES];
-    const effectiveMods =
-      comp.enableOnlineSales === false
-        ? baseMods.filter((m) => m !== 'online-sales')
-        : baseMods;
+    const effectiveMods = resolveCompanyAllowedModules(comp.allowedModules, {
+      enableOnlineSales: comp.enableOnlineSales,
+      enableRestaurantModule: comp.enableRestaurantModule,
+    });
     setAllowedModules(effectiveMods);
     setEnableDeliveryDvolada(
       comp.enableDeliveryDvolada !== undefined ? Boolean(comp.enableDeliveryDvolada) : comp.slug === 'gosen'
@@ -834,6 +856,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     const hasDigitalSignature = isStoreDigitalSignatureEnabled(undefined, comp);
     setEnableCreditContract(hasCreditContract);
     setEnableDigitalSignature(hasDigitalSignature);
+    setEnableWarrantyModule(isStoreWarrantyModuleEnabled(undefined, comp));
     setMaxProducts(String(comp.maxProducts || 0));
     setMaxUsers(String(comp.maxUsers || 0));
     setInitialStarterTemplate('none');
@@ -842,20 +865,17 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
 
   const openPermissionsModal = (comp: CompanyTenant) => {
     setPermissionsCompany(comp);
-    const baseMods =
-      Array.isArray(comp.allowedModules) && comp.allowedModules.length > 0
-        ? [...comp.allowedModules]
-        : [...ALL_COMPANY_MODULES];
-    const effectiveMods =
-      comp.enableOnlineSales === false
-        ? baseMods.filter((m) => m !== 'online-sales')
-        : baseMods;
+    const effectiveMods = resolveCompanyAllowedModules(comp.allowedModules, {
+      enableOnlineSales: comp.enableOnlineSales,
+      enableRestaurantModule: comp.enableRestaurantModule,
+    });
     setPermModules(effectiveMods);
     setPermDeliveryDvolada(
       comp.enableDeliveryDvolada !== undefined ? Boolean(comp.enableDeliveryDvolada) : comp.slug === 'gosen'
     );
     setPermCreditContract(isStoreCreditContractEnabled(undefined, comp));
     setPermDigitalSignature(isStoreDigitalSignatureEnabled(undefined, comp));
+    setPermWarrantyModule(isStoreWarrantyModuleEnabled(undefined, comp));
     setPermMaxProducts(String(comp.maxProducts || 0));
     setPermMaxUsers(String(comp.maxUsers || 0));
   };
@@ -900,9 +920,11 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         ...permissionsCompany,
         allowedModules: permModules,
         enableOnlineSales: hasOnlineSales,
+        enableRestaurantModule: permModules.includes('restaurant'),
         enableDeliveryDvolada: permDeliveryDvolada,
         enableCreditContract: permCreditContract,
         enableDigitalSignature: permCreditContract ? permDigitalSignature : false,
+        enableWarrantyModule: permWarrantyModule,
         maxProducts: Math.max(0, Number(permMaxProducts) || 0),
         maxUsers: Math.max(0, Number(permMaxUsers) || 0),
       });
@@ -986,6 +1008,25 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       );
     } catch (err: any) {
       showToast('Error al actualizar Firma Digital: ' + (err?.message || 'desconocido'), 'error');
+    }
+  };
+
+  const handleQuickToggleWarrantyForClient = async (comp: CompanyTenant) => {
+    const currentlyActive = isStoreWarrantyModuleEnabled(undefined, comp);
+    const nextState = !currentlyActive;
+    try {
+      await onSaveCompany({
+        ...comp,
+        enableWarrantyModule: nextState,
+      });
+      showToast(
+        nextState
+          ? `🛡️ Módulo de Garantías y Códigos por Artículo ACTIVADO para "${comp.name}"`
+          : `⚪ Módulo de Garantías DESACTIVADO para "${comp.name}"`,
+        nextState ? 'success' : 'info'
+      );
+    } catch (err: any) {
+      showToast('Error al actualizar Garantías: ' + (err?.message || 'desconocido'), 'error');
     }
   };
 
@@ -1424,9 +1465,11 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         notes: notes.trim(),
         allowedModules,
         enableOnlineSales: allowedModules.includes('online-sales'),
+        enableRestaurantModule: allowedModules.includes('restaurant'),
         enableDeliveryDvolada,
         enableCreditContract,
         enableDigitalSignature: enableCreditContract ? enableDigitalSignature : false,
+        enableWarrantyModule,
         maxProducts: Math.max(0, Number(maxProducts) || 0),
         maxUsers: Math.max(0, Number(maxUsers) || 0),
         paymentHistory: editingCompany?.paymentHistory || [],
@@ -2587,6 +2630,24 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                           : 'Firma Digital Pantalla: OFF'}
                       </span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleQuickToggleWarrantyForClient(comp)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 border transition-colors cursor-pointer ${
+                        isStoreWarrantyModuleEnabled(undefined, comp)
+                          ? 'bg-teal-100 text-teal-900 border-teal-300 hover:bg-teal-200'
+                          : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                      }`}
+                      title="Activar o desactivar con 1 clic el módulo de Garantías por Código y Consultar Garantía para esta tienda"
+                    >
+                      <ShieldCheck className="w-3 h-3" />
+                      <span>
+                        {isStoreWarrantyModuleEnabled(undefined, comp)
+                          ? 'Garantías / Códigos: ON'
+                          : 'Garantías / Códigos: OFF'}
+                      </span>
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
@@ -3396,6 +3457,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                           setPermDeliveryDvolada(preset.enableDvolada);
                           setPermCreditContract(preset.enableCreditContract);
                           setPermDigitalSignature(preset.enableDigitalSignature);
+                          setPermWarrantyModule(preset.enableWarrantyModule);
                         }}
                         className="px-2.5 py-1 rounded-lg bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-extrabold cursor-pointer"
                       >
@@ -3656,6 +3718,40 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                       }
                     }}
                     className="rounded text-emerald-600 focus:ring-emerald-500 w-5 h-5 cursor-pointer shrink-0"
+                  />
+                </label>
+
+                <label
+                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
+                    permWarrantyModule
+                      ? 'bg-teal-50/80 border-teal-300 text-slate-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-500'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                        permWarrantyModule
+                          ? 'bg-teal-600 text-white'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="font-black text-xs text-slate-900">
+                        Módulo de Garantías por Artículo y Consulta de Garantía por Código
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Permite asignar códigos de garantía individuales a los artículos facturados, imprimir certificados de garantía y buscar de qué factura salió un artículo dañado.
+                      </p>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={permWarrantyModule}
+                    onChange={(e) => setPermWarrantyModule(e.target.checked)}
+                    className="rounded text-teal-600 focus:ring-teal-500 w-5 h-5 cursor-pointer shrink-0"
                   />
                 </label>
               </div>
@@ -4515,6 +4611,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                     <option value="pulperia_abarrotes">🛒 Plantilla Pulpería, Mini Súper y Abarrotería</option>
                     <option value="ferreteria_repuestos">🔧 Plantilla Ferretería, Repuestos y Herramientas</option>
                     <option value="farmacia_cosmeticos">💄 Plantilla Cosméticos, Perfumería y Variedades</option>
+                    <option value="restaurante_cafeteria">🍽️ Plantilla Restaurante, Comedor, Cafetería y Bar</option>
                   </select>
                 </div>
               )}
@@ -4728,6 +4825,31 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                   </div>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
                     {enableDigitalSignature && enableCreditContract ? 'Activado' : 'Oculto'}
+                  </span>
+                </label>
+
+                {/* Módulo de Garantías por Artículo y Consulta por Código toggle */}
+                <label
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none text-xs ${
+                    enableWarrantyModule
+                      ? 'bg-teal-50 border-teal-300 text-teal-950'
+                      : 'bg-white border-slate-200 text-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={enableWarrantyModule}
+                      onChange={(e) => setEnableWarrantyModule(e.target.checked)}
+                      className="rounded text-teal-600 focus:ring-teal-500 w-3.5 h-3.5 cursor-pointer shrink-0"
+                    />
+                    <ShieldCheck className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                    <span className="font-bold">
+                      Habilitar Módulo de Garantías por Código de Artículo y Consultar Garantía
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
+                    {enableWarrantyModule ? 'Activado' : 'Oculto'}
                   </span>
                 </label>
               </div>

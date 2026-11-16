@@ -37,6 +37,7 @@ import {
   CompanyTenant,
   ActiveTab,
   ALL_COMPANY_MODULES,
+  resolveCompanyAllowedModules,
   SubscriptionPaymentRecord,
   SaaSAnnouncement,
   SaaSBankAccount,
@@ -46,7 +47,17 @@ import {
   WarehouseLocation,
   WarehouseTransferItem,
   WarehouseTransferRecord,
-  StoreWarehousesData
+  StoreWarehousesData,
+  RestaurantStoreData,
+  RestaurantTable,
+  RestaurantTableOrder,
+  KitchenCommandTicket,
+  RestaurantOrderItem,
+  KitchenCommandItem,
+  RestaurantTableStatus,
+  RestaurantTableShape,
+  RestaurantOrderType,
+  KitchenCommandStatus
 } from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
 import { db, auth } from './config';
@@ -1493,7 +1504,15 @@ export function setCachedUsers(items: UserAccount[], companyId = getActiveCompan
 }
 
 export function getCachedStoreSettings(companyId = getActiveCompanyId()): StoreSettings | null {
-  return safeReadCache<StoreSettings>(getScopedCacheKey(BASE_CACHE_KEYS.SETTINGS, companyId));
+  const cached = safeReadCache<StoreSettings>(getScopedCacheKey(BASE_CACHE_KEYS.SETTINGS, companyId));
+  if (!cached) return null;
+  return {
+    ...cached,
+    allowedModules: resolveCompanyAllowedModules(cached.allowedModules, {
+      enableOnlineSales: cached.enableOnlineSales,
+      enableRestaurantModule: cached.enableRestaurantModule,
+    }),
+  };
 }
 
 export function setCachedStoreSettings(settings: StoreSettings, companyId = getActiveCompanyId()): void {
@@ -1501,7 +1520,15 @@ export function setCachedStoreSettings(settings: StoreSettings, companyId = getA
 }
 
 export function getCachedCompanies(): CompanyTenant[] | null {
-  return safeReadCache<CompanyTenant[]>(BASE_CACHE_KEYS.COMPANIES);
+  const cached = safeReadCache<CompanyTenant[]>(BASE_CACHE_KEYS.COMPANIES);
+  if (!cached) return null;
+  return cached.map((c) => ({
+    ...c,
+    allowedModules: resolveCompanyAllowedModules(c.allowedModules, {
+      enableOnlineSales: c.enableOnlineSales,
+      enableRestaurantModule: c.enableRestaurantModule,
+    }),
+  }));
 }
 
 export function setCachedCompanies(companies: CompanyTenant[]): void {
@@ -1875,6 +1902,7 @@ export async function syncCollectionsWithBackendHub(
     warehouses?: StoreWarehousesData;
     settings?: StoreSettings;
     posFinance?: POSFinanceStoreData;
+    restaurant?: RestaurantStoreData;
     companies?: CompanyTenant[];
     deleteSupplierId?: string;
     deletePurchaseId?: string;
@@ -1891,6 +1919,7 @@ export async function syncCollectionsWithBackendHub(
   warehouses: StoreWarehousesData | null;
   settings: StoreSettings | null;
   posFinance: POSFinanceStoreData | null;
+  restaurant?: RestaurantStoreData | null;
   companies: CompanyTenant[];
   updatedAt: number;
 } | null> {
@@ -2818,8 +2847,10 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   accessPassword: 'GOSEN2026',
   allowedModules: ALL_COMPANY_MODULES,
   enableDeliveryDvolada: true,
+  enableRestaurantModule: true,
   enableCreditContract: true,
   enableDigitalSignature: true,
+  enableWarrantyModule: true,
   maxProducts: 0,
   maxUsers: 0,
 };
@@ -2839,6 +2870,10 @@ export function getDefaultStoreSettingsForCompany(companyId = getActiveCompanyId
     comp?.enableDigitalSignature !== undefined
       ? Boolean(comp.enableDigitalSignature)
       : defaultCreditContract;
+  const defaultWarrantyModule =
+    comp?.enableWarrantyModule !== undefined
+      ? Boolean(comp.enableWarrantyModule)
+      : isGyGAlias(slug);
   return {
     companyId: slug,
     storeName: comp?.name || slug.toUpperCase(),
@@ -2849,13 +2884,16 @@ export function getDefaultStoreSettingsForCompany(companyId = getActiveCompanyId
     accessPassword: comp?.adminPassword || 'ADMIN2026',
     whatsappOrderPhone: comp?.phone || '',
     catalogWelcomeMsg: '',
-    allowedModules:
-      Array.isArray(comp?.allowedModules) && comp!.allowedModules!.length > 0
-        ? comp!.allowedModules
-        : ALL_COMPANY_MODULES,
+    allowedModules: resolveCompanyAllowedModules(comp?.allowedModules, {
+      enableOnlineSales: comp?.enableOnlineSales,
+      enableRestaurantModule: comp?.enableRestaurantModule,
+    }),
     enableDeliveryDvolada: Boolean(comp?.enableDeliveryDvolada === true),
+    enableRestaurantModule:
+      comp?.enableRestaurantModule !== undefined ? Boolean(comp.enableRestaurantModule) : true,
     enableCreditContract: defaultCreditContract,
     enableDigitalSignature: defaultDigitalSignature,
+    enableWarrantyModule: defaultWarrantyModule,
     maxProducts: Math.max(0, Number(comp?.maxProducts) || 0),
     maxUsers: Math.max(0, Number(comp?.maxUsers) || 0),
   };
@@ -3010,21 +3048,23 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
 
       const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
       const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
-      const rawAllowedModules: ActiveTab[] =
-        Array.isArray(data.allowedModules) && data.allowedModules.length > 0
-          ? data.allowedModules
-          : ALL_COMPANY_MODULES;
       const isOnlineSalesEnabled =
         data.enableOnlineSales !== undefined
           ? Boolean(data.enableOnlineSales)
           : Array.isArray(data.allowedModules) && data.allowedModules.length > 0
           ? data.allowedModules.includes('online-sales')
           : true;
-      const effectiveAllowedModules: ActiveTab[] = isOnlineSalesEnabled
-        ? rawAllowedModules.includes('online-sales')
-          ? rawAllowedModules
-          : [...rawAllowedModules, 'online-sales']
-        : rawAllowedModules.filter((m: ActiveTab) => m !== 'online-sales');
+      const isRestaurantEnabled =
+        data.enableRestaurantModule !== undefined
+          ? Boolean(data.enableRestaurantModule)
+          : true;
+      const effectiveAllowedModules: ActiveTab[] = resolveCompanyAllowedModules(
+        data.allowedModules,
+        {
+          enableOnlineSales: isOnlineSalesEnabled,
+          enableRestaurantModule: isRestaurantEnabled,
+        }
+      );
 
       const parsedBanks =
         data.bankAccounts !== undefined
@@ -3069,6 +3109,7 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
             ? Boolean(data.enableDeliveryDvolada)
             : slug === 'gosen',
         enableOnlineSales: isOnlineSalesEnabled,
+        enableRestaurantModule: isRestaurantEnabled,
         enableCreditContract:
           data.enableCreditContract !== undefined
             ? Boolean(data.enableCreditContract)
@@ -3078,6 +3119,10 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
             ? Boolean(data.enableDigitalSignature)
             : data.enableCreditContract !== undefined
             ? Boolean(data.enableCreditContract)
+            : slug === 'gosen' || isGyGAlias(slug),
+        enableWarrantyModule:
+          data.enableWarrantyModule !== undefined
+            ? Boolean(data.enableWarrantyModule)
             : slug === 'gosen' || isGyGAlias(slug),
         maxProducts: Math.max(0, Number(data.maxProducts) || 0),
         maxUsers: Math.max(0, Number(data.maxUsers) || 0),
@@ -3099,21 +3144,23 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
         const cData = compSnap.data();
         const rawLogo = cData.logoUrl || '';
         const safeLogo = rawLogo === '/store-logo.jpg' ? '' : rawLogo;
-        const rawAllowedModules: ActiveTab[] =
-          Array.isArray(cData.allowedModules) && cData.allowedModules.length > 0
-            ? cData.allowedModules
-            : ALL_COMPANY_MODULES;
         const isOnlineSalesEnabled =
           cData.enableOnlineSales !== undefined
             ? Boolean(cData.enableOnlineSales)
             : Array.isArray(cData.allowedModules) && cData.allowedModules.length > 0
             ? cData.allowedModules.includes('online-sales')
             : true;
-        const effectiveAllowedModules: ActiveTab[] = isOnlineSalesEnabled
-          ? rawAllowedModules.includes('online-sales')
-            ? rawAllowedModules
-            : [...rawAllowedModules, 'online-sales']
-          : rawAllowedModules.filter((m: ActiveTab) => m !== 'online-sales');
+        const isRestaurantEnabled =
+          cData.enableRestaurantModule !== undefined
+            ? Boolean(cData.enableRestaurantModule)
+            : true;
+        const effectiveAllowedModules: ActiveTab[] = resolveCompanyAllowedModules(
+          cData.allowedModules,
+          {
+            enableOnlineSales: isOnlineSalesEnabled,
+            enableRestaurantModule: isRestaurantEnabled,
+          }
+        );
 
         const fallbackSettings: StoreSettings = {
           companyId: slug,
@@ -3133,6 +3180,7 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           allowedModules: effectiveAllowedModules,
           enableDeliveryDvolada: Boolean(cData.enableDeliveryDvolada === true),
           enableOnlineSales: isOnlineSalesEnabled,
+          enableRestaurantModule: isRestaurantEnabled,
           enableCreditContract:
             cData.enableCreditContract !== undefined
               ? Boolean(cData.enableCreditContract)
@@ -3142,6 +3190,10 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
               ? Boolean(cData.enableDigitalSignature)
               : cData.enableCreditContract !== undefined
               ? Boolean(cData.enableCreditContract)
+              : isGyGAlias(slug),
+          enableWarrantyModule:
+            cData.enableWarrantyModule !== undefined
+              ? Boolean(cData.enableWarrantyModule)
               : isGyGAlias(slug),
           maxProducts: Math.max(0, Number(cData.maxProducts) || 0),
           maxUsers: Math.max(0, Number(cData.maxUsers) || 0),
@@ -3188,21 +3240,23 @@ export function subscribeToStoreSettings(
 
         const rawLogo = data.logoUrl !== undefined ? data.logoUrl : slug === 'gosen' ? '/store-logo.jpg' : '';
         const safeLogo = slug !== 'gosen' && rawLogo === '/store-logo.jpg' ? '' : rawLogo;
-        const rawAllowedModules: ActiveTab[] =
-          Array.isArray(data.allowedModules) && data.allowedModules.length > 0
-            ? data.allowedModules
-            : ALL_COMPANY_MODULES;
         const isOnlineSalesEnabled =
           data.enableOnlineSales !== undefined
             ? Boolean(data.enableOnlineSales)
             : Array.isArray(data.allowedModules) && data.allowedModules.length > 0
             ? data.allowedModules.includes('online-sales')
             : true;
-        const effectiveAllowedModules: ActiveTab[] = isOnlineSalesEnabled
-          ? rawAllowedModules.includes('online-sales')
-            ? rawAllowedModules
-            : [...rawAllowedModules, 'online-sales']
-          : rawAllowedModules.filter((m: ActiveTab) => m !== 'online-sales');
+        const isRestaurantEnabled =
+          data.enableRestaurantModule !== undefined
+            ? Boolean(data.enableRestaurantModule)
+            : true;
+        const effectiveAllowedModules: ActiveTab[] = resolveCompanyAllowedModules(
+          data.allowedModules,
+          {
+            enableOnlineSales: isOnlineSalesEnabled,
+            enableRestaurantModule: isRestaurantEnabled,
+          }
+        );
 
         const parsedBanks =
           data.bankAccounts !== undefined
@@ -3247,6 +3301,7 @@ export function subscribeToStoreSettings(
               ? Boolean(data.enableDeliveryDvolada)
               : slug === 'gosen',
           enableOnlineSales: isOnlineSalesEnabled,
+          enableRestaurantModule: isRestaurantEnabled,
           enableCreditContract:
             data.enableCreditContract !== undefined
               ? Boolean(data.enableCreditContract)
@@ -3256,6 +3311,10 @@ export function subscribeToStoreSettings(
               ? Boolean(data.enableDigitalSignature)
               : data.enableCreditContract !== undefined
               ? Boolean(data.enableCreditContract)
+              : slug === 'gosen' || isGyGAlias(slug),
+          enableWarrantyModule:
+            data.enableWarrantyModule !== undefined
+              ? Boolean(data.enableWarrantyModule)
               : slug === 'gosen' || isGyGAlias(slug),
           maxProducts: Math.max(0, Number(data.maxProducts) || 0),
           maxUsers: Math.max(0, Number(data.maxUsers) || 0),
@@ -3320,11 +3379,17 @@ export async function saveStoreSettingsToFirestore(
   if (settings.enableOnlineSales !== undefined) {
     payload.enableOnlineSales = Boolean(settings.enableOnlineSales);
   }
+  if (settings.enableRestaurantModule !== undefined) {
+    payload.enableRestaurantModule = Boolean(settings.enableRestaurantModule);
+  }
   if (settings.enableCreditContract !== undefined) {
     payload.enableCreditContract = Boolean(settings.enableCreditContract);
   }
   if (settings.enableDigitalSignature !== undefined) {
     payload.enableDigitalSignature = Boolean(settings.enableDigitalSignature);
+  }
+  if (settings.enableWarrantyModule !== undefined) {
+    payload.enableWarrantyModule = Boolean(settings.enableWarrantyModule);
   }
   if (settings.maxProducts !== undefined) {
     payload.maxProducts = Math.max(0, Number(settings.maxProducts) || 0);
@@ -4909,12 +4974,17 @@ function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: s
               : true,
           canCancelSales: Boolean(raw.salesPermissions.canCancelSales),
           canViewCostsAndProfits: Boolean(raw.salesPermissions.canViewCostsAndProfits),
+          isRouteCollector: Boolean(raw.salesPermissions.isRouteCollector),
+          routeCollectorScope:
+            raw.salesPermissions.routeCollectorScope === 'assigned' ? 'assigned' : 'all',
           ...(cleanWhIds ? { allowedWarehouseIds: cleanWhIds } : {}),
         }
       : {
           canEditSales: true,
           canCancelSales: false,
           canViewCostsAndProfits: false,
+          isRouteCollector: false,
+          routeCollectorScope: 'all',
           ...(cleanWhIds ? { allowedWarehouseIds: cleanWhIds } : {}),
         },
     createdAt: Number(raw?.createdAt) || Date.now(),
@@ -5114,6 +5184,9 @@ export async function saveUserToFirestore(
           : true,
       canCancelSales: Boolean(user.salesPermissions?.canCancelSales),
       canViewCostsAndProfits: Boolean(user.salesPermissions?.canViewCostsAndProfits),
+      isRouteCollector: Boolean(user.salesPermissions?.isRouteCollector),
+      routeCollectorScope:
+        user.salesPermissions?.routeCollectorScope === 'assigned' ? 'assigned' : 'all',
       allowedWarehouseIds: cleanWhIds,
     },
     createdAt: user.createdAt || Date.now(),
@@ -5353,8 +5426,10 @@ export const DEFAULT_GOSEN_COMPANY: CompanyTenant = {
   tagline: 'Control de Inventario y Ventas',
   allowedModules: ALL_COMPANY_MODULES,
   enableDeliveryDvolada: true,
+  enableRestaurantModule: true,
   enableCreditContract: true,
   enableDigitalSignature: true,
+  enableWarrantyModule: true,
   maxProducts: 0,
   maxUsers: 0,
   paymentHistory: [],
@@ -5386,21 +5461,23 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
       }))
     : [];
 
-  const rawAllowedModules: ActiveTab[] =
-    Array.isArray(data.allowedModules) && data.allowedModules.length > 0
-      ? (data.allowedModules as ActiveTab[])
-      : ALL_COMPANY_MODULES;
   const isOnlineSalesEnabled =
     data.enableOnlineSales !== undefined
       ? Boolean(data.enableOnlineSales)
       : Array.isArray(data.allowedModules) && data.allowedModules.length > 0
       ? data.allowedModules.includes('online-sales')
       : true;
-  const effectiveAllowedModules: ActiveTab[] = isOnlineSalesEnabled
-    ? rawAllowedModules.includes('online-sales')
-      ? rawAllowedModules
-      : [...rawAllowedModules, 'online-sales']
-    : rawAllowedModules.filter((m) => m !== 'online-sales');
+  const isRestaurantEnabled =
+    data.enableRestaurantModule !== undefined
+      ? Boolean(data.enableRestaurantModule)
+      : true;
+  const effectiveAllowedModules: ActiveTab[] = resolveCompanyAllowedModules(
+    data.allowedModules,
+    {
+      enableOnlineSales: isOnlineSalesEnabled,
+      enableRestaurantModule: isRestaurantEnabled,
+    }
+  );
 
   return {
     id: slug,
@@ -5427,6 +5504,7 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
         ? Boolean(data.enableDeliveryDvolada)
         : slug === 'gosen',
     enableOnlineSales: isOnlineSalesEnabled,
+    enableRestaurantModule: isRestaurantEnabled,
     enableCreditContract:
       data.enableCreditContract !== undefined
         ? Boolean(data.enableCreditContract)
@@ -5436,6 +5514,10 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
         ? Boolean(data.enableDigitalSignature)
         : data.enableCreditContract !== undefined
         ? Boolean(data.enableCreditContract)
+        : slug === 'gosen' || isGyGAlias(slug),
+    enableWarrantyModule:
+      data.enableWarrantyModule !== undefined
+        ? Boolean(data.enableWarrantyModule)
         : slug === 'gosen' || isGyGAlias(slug),
     maxProducts: Math.max(0, Number(data.maxProducts) || 0),
     maxUsers: Math.max(0, Number(data.maxUsers) || 0),
@@ -5564,11 +5646,14 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     company.enableOnlineSales !== undefined
       ? Boolean(company.enableOnlineSales)
       : rawAllowedModules.includes('online-sales');
-  const safeAllowedModules: ActiveTab[] = safeEnableOnlineSales
-    ? rawAllowedModules.includes('online-sales')
-      ? rawAllowedModules
-      : [...rawAllowedModules, 'online-sales']
-    : rawAllowedModules.filter((m) => m !== 'online-sales');
+  const safeEnableRestaurantModule =
+    company.enableRestaurantModule !== undefined
+      ? Boolean(company.enableRestaurantModule)
+      : rawAllowedModules.includes('restaurant');
+  const safeAllowedModules: ActiveTab[] = resolveCompanyAllowedModules(rawAllowedModules, {
+    enableOnlineSales: safeEnableOnlineSales,
+    enableRestaurantModule: safeEnableRestaurantModule,
+  });
 
   const safeDeliveryDvolada =
     company.enableDeliveryDvolada !== undefined
@@ -5582,6 +5667,10 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     company.enableDigitalSignature !== undefined
       ? Boolean(company.enableDigitalSignature)
       : safeEnableCreditContract;
+  const safeEnableWarrantyModule =
+    company.enableWarrantyModule !== undefined
+      ? Boolean(company.enableWarrantyModule)
+      : slug === 'gosen' || isGyGAlias(slug);
   const safeMaxProducts = Math.max(0, Number(company.maxProducts) || 0);
   const safeMaxUsers = Math.max(0, Number(company.maxUsers) || 0);
   const safePaymentHistory: SubscriptionPaymentRecord[] = Array.isArray(company.paymentHistory)
@@ -5610,8 +5699,10 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     allowedModules: safeAllowedModules,
     enableDeliveryDvolada: safeDeliveryDvolada,
     enableOnlineSales: safeEnableOnlineSales,
+    enableRestaurantModule: safeEnableRestaurantModule,
     enableCreditContract: safeEnableCreditContract,
     enableDigitalSignature: safeEnableDigitalSignature,
+    enableWarrantyModule: safeEnableWarrantyModule,
     maxProducts: safeMaxProducts,
     maxUsers: safeMaxUsers,
     paymentHistory: safePaymentHistory,
@@ -5644,8 +5735,10 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     allowedModules: normalized.allowedModules,
     enableDeliveryDvolada: normalized.enableDeliveryDvolada,
     enableOnlineSales: normalized.enableOnlineSales,
+    enableRestaurantModule: normalized.enableRestaurantModule,
     enableCreditContract: normalized.enableCreditContract,
     enableDigitalSignature: normalized.enableDigitalSignature,
+    enableWarrantyModule: normalized.enableWarrantyModule,
     maxProducts: normalized.maxProducts,
     maxUsers: normalized.maxUsers,
     updatedAt: Date.now(),
@@ -5681,8 +5774,10 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
         allowedModules: normalized.allowedModules,
         enableDeliveryDvolada: normalized.enableDeliveryDvolada,
         enableOnlineSales: normalized.enableOnlineSales,
+        enableRestaurantModule: normalized.enableRestaurantModule,
         enableCreditContract: normalized.enableCreditContract,
         enableDigitalSignature: normalized.enableDigitalSignature,
+        enableWarrantyModule: normalized.enableWarrantyModule,
         maxProducts: normalized.maxProducts,
         maxUsers: normalized.maxUsers,
         paymentHistory: normalized.paymentHistory,
@@ -6131,7 +6226,11 @@ export async function exportCompanyFullBackup(companySlug: string): Promise<{
 }
 
 export const STARTER_INDUSTRY_TEMPLATES: Record<
-  'ropa_calzado' | 'pulperia_abarrotes' | 'ferreteria_repuestos' | 'farmacia_cosmeticos',
+  | 'ropa_calzado'
+  | 'pulperia_abarrotes'
+  | 'ferreteria_repuestos'
+  | 'farmacia_cosmeticos'
+  | 'restaurante_cafeteria',
   { label: string; description: string; items: Omit<Product, 'id' | 'companyId'>[] }
 > = {
   ropa_calzado: {
@@ -6175,6 +6274,18 @@ export const STARTER_INDUSTRY_TEMPLATES: Record<
       { code: 'PER-001', name: 'Loción Corporal Fragancia Floral', category: 'Perfumería', cost: 140, price: 260, stock: 10 },
       { code: 'MAQ-001', name: 'Labial Mate Larga Duración', category: 'Maquillaje', cost: 45, price: 95, stock: 24 },
       { code: 'CAB-001', name: 'Shampoo Reparación Intensa 500ml', category: 'Cuidado Capilar', cost: 90, price: 165, stock: 14 },
+    ],
+  },
+  restaurante_cafeteria: {
+    label: 'Restaurante, Comedor y Cafetería',
+    description: 'Platos Fuertes, Comida Rápida, Bebidas y Postres listos para Mesas y Comandera.',
+    items: [
+      { code: 'RES-001', name: 'Plato Típico Carne Asada', category: 'Platos Fuertes', cost: 95, price: 220, stock: 999 },
+      { code: 'RES-002', name: 'Hamburguesa Clásica con Papas', category: 'Comida Rápida', cost: 65, price: 165, stock: 999 },
+      { code: 'RES-003', name: 'Pechuga de Pollo a la Plancha', category: 'Platos Fuertes', cost: 80, price: 185, stock: 999 },
+      { code: 'BEB-101', name: 'Jugo Natural de Temporada', category: 'Bebidas', cost: 15, price: 45, stock: 999 },
+      { code: 'BEB-102', name: 'Refresco en Lata 355ml', category: 'Bebidas', cost: 18, price: 35, stock: 120 },
+      { code: 'POS-001', name: 'Porción de Tres Leches', category: 'Postres', cost: 30, price: 75, stock: 999 },
     ],
   },
 };
@@ -6366,11 +6477,52 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
 
   const loyaltyCustomers = Array.isArray(raw.loyaltyCustomers) ? raw.loyaltyCustomers : [];
 
+  const routeCollectorConfig =
+    raw.routeCollectorConfig && typeof raw.routeCollectorConfig === 'object'
+      ? {
+          autoCalculateNextDateOnAbone:
+            raw.routeCollectorConfig.autoCalculateNextDateOnAbone !== false,
+          defaultPaymentFrequency: (['daily', 'weekly', 'biweekly', 'monthly'].includes(
+            raw.routeCollectorConfig.defaultPaymentFrequency
+          )
+            ? raw.routeCollectorConfig.defaultPaymentFrequency
+            : 'weekly') as 'daily' | 'weekly' | 'biweekly' | 'monthly',
+          upcomingAlertDays: Math.max(
+            1,
+            Math.min(15, Number(raw.routeCollectorConfig.upcomingAlertDays) || 3)
+          ),
+          notifyAdminOnEveryAbone: raw.routeCollectorConfig.notifyAdminOnEveryAbone !== false,
+          notifyAdminOnReschedule: raw.routeCollectorConfig.notifyAdminOnReschedule !== false,
+          enabledCollectorUsernames: Array.isArray(
+            raw.routeCollectorConfig.enabledCollectorUsernames
+          )
+            ? raw.routeCollectorConfig.enabledCollectorUsernames.map((u: any) =>
+                String(u || '')
+                  .trim()
+                  .toLowerCase()
+              )
+            : [],
+        }
+      : {
+          autoCalculateNextDateOnAbone: true,
+          defaultPaymentFrequency: 'weekly' as const,
+          upcomingAlertDays: 3,
+          notifyAdminOnEveryAbone: true,
+          notifyAdminOnReschedule: true,
+          enabledCollectorUsernames: [],
+        };
+
+  const routeCollectorAlerts = Array.isArray(raw.routeCollectorAlerts)
+    ? raw.routeCollectorAlerts
+    : [];
+
   return {
     companyId: slug,
     shifts: shifts.sort((a, b) => b.openedAt - a.openedAt),
     expenses: expenses.sort((a, b) => b.timestamp - a.timestamp),
     creditAccountControls,
+    routeCollectorConfig,
+    routeCollectorAlerts,
     onlineCustomers,
     loyaltyConfig,
     loyaltyCustomers,
@@ -6378,21 +6530,132 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
   };
 }
 
+function mergePOSFinanceObjects(
+  slug: string,
+  a?: POSFinanceStoreData | null,
+  b?: POSFinanceStoreData | null
+): POSFinanceStoreData {
+  if (!a && !b) return getCachedPOSFinanceData(slug);
+  if (!a) return sanitizePOSFinanceDoc(slug, b as Record<string, any>);
+  if (!b) return sanitizePOSFinanceDoc(slug, a as Record<string, any>);
+
+  const aTs = Number(a.updatedAt || 0);
+  const bTs = Number(b.updatedAt || 0);
+  const primary = bTs >= aTs ? b : a;
+  const secondary = bTs >= aTs ? a : b;
+
+  const mergedControls: Record<string, any> = {
+    ...(secondary.creditAccountControls || {}),
+    ...(primary.creditAccountControls || {}),
+  };
+
+  const collectorSet = new Set<string>(
+    (
+      primary.routeCollectorConfig?.enabledCollectorUsernames ||
+      secondary.routeCollectorConfig?.enabledCollectorUsernames ||
+      []
+    )
+      .map((u) => String(u || '').trim().toLowerCase().replace(/^@+/, ''))
+      .filter(Boolean)
+  );
+  for (const ctrl of Object.values(mergedControls)) {
+    if (ctrl?.assignedCollectorUsername) {
+      collectorSet.add(
+        String(ctrl.assignedCollectorUsername).trim().toLowerCase().replace(/^@+/, '')
+      );
+    }
+  }
+
+  const alertMap = new Map<string, any>();
+  for (const al of [
+    ...(secondary.routeCollectorAlerts || []),
+    ...(primary.routeCollectorAlerts || []),
+  ]) {
+    if (al && al.id) {
+      const existing = alertMap.get(al.id);
+      if (!existing || al.status === 'reviewed') {
+        alertMap.set(al.id, al);
+      }
+    }
+  }
+
+  const shiftMap = new Map<string, any>();
+  for (const sh of [...(secondary.shifts || []), ...(primary.shifts || [])]) {
+    if (sh && sh.id) {
+      const existing = shiftMap.get(sh.id);
+      if (
+        !existing ||
+        sh.status === 'closed' ||
+        (sh.cashMovements?.length || 0) >= (existing.cashMovements?.length || 0)
+      ) {
+        shiftMap.set(sh.id, sh);
+      }
+    }
+  }
+
+  const expMap = new Map<string, any>();
+  for (const ex of [...(secondary.expenses || []), ...(primary.expenses || [])]) {
+    if (ex && ex.id) expMap.set(ex.id, ex);
+  }
+
+  return sanitizePOSFinanceDoc(slug, {
+    ...secondary,
+    ...primary,
+    companyId: slug,
+    shifts: Array.from(shiftMap.values()),
+    expenses: Array.from(expMap.values()),
+    creditAccountControls: mergedControls,
+    routeCollectorAlerts: Array.from(alertMap.values()).sort(
+      (x, y) => (Number(y.timestamp) || 0) - (Number(x.timestamp) || 0)
+    ),
+    routeCollectorConfig: {
+      ...(secondary.routeCollectorConfig || {}),
+      ...(primary.routeCollectorConfig || {}),
+      enabledCollectorUsernames: Array.from(collectorSet),
+    },
+    updatedAt: Math.max(aTs, bTs, Date.now()),
+  });
+}
+
 export async function fetchPOSFinanceDataOnce(
   companyId = getActiveCompanyId()
 ): Promise<POSFinanceStoreData> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const cached = getCachedPOSFinanceData(slug);
+  const hubSync = await syncCollectionsWithBackendHub(
+    cached && (cached.updatedAt > 0 || Object.keys(cached.creditAccountControls || {}).length > 0)
+      ? { posFinance: cached }
+      : {},
+    slug
+  );
+  const hubFinance = hubSync?.posFinance
+    ? sanitizePOSFinanceDoc(slug, hubSync.posFinance)
+    : null;
+
+  if (isFirestoreQuotaExhausted()) {
+    const merged = mergePOSFinanceObjects(slug, cached, hubFinance);
+    setCachedPOSFinanceData(merged, slug);
+    return merged;
+  }
+
   try {
     const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
-    const snap = await getDoc(docRef);
+    const snap = await withFirestoreTimeout(getDoc(docRef), 2000);
     if (snap.exists()) {
       const parsed = sanitizePOSFinanceDoc(slug, snap.data());
-      setCachedPOSFinanceData(parsed, slug);
-      return parsed;
+      const merged = mergePOSFinanceObjects(slug, mergePOSFinanceObjects(slug, cached, hubFinance), parsed);
+      setCachedPOSFinanceData(merged, slug);
+      syncCollectionsWithBackendHub({ posFinance: merged }, slug).catch(() => {});
+      return merged;
     }
-    return getCachedPOSFinanceData(slug);
-  } catch {
-    return getCachedPOSFinanceData(slug);
+    const merged = mergePOSFinanceObjects(slug, cached, hubFinance);
+    setCachedPOSFinanceData(merged, slug);
+    return merged;
+  } catch (err) {
+    isQuotaOrNetworkError(err);
+    const merged = mergePOSFinanceObjects(slug, cached, hubFinance);
+    setCachedPOSFinanceData(merged, slug);
+    return merged;
   }
 }
 
@@ -6400,7 +6663,11 @@ export function subscribeToPOSFinanceData(
   onData: (data: POSFinanceStoreData) => void,
   companyId = getActiveCompanyId()
 ): () => void {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  if (isFirestoreQuotaExhausted()) {
+    fetchPOSFinanceDataOnce(slug).then(onData).catch(() => {});
+    return () => {};
+  }
   try {
     const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
     return onSnapshot(
@@ -6408,14 +6675,19 @@ export function subscribeToPOSFinanceData(
       (snap) => {
         if (snap.exists()) {
           const parsed = sanitizePOSFinanceDoc(slug, snap.data());
-          setCachedPOSFinanceData(parsed, slug);
-          onData(parsed);
+          const cached = getCachedPOSFinanceData(slug);
+          const merged = mergePOSFinanceObjects(slug, cached, parsed);
+          setCachedPOSFinanceData(merged, slug);
+          syncCollectionsWithBackendHub({ posFinance: merged }, slug).catch(() => {});
+          onData(merged);
         } else {
-          onData(getCachedPOSFinanceData(slug));
+          fetchPOSFinanceDataOnce(slug).then(onData).catch(() => {});
         }
       },
       (err) => {
+        isQuotaOrNetworkError(err);
         console.warn('POS finance listener warning:', err);
+        fetchPOSFinanceDataOnce(slug).then(onData).catch(() => {});
       }
     );
   } catch {
@@ -6427,16 +6699,35 @@ export async function savePOSFinanceDataToFirestore(
   data: POSFinanceStoreData,
   companyId = getActiveCompanyId()
 ): Promise<POSFinanceStoreData> {
-  const slug = normalizeCompanySlug(data.companyId || companyId);
+  const slug = isGyGAlias(data.companyId || companyId)
+    ? 'tiendagyg'
+    : normalizeCompanySlug(data.companyId || companyId);
   const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
+
+  const controls =
+    data.creditAccountControls && typeof data.creditAccountControls === 'object'
+      ? data.creditAccountControls
+      : {};
+
+  // Auto-include any assigned collector usernames from creditAccountControls into enabledCollectorUsernames
+  const collectorSet = new Set<string>(
+    (data.routeCollectorConfig?.enabledCollectorUsernames || [])
+      .map((u) => String(u || '').trim().toLowerCase().replace(/^@+/, ''))
+      .filter(Boolean)
+  );
+  for (const ctrl of Object.values(controls)) {
+    if (ctrl?.assignedCollectorUsername) {
+      collectorSet.add(
+        String(ctrl.assignedCollectorUsername).trim().toLowerCase().replace(/^@+/, '')
+      );
+    }
+  }
+
   const normalized: POSFinanceStoreData = {
     companyId: slug,
     shifts: Array.isArray(data.shifts) ? data.shifts.slice(0, 120) : [],
     expenses: Array.isArray(data.expenses) ? data.expenses.slice(0, 500) : [],
-    creditAccountControls:
-      data.creditAccountControls && typeof data.creditAccountControls === 'object'
-        ? data.creditAccountControls
-        : {},
+    creditAccountControls: controls,
     onlineCustomers: Array.isArray(data.onlineCustomers) ? data.onlineCustomers.slice(0, 1000) : [],
     loyaltyConfig: data.loyaltyConfig || {
       enabled: true,
@@ -6449,31 +6740,52 @@ export async function savePOSFinanceDataToFirestore(
     loyaltyCustomers: Array.isArray(data.loyaltyCustomers)
       ? data.loyaltyCustomers.slice(0, 2000)
       : [],
+    routeCollectorConfig: {
+      autoCalculateNextDateOnAbone: data.routeCollectorConfig?.autoCalculateNextDateOnAbone !== false,
+      defaultPaymentFrequency: data.routeCollectorConfig?.defaultPaymentFrequency || 'weekly',
+      upcomingAlertDays: Number(data.routeCollectorConfig?.upcomingAlertDays) || 3,
+      notifyAdminOnEveryAbone: data.routeCollectorConfig?.notifyAdminOnEveryAbone !== false,
+      notifyAdminOnReschedule: data.routeCollectorConfig?.notifyAdminOnReschedule !== false,
+      enabledCollectorUsernames: Array.from(collectorSet),
+    },
+    routeCollectorAlerts: Array.isArray(data.routeCollectorAlerts)
+      ? data.routeCollectorAlerts.slice(0, 300)
+      : [],
     updatedAt: Date.now(),
   };
 
   setCachedPOSFinanceData(normalized, slug);
+  syncCollectionsWithBackendHub({ posFinance: normalized }, slug).catch(() => {});
+
+  if (isFirestoreQuotaExhausted()) {
+    return normalized;
+  }
 
   try {
-    await setDoc(
-      docRef,
-      stripUndefinedDeep({
-        storeName: `Finanzas POS ${slug}`.slice(0, 190), // satisfies isValidStoreSettings
-        companyId: slug,
-        shifts: normalized.shifts,
-        expenses: normalized.expenses,
-        creditAccountControls: normalized.creditAccountControls,
-        onlineCustomers: normalized.onlineCustomers,
-        loyaltyConfig: normalized.loyaltyConfig,
-        loyaltyCustomers: normalized.loyaltyCustomers,
-        updatedAt: normalized.updatedAt,
-      }),
-      { merge: true }
+    await withFirestoreTimeout(
+      setDoc(
+        docRef,
+        stripUndefinedDeep({
+          storeName: `Finanzas POS ${slug}`.slice(0, 190), // satisfies isValidStoreSettings
+          companyId: slug,
+          shifts: normalized.shifts,
+          expenses: normalized.expenses,
+          creditAccountControls: normalized.creditAccountControls,
+          routeCollectorConfig: normalized.routeCollectorConfig,
+          routeCollectorAlerts: normalized.routeCollectorAlerts,
+          onlineCustomers: normalized.onlineCustomers,
+          loyaltyConfig: normalized.loyaltyConfig,
+          loyaltyCustomers: normalized.loyaltyCustomers,
+          updatedAt: normalized.updatedAt,
+        }),
+        { merge: true }
+      ),
+      2000
     );
     return normalized;
   } catch (error) {
-    if (isQuotaOrNetworkError(error)) {
-      console.warn('POS finance saved in local cache; cloud sync deferred:', error);
+    if (isQuotaOrNetworkError(error) || String(error).includes('timed out')) {
+      console.warn('POS finance saved in local cache & hub; cloud sync deferred:', error);
       return normalized;
     }
     handleFirestoreError(error, OperationType.WRITE, `settings/${getPOSFinanceDocId(slug)}`);
@@ -7266,6 +7578,353 @@ export async function resolveClientLoginAcrossAllTenants(params: {
 
   return { matched: false };
 }
+
+// ----------------- RESTAURANT TABLES, ORDERS & KITCHEN COMANDERA -----------------
+
+const RESTAURANT_CACHE_BASE = 'stockmaster_restaurant_v1';
+
+export function getDefaultRestaurantZones(): string[] {
+  return ['Salón Principal', 'Terraza', 'Barra', 'VIP'];
+}
+
+export function getDefaultRestaurantTables(): RestaurantTable[] {
+  return [
+    { id: 'mesa_1', number: '1', name: 'Mesa 1', zone: 'Salón Principal', capacity: 4, shape: 'square', status: 'available', isActive: true },
+    { id: 'mesa_2', number: '2', name: 'Mesa 2', zone: 'Salón Principal', capacity: 4, shape: 'square', status: 'available', isActive: true },
+    { id: 'mesa_3', number: '3', name: 'Mesa 3', zone: 'Salón Principal', capacity: 6, shape: 'rect', status: 'available', isActive: true },
+    { id: 'mesa_4', number: '4', name: 'Mesa 4', zone: 'Salón Principal', capacity: 2, shape: 'round', status: 'available', isActive: true },
+    { id: 'mesa_5', number: '5', name: 'Terraza 1', zone: 'Terraza', capacity: 4, shape: 'round', status: 'available', isActive: true },
+    { id: 'mesa_6', number: '6', name: 'Terraza 2', zone: 'Terraza', capacity: 6, shape: 'rect', status: 'available', isActive: true },
+    { id: 'barra_1', number: 'B1', name: 'Barra 1', zone: 'Barra', capacity: 2, shape: 'round', status: 'available', isActive: true },
+    { id: 'vip_1', number: 'V1', name: 'Mesa VIP 1', zone: 'VIP', capacity: 8, shape: 'rect', status: 'available', isActive: true },
+  ];
+}
+
+function getRestaurantDocId(companyId = getActiveCompanyId()): string {
+  const slug = normalizeCompanySlug(companyId);
+  return slug === 'gosen' ? 'restaurant_gosen' : `restaurant_${slug}`;
+}
+
+export function getCachedRestaurantData(companyId = getActiveCompanyId()): RestaurantStoreData {
+  const slug = normalizeCompanySlug(companyId);
+  const cached = safeReadCache<RestaurantStoreData>(getScopedCacheKey(RESTAURANT_CACHE_BASE, slug));
+  if (cached && Array.isArray(cached.tables)) {
+    return sanitizeRestaurantDoc(slug, cached);
+  }
+  return {
+    companyId: slug,
+    zones: getDefaultRestaurantZones(),
+    tables: getDefaultRestaurantTables(),
+    orders: [],
+    kitchenTickets: [],
+    orderSequence: 1,
+    ticketSequence: 1,
+    updatedAt: 0,
+  };
+}
+
+export function setCachedRestaurantData(
+  data: RestaurantStoreData,
+  companyId = getActiveCompanyId()
+): void {
+  const slug = normalizeCompanySlug(companyId);
+  safeWriteCache(getScopedCacheKey(RESTAURANT_CACHE_BASE, slug), data);
+}
+
+function sanitizeRestaurantDoc(slug: string, raw: Record<string, any>): RestaurantStoreData {
+  const zones: string[] =
+    Array.isArray(raw.zones) && raw.zones.length > 0
+      ? Array.from(new Set(raw.zones.map((z: any) => String(z || '').trim()).filter(Boolean)))
+      : getDefaultRestaurantZones();
+
+  const validTableStatuses: RestaurantTableStatus[] = [
+    'available',
+    'occupied',
+    'kitchen',
+    'ready',
+    'bill_requested',
+  ];
+  const validShapes: RestaurantTableShape[] = ['square', 'round', 'rect'];
+
+  const tables: RestaurantTable[] = Array.isArray(raw.tables)
+    ? raw.tables.map((t: any, idx: number) => ({
+        id: String(t.id || `mesa_${idx + 1}`),
+        number: String(t.number || idx + 1),
+        name: String(t.name || `Mesa ${t.number || idx + 1}`),
+        zone: String(t.zone || zones[0] || 'Salón Principal'),
+        capacity: Math.max(1, Number(t.capacity) || 4),
+        shape: validShapes.includes(t.shape) ? t.shape : 'square',
+        status: validTableStatuses.includes(t.status) ? t.status : 'available',
+        currentOrderId: t.currentOrderId ? String(t.currentOrderId) : undefined,
+        isActive: t.isActive !== false,
+      }))
+    : getDefaultRestaurantTables();
+
+  const validOrderTypes: RestaurantOrderType[] = ['dine_in', 'takeout', 'delivery'];
+
+  const orders: RestaurantTableOrder[] = Array.isArray(raw.orders)
+    ? raw.orders.map((o: any) => ({
+        id: String(o.id || `rord_${Date.now()}`),
+        companyId: slug,
+        orderNumber: String(o.orderNumber || 'ORD-0001'),
+        tableId: o.tableId ? String(o.tableId) : undefined,
+        tableName: String(o.tableName || 'Para Llevar'),
+        zone: o.zone ? String(o.zone) : undefined,
+        orderType: validOrderTypes.includes(o.orderType) ? o.orderType : 'dine_in',
+        guests: Math.max(1, Number(o.guests) || 1),
+        waiterName: String(o.waiterName || 'Mesero'),
+        customerName: o.customerName ? String(o.customerName) : undefined,
+        customerPhone: o.customerPhone ? String(o.customerPhone) : undefined,
+        deliveryAddress: o.deliveryAddress ? String(o.deliveryAddress) : undefined,
+        notes: o.notes ? String(o.notes) : undefined,
+        items: Array.isArray(o.items)
+          ? o.items.map((it: any, idx: number): RestaurantOrderItem => ({
+              id: String(it.id || `ritem_${idx}_${Date.now()}`),
+              productId: String(it.productId || it.code || ''),
+              code: String(it.code || ''),
+              name: String(it.name || 'Platillo'),
+              category: it.category ? String(it.category) : undefined,
+              price: Math.max(0, Number(it.price) || 0),
+              cost: Math.max(0, Number(it.cost) || 0),
+              quantity: Math.max(1, Number(it.quantity) || 1),
+              sentToKitchenQty: Math.max(0, Number(it.sentToKitchenQty) || 0),
+              notes: it.notes ? String(it.notes) : undefined,
+              prepStation:
+                it.prepStation === 'barra' || it.prepStation === 'postres'
+                  ? it.prepStation
+                  : 'cocina',
+              addedAt: Number(it.addedAt) || Date.now(),
+            }))
+          : [],
+        discount: Math.max(0, Number(o.discount) || 0),
+        tipAmount: Math.max(0, Number(o.tipAmount) || 0),
+        status: ['open', 'bill_requested', 'paid', 'cancelled'].includes(o.status)
+          ? o.status
+          : 'open',
+        saleId: o.saleId ? String(o.saleId) : undefined,
+        saleNumber: o.saleNumber ? String(o.saleNumber) : undefined,
+        createdAt: Number(o.createdAt) || Date.now(),
+        updatedAt: Number(o.updatedAt) || Date.now(),
+        paidAt: o.paidAt ? Number(o.paidAt) : undefined,
+      }))
+    : [];
+
+  const validCmdStatus: KitchenCommandStatus[] = [
+    'pending',
+    'preparing',
+    'ready',
+    'delivered',
+    'cancelled',
+  ];
+
+  const kitchenTickets: KitchenCommandTicket[] = Array.isArray(raw.kitchenTickets)
+    ? raw.kitchenTickets.map((kt: any) => ({
+        id: String(kt.id || `kcmd_${Date.now()}`),
+        companyId: slug,
+        ticketNumber: String(kt.ticketNumber || 'COM-0001'),
+        orderId: String(kt.orderId || ''),
+        orderNumber: String(kt.orderNumber || 'ORD-0001'),
+        tableId: kt.tableId ? String(kt.tableId) : undefined,
+        tableName: String(kt.tableName || 'Para Llevar'),
+        zone: kt.zone ? String(kt.zone) : undefined,
+        orderType: validOrderTypes.includes(kt.orderType) ? kt.orderType : 'dine_in',
+        waiterName: String(kt.waiterName || 'Mesero'),
+        guests: Math.max(1, Number(kt.guests) || 1),
+        items: Array.isArray(kt.items)
+          ? kt.items.map((it: any, idx: number): KitchenCommandItem => ({
+              id: String(it.id || `kitem_${idx}_${Date.now()}`),
+              productId: String(it.productId || it.code || ''),
+              code: String(it.code || ''),
+              name: String(it.name || 'Platillo'),
+              category: it.category ? String(it.category) : undefined,
+              quantity: Math.max(1, Number(it.quantity) || 1),
+              notes: it.notes ? String(it.notes) : undefined,
+              prepStation:
+                it.prepStation === 'barra' || it.prepStation === 'postres'
+                  ? it.prepStation
+                  : 'cocina',
+            }))
+          : [],
+        orderNotes: kt.orderNotes ? String(kt.orderNotes) : undefined,
+        status: validCmdStatus.includes(kt.status) ? kt.status : 'pending',
+        createdAt: Number(kt.createdAt) || Date.now(),
+        startedAt: kt.startedAt ? Number(kt.startedAt) : undefined,
+        readyAt: kt.readyAt ? Number(kt.readyAt) : undefined,
+        deliveredAt: kt.deliveredAt ? Number(kt.deliveredAt) : undefined,
+      }))
+    : [];
+
+  return {
+    companyId: slug,
+    zones,
+    tables,
+    orders: orders.sort((a, b) => b.createdAt - a.createdAt),
+    kitchenTickets: kitchenTickets.sort((a, b) => b.createdAt - a.createdAt),
+    orderSequence: Math.max(1, Number(raw.orderSequence) || orders.length + 1),
+    ticketSequence: Math.max(1, Number(raw.ticketSequence) || kitchenTickets.length + 1),
+    updatedAt: Number(raw.updatedAt) || 0,
+  };
+}
+
+function mergeRestaurantObjects(
+  slug: string,
+  a?: RestaurantStoreData | null,
+  b?: RestaurantStoreData | null
+): RestaurantStoreData {
+  if (!a && !b) return getCachedRestaurantData(slug);
+  if (!a) return sanitizeRestaurantDoc(slug, b as Record<string, any>);
+  if (!b) return sanitizeRestaurantDoc(slug, a as Record<string, any>);
+  const aTs = Number(a.updatedAt || 0);
+  const bTs = Number(b.updatedAt || 0);
+  const primary = bTs >= aTs ? b : a;
+  return sanitizeRestaurantDoc(slug, {
+    ...primary,
+    companyId: slug,
+    updatedAt: Math.max(aTs, bTs),
+  });
+}
+
+export async function fetchRestaurantDataOnce(
+  companyId = getActiveCompanyId()
+): Promise<RestaurantStoreData> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const cached = getCachedRestaurantData(slug);
+  const hubSync = await syncCollectionsWithBackendHub(
+    cached && cached.updatedAt > 0 ? { restaurant: cached } : {},
+    slug
+  );
+  const hubRest = hubSync?.restaurant
+    ? sanitizeRestaurantDoc(slug, hubSync.restaurant)
+    : null;
+
+  if (isFirestoreQuotaExhausted()) {
+    const merged = mergeRestaurantObjects(slug, cached, hubRest);
+    setCachedRestaurantData(merged, slug);
+    return merged;
+  }
+
+  try {
+    const docRef = doc(db, 'settings', getRestaurantDocId(slug));
+    const snap = await withFirestoreTimeout(getDoc(docRef), 2000);
+    if (snap.exists()) {
+      const parsed = sanitizeRestaurantDoc(slug, snap.data());
+      const merged = mergeRestaurantObjects(
+        slug,
+        mergeRestaurantObjects(slug, cached, hubRest),
+        parsed
+      );
+      setCachedRestaurantData(merged, slug);
+      syncCollectionsWithBackendHub({ restaurant: merged }, slug).catch(() => {});
+      return merged;
+    }
+    const merged = mergeRestaurantObjects(slug, cached, hubRest);
+    setCachedRestaurantData(merged, slug);
+    return merged;
+  } catch (err) {
+    isQuotaOrNetworkError(err);
+    const merged = mergeRestaurantObjects(slug, cached, hubRest);
+    setCachedRestaurantData(merged, slug);
+    return merged;
+  }
+}
+
+export function subscribeToRestaurantData(
+  onData: (data: RestaurantStoreData) => void,
+  companyId = getActiveCompanyId()
+): () => void {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  if (isFirestoreQuotaExhausted()) {
+    fetchRestaurantDataOnce(slug).then(onData).catch(() => {});
+    return () => {};
+  }
+  try {
+    const docRef = doc(db, 'settings', getRestaurantDocId(slug));
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const parsed = sanitizeRestaurantDoc(slug, snap.data());
+          const cached = getCachedRestaurantData(slug);
+          const merged = mergeRestaurantObjects(slug, cached, parsed);
+          setCachedRestaurantData(merged, slug);
+          syncCollectionsWithBackendHub({ restaurant: merged }, slug).catch(() => {});
+          onData(merged);
+        } else {
+          fetchRestaurantDataOnce(slug).then(onData).catch(() => {});
+        }
+      },
+      (err) => {
+        isQuotaOrNetworkError(err);
+        console.warn('Restaurant listener warning:', err);
+        fetchRestaurantDataOnce(slug).then(onData).catch(() => {});
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+export async function saveRestaurantDataToFirestore(
+  data: RestaurantStoreData,
+  companyId = getActiveCompanyId()
+): Promise<RestaurantStoreData> {
+  const slug = isGyGAlias(data.companyId || companyId)
+    ? 'tiendagyg'
+    : normalizeCompanySlug(data.companyId || companyId);
+  const docRef = doc(db, 'settings', getRestaurantDocId(slug));
+
+  const normalized: RestaurantStoreData = {
+    companyId: slug,
+    zones:
+      Array.isArray(data.zones) && data.zones.length > 0
+        ? data.zones
+        : getDefaultRestaurantZones(),
+    tables: Array.isArray(data.tables) ? data.tables.slice(0, 150) : [],
+    orders: Array.isArray(data.orders) ? data.orders.slice(0, 250) : [],
+    kitchenTickets: Array.isArray(data.kitchenTickets)
+      ? data.kitchenTickets.slice(0, 250)
+      : [],
+    orderSequence: Math.max(1, Number(data.orderSequence) || 1),
+    ticketSequence: Math.max(1, Number(data.ticketSequence) || 1),
+    updatedAt: Date.now(),
+  };
+
+  setCachedRestaurantData(normalized, slug);
+  syncCollectionsWithBackendHub({ restaurant: normalized }, slug).catch(() => {});
+
+  if (isFirestoreQuotaExhausted()) {
+    return normalized;
+  }
+
+  try {
+    await withFirestoreTimeout(
+      setDoc(
+        docRef,
+        stripUndefinedDeep({
+          storeName: `Restaurante ${slug}`.slice(0, 190),
+          companyId: slug,
+          zones: normalized.zones,
+          tables: normalized.tables,
+          orders: normalized.orders,
+          kitchenTickets: normalized.kitchenTickets,
+          orderSequence: normalized.orderSequence,
+          ticketSequence: normalized.ticketSequence,
+          updatedAt: normalized.updatedAt,
+        }),
+        { merge: true }
+      ),
+      2000
+    );
+    return normalized;
+  } catch (error) {
+    if (isQuotaOrNetworkError(error) || String(error).includes('timed out')) {
+      console.warn('Restaurant data saved in local cache & hub; cloud sync deferred:', error);
+      return normalized;
+    }
+    handleFirestoreError(error, OperationType.WRITE, `settings/${getRestaurantDocId(slug)}`);
+  }
+}
+
 
 
 

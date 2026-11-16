@@ -26,7 +26,9 @@ import {
   Building2,
   Key,
   EyeOff,
-  Video
+  Video,
+  Navigation,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { MiAppHNCashRegisterIcon } from './MiAppHNLogo';
 
@@ -45,6 +47,10 @@ export interface SidebarProps {
   onUnlockSuperAdmin?: (masterKey: string) => boolean;
   onLockSuperAdmin?: () => void;
   companyAllowedModules?: ActiveTab[];
+  isRouteCollector?: boolean;
+  isRouteCollectorPanelActive?: boolean;
+  pendingRouteAccountsCount?: number;
+  onOpenRouteCollectorPanel?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -62,11 +68,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onUnlockSuperAdmin,
   onLockSuperAdmin,
   companyAllowedModules,
+  isRouteCollector = false,
+  isRouteCollectorPanelActive = false,
+  pendingRouteAccountsCount = 0,
+  onOpenRouteCollectorPanel,
 }) => {
   const isGosen = (storeSettings?.companyId || 'gosen') === 'gosen';
   const storeName = storeSettings?.storeName || (isGosen ? 'Tienda Gosén' : 'Mi Tienda');
   const isAdmin = userSession?.role === 'admin';
   const isSuperAdmin = Boolean(isAdmin && userSession?.isSuperAdmin === true);
+  const showRouteCollectorShortcut = Boolean(isRouteCollector && !isAdmin);
 
   // Secret 5-tap trigger on the Admin profile badge to unlock SaaS Owner Mode
   const tapCountRef = useRef<number>(0);
@@ -122,6 +133,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Ventas (POS)',
       icon: ShoppingCart,
       activeColor: 'bg-emerald-600 text-white',
+    },
+    {
+      id: 'restaurant' as ActiveTab,
+      label: 'Restaurante / Mesas',
+      icon: UtensilsCrossed,
+      activeColor: 'bg-orange-600 text-white',
     },
     {
       id: 'online-sales' as ActiveTab,
@@ -206,7 +223,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
     if (!userSession) return true;
     if (userSession.role === 'admin') return true;
-    // Collaborator: check allowed tabs
+    // Collaborator: Route Collectors use the dedicated "🛵 Panel Cobrador de Ruta" shortcut above
+    if (item.id === 'sales' && isRouteCollector) return false;
     return userSession.allowedTabs.includes(item.id);
   });
 
@@ -291,6 +309,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                     isAdmin
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : isRouteCollector
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                       : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                   }`}
                 >
@@ -303,6 +323,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       ? '👑 Propietario SaaS'
                       : isAdmin
                       ? '👑 Administrador'
+                      : isRouteCollector
+                      ? '🛵 Cobrador de Ruta'
                       : '👤 Colaborador'}
                   </div>
                 </div>
@@ -315,9 +337,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-3 mb-1">
               Navegación {isAdmin ? '(Admin)' : '(Colaborador)'}
             </div>
+
+            {showRouteCollectorShortcut && onOpenRouteCollectorPanel && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenRouteCollectorPanel();
+                  onCloseMobile();
+                }}
+                className={`w-full flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer font-extrabold text-sm text-left mb-2 ${
+                  isRouteCollectorPanelActive
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-950/30 ring-2 ring-amber-300'
+                    : 'bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25 hover:text-amber-200'
+                }`}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <Navigation className="w-5 h-5 shrink-0" />
+                  <span className="truncate">
+                    {isAdmin ? '🛵 Ruta Cobro / Créditos' : '🛵 Panel Cobrador de Ruta'}
+                  </span>
+                </div>
+                {pendingRouteAccountsCount > 0 && (
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[11px] font-black shrink-0 ${
+                      isRouteCollectorPanelActive
+                        ? 'bg-slate-950 text-amber-300'
+                        : 'bg-amber-500 text-slate-950'
+                    }`}
+                  >
+                    {pendingRouteAccountsCount}
+                  </span>
+                )}
+              </button>
+            )}
+
             {navItems.map((item) => {
               const Icon = item.icon;
-              const isActive = activeTab === item.id;
+              const isActive =
+                activeTab === item.id &&
+                !(item.id === 'sales' && showRouteCollectorShortcut && isRouteCollectorPanelActive);
               return (
                 <button
                   key={item.id}
@@ -425,6 +483,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                     isAdmin
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : isRouteCollector
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                       : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                   }`}
                 >
@@ -437,6 +497,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       ? '👑 Propietario SaaS'
                       : isAdmin
                       ? '👑 Administrador'
+                      : isRouteCollector
+                      ? '🛵 Cobrador de Ruta'
                       : '👤 Colaborador'}
                   </div>
                 </div>
@@ -446,9 +508,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Desktop Navigation Items */}
           <nav className="p-3 space-y-1.5 flex-1 overflow-y-auto">
+            {showRouteCollectorShortcut && onOpenRouteCollectorPanel && (
+              <button
+                type="button"
+                onClick={onOpenRouteCollectorPanel}
+                className={`w-full flex items-center rounded-xl transition-all cursor-pointer font-extrabold text-sm mb-2 ${
+                  isCollapsed
+                    ? 'justify-center p-3 relative'
+                    : 'justify-between px-3.5 py-2.5'
+                } ${
+                  isRouteCollectorPanelActive
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-950/30 ring-2 ring-amber-300'
+                    : 'bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25 hover:text-amber-200'
+                }`}
+                title="Panel Exclusivo de Cobrador de Ruta y Cuentas por Cobrar"
+              >
+                <div className="flex items-center min-w-0">
+                  <Navigation className="w-5 h-5 shrink-0" />
+                  {!isCollapsed && (
+                    <span className="ml-3 truncate">
+                      {isAdmin ? '🛵 Ruta Cobro / Créditos' : '🛵 Cobrador de Ruta'}
+                    </span>
+                  )}
+                </div>
+                {!isCollapsed && pendingRouteAccountsCount > 0 && (
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[11px] font-black shrink-0 ${
+                      isRouteCollectorPanelActive
+                        ? 'bg-slate-950 text-amber-300'
+                        : 'bg-amber-500 text-slate-950'
+                    }`}
+                  >
+                    {pendingRouteAccountsCount}
+                  </span>
+                )}
+              </button>
+            )}
+
             {navItems.map((item) => {
               const Icon = item.icon;
-              const isActive = activeTab === item.id;
+              const isActive =
+                activeTab === item.id &&
+                !(item.id === 'sales' && showRouteCollectorShortcut && isRouteCollectorPanelActive);
               return (
                 <button
                   key={item.id}

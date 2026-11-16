@@ -41,6 +41,109 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Google Maps Platform Config & Reverse Geocoding Proxy (avoids browser CORS issues)
+app.get('/api/maps/config', (_req, res) => {
+  const mapsApiKey =
+    process.env.GOOGLE_MAPS_PLATFORM_KEY ||
+    process.env.VITE_GOOGLE_MAPS_API_KEY ||
+    process.env.GOOGLE_MAPS_API_KEY ||
+    '';
+  res.json({
+    ok: true,
+    hasMapsKey: Boolean(mapsApiKey),
+    apiKey: mapsApiKey,
+  });
+});
+
+app.get('/api/maps/reverse-geocode', async (req, res) => {
+  const lat = parseFloat(String(req.query.lat || ''));
+  const lng = parseFloat(String(req.query.lng || ''));
+  if (Number.isNaN(lat) || Number.isNaN(lng)) {
+    return res.status(400).json({ ok: false, error: 'Coordenadas lat/lng inválidas' });
+  }
+
+  const mapsApiKey =
+    process.env.GOOGLE_MAPS_PLATFORM_KEY ||
+    process.env.VITE_GOOGLE_MAPS_API_KEY ||
+    process.env.GOOGLE_MAPS_API_KEY ||
+    '';
+
+  if (mapsApiKey) {
+    try {
+      // 1. Try Geocoding v4 REST endpoint with required attribution header
+      const v4Url = new URL('https://geocode.googleapis.com/v4/geocode/location');
+      v4Url.searchParams.append('location.latitude', String(lat));
+      v4Url.searchParams.append('location.longitude', String(lng));
+      v4Url.searchParams.append('languageCode', 'es');
+
+      const v4Resp = await fetch(v4Url.toString(), {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': mapsApiKey,
+          'X-Goog-FieldMask':
+            'results.placeId,results.formattedAddress,results.addressComponents,plusCode',
+          'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
+        },
+      });
+
+      if (v4Resp.ok) {
+        const v4Data: any = await v4Resp.json();
+        const firstResult = Array.isArray(v4Data?.results) ? v4Data.results[0] : null;
+        if (firstResult?.formattedAddress) {
+          const plusCode =
+            firstResult?.plusCode?.compoundCode ||
+            v4Data?.plusCode?.compoundCode ||
+            firstResult?.plusCode?.globalCode ||
+            '';
+          return res.json({
+            ok: true,
+            formattedAddress: String(firstResult.formattedAddress),
+            placeId: firstResult.placeId || '',
+            plusCode: String(plusCode || ''),
+            source: 'google-geocoding-v4',
+          });
+        }
+      }
+
+      // 2. Standard Google Maps Geocoding REST API
+      const stdUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${encodeURIComponent(
+        `${lat},${lng}`
+      )}&language=es&key=${encodeURIComponent(mapsApiKey)}`;
+      const stdResp = await fetch(stdUrl, {
+        headers: {
+          'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
+        },
+      });
+      if (stdResp.ok) {
+        const stdData: any = await stdResp.json();
+        const firstStd = Array.isArray(stdData?.results) ? stdData.results[0] : null;
+        if (firstStd?.formatted_address) {
+          const plusCode =
+            stdData?.plus_code?.compound_code || stdData?.plus_code?.global_code || '';
+          return res.json({
+            ok: true,
+            formattedAddress: String(firstStd.formatted_address),
+            placeId: firstStd.place_id || '',
+            plusCode: String(plusCode || ''),
+            source: 'google-geocoding-v3',
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn('Google reverse geocoding warning:', err?.message || err);
+    }
+  }
+
+  return res.json({
+    ok: true,
+    formattedAddress: `Ubicación GPS (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
+    placeId: '',
+    plusCode: '',
+    source: 'coordinates',
+  });
+});
+
 // Helper for multi-model AI content generation
 async function callGeminiWithFallback(prompt: string, systemInstruction: string): Promise<string> {
   const models = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
@@ -400,6 +503,7 @@ interface ServerTenantStore {
   warehouses: any | null;
   settings: any | null;
   posFinance: any | null;
+  restaurant: any | null;
   updatedAt: number;
 }
 
@@ -521,6 +625,7 @@ function getTenantStore(companyId?: string): ServerTenantStore {
       warehouses: null,
       settings: null,
       posFinance: null,
+      restaurant: null,
       updatedAt: 0,
     };
   }
@@ -904,6 +1009,7 @@ app.post('/api/cloud-sync/collections', (req, res) => {
       warehouses,
       settings,
       posFinance,
+      restaurant,
       companies,
       deleteSupplierId,
       deletePurchaseId,
@@ -984,9 +1090,103 @@ app.post('/api/cloud-sync/collections', (req, res) => {
 
     if (posFinance && typeof posFinance === 'object') {
       const incTs = Number(posFinance.updatedAt || 0);
-      const prevTs = Number(tenant.posFinance?.updatedAt || 0);
-      if (!tenant.posFinance || incTs >= prevTs) {
+      const prev = tenant.posFinance;
+      const prevTs = Number(prev?.updatedAt || 0);
+      if (!prev) {
         tenant.posFinance = { ...posFinance, companyId: slug };
+        changed = true;
+      } else {
+        const isIncomingNewer = incTs >= prevTs;
+        const primary = isIncomingNewer ? posFinance : prev;
+        const secondary = isIncomingNewer ? prev : posFinance;
+
+        const mergedControls: Record<string, any> = {
+          ...(secondary.creditAccountControls || {}),
+          ...(primary.creditAccountControls || {}),
+        };
+
+        const alertMap = new Map<string, any>();
+        for (const a of [
+          ...(secondary.routeCollectorAlerts || []),
+          ...(primary.routeCollectorAlerts || []),
+        ]) {
+          if (a && a.id) {
+            const existing = alertMap.get(a.id);
+            if (!existing || a.status === 'reviewed') {
+              alertMap.set(a.id, a);
+            }
+          }
+        }
+        const mergedAlerts = Array.from(alertMap.values())
+          .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0))
+          .slice(0, 300);
+
+        const shiftMap = new Map<string, any>();
+        for (const s of [...(secondary.shifts || []), ...(primary.shifts || [])]) {
+          if (s && s.id) {
+            const existing = shiftMap.get(s.id);
+            if (!existing || s.status === 'closed' || (s.cashMovements?.length || 0) >= (existing.cashMovements?.length || 0)) {
+              shiftMap.set(s.id, s);
+            }
+          }
+        }
+        const mergedShifts = Array.from(shiftMap.values()).sort(
+          (a, b) => (Number(b.openedAt) || 0) - (Number(a.openedAt) || 0)
+        );
+
+        const expMap = new Map<string, any>();
+        for (const e of [...(secondary.expenses || []), ...(primary.expenses || [])]) {
+          if (e && e.id) expMap.set(e.id, e);
+        }
+        const mergedExpenses = Array.from(expMap.values()).sort(
+          (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+        );
+
+        // Merge enabledCollectorUsernames from primary + any assigned collectors in creditAccountControls
+        const collectorSet = new Set<string>(
+          (primary.routeCollectorConfig?.enabledCollectorUsernames ||
+            secondary.routeCollectorConfig?.enabledCollectorUsernames ||
+            [])
+            .map((u: any) => String(u || '').trim().toLowerCase().replace(/^@+/, ''))
+            .filter(Boolean)
+        );
+        for (const ctrl of Object.values(mergedControls)) {
+          if (ctrl?.assignedCollectorUsername) {
+            collectorSet.add(
+              String(ctrl.assignedCollectorUsername).trim().toLowerCase().replace(/^@+/, '')
+            );
+          }
+        }
+
+        const mergedPosFinance = {
+          ...secondary,
+          ...primary,
+          companyId: slug,
+          shifts: mergedShifts,
+          expenses: mergedExpenses,
+          creditAccountControls: mergedControls,
+          routeCollectorAlerts: mergedAlerts,
+          routeCollectorConfig: {
+            ...(secondary.routeCollectorConfig || {}),
+            ...(primary.routeCollectorConfig || {}),
+            enabledCollectorUsernames: Array.from(collectorSet),
+          },
+          updatedAt: Math.max(incTs, prevTs, 1),
+        };
+
+        if (JSON.stringify(mergedPosFinance) !== JSON.stringify(prev)) {
+          tenant.posFinance = mergedPosFinance;
+          changed = true;
+        }
+      }
+    }
+
+    if (restaurant && typeof restaurant === 'object') {
+      const incTs = Number(restaurant.updatedAt || 0);
+      const prev = tenant.restaurant;
+      const prevTs = Number(prev?.updatedAt || 0);
+      if (!prev || incTs >= prevTs) {
+        tenant.restaurant = { ...restaurant, companyId: slug };
         changed = true;
       }
     }
@@ -1031,6 +1231,7 @@ app.post('/api/cloud-sync/collections', (req, res) => {
       warehouses: tenant.warehouses,
       settings: tenant.settings,
       posFinance: tenant.posFinance,
+      restaurant: tenant.restaurant,
       companies: Object.values(syncDbMemory.companies),
       updatedAt: tenant.updatedAt,
     });

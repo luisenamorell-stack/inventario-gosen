@@ -34,7 +34,8 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
-  Video
+  Video,
+  UtensilsCrossed
 } from 'lucide-react';
 
 interface UserManagementViewProps {
@@ -54,6 +55,12 @@ const TAB_MODULES: { id: ActiveTab; label: string; description: string; icon: Re
     label: 'Ventas y Facturación (POS)',
     description: 'Permite cobrar, generar facturas/tickets y registrar ventas',
     icon: ShoppingCart,
+  },
+  {
+    id: 'restaurant',
+    label: 'Restaurante, Mesas y Comandera',
+    description: 'Toma de órdenes por mesa, envío de comandas a cocina y cobro',
+    icon: UtensilsCrossed,
   },
   {
     id: 'online-sales',
@@ -168,6 +175,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [canEditSales, setCanEditSales] = useState<boolean>(true);
   const [canCancelSales, setCanCancelSales] = useState<boolean>(false);
   const [canViewCostsAndProfits, setCanViewCostsAndProfits] = useState<boolean>(false);
+  const [isRouteCollector, setIsRouteCollector] = useState<boolean>(false);
+  const [routeCollectorScope, setRouteCollectorScope] = useState<'all' | 'assigned'>('all');
   const [restrictWarehouses, setRestrictWarehouses] = useState<boolean>(false);
   const [allowedWarehouseIds, setAllowedWarehouseIds] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -195,6 +204,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     setCanEditSales(true);
     setCanCancelSales(false);
     setCanViewCostsAndProfits(false);
+    setIsRouteCollector(false);
+    setRouteCollectorScope('all');
     setRestrictWarehouses(false);
     setAllowedWarehouseIds(activeWarehouses.map((w) => w.id));
     setIsModalOpen(true);
@@ -213,6 +224,10 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     );
     setCanCancelSales(Boolean(user.salesPermissions?.canCancelSales));
     setCanViewCostsAndProfits(Boolean(user.salesPermissions?.canViewCostsAndProfits));
+    setIsRouteCollector(Boolean(user.salesPermissions?.isRouteCollector));
+    setRouteCollectorScope(
+      user.salesPermissions?.routeCollectorScope === 'assigned' ? 'assigned' : 'all'
+    );
     const savedWhIds =
       user.salesPermissions?.allowedWarehouseIds || user.allowedWarehouseIds || [];
     const validSavedWhIds = savedWhIds.filter((id) =>
@@ -319,6 +334,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
           canEditSales,
           canCancelSales,
           canViewCostsAndProfits,
+          isRouteCollector,
+          routeCollectorScope,
           allowedWarehouseIds: effectiveAllowedWhIds,
         },
         createdAt: editingUser ? editingUser.createdAt : Date.now(),
@@ -592,6 +609,15 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                                   ? 'Costos/Ganancias: Visibles'
                                   : '🔒 Costos/Ganancias: Ocultos'}
                               </span>
+                              {u.salesPermissions?.isRouteCollector && (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                                  🛵 Cobrador de Ruta (
+                                  {u.salesPermissions?.routeCollectorScope === 'assigned'
+                                    ? 'Solo su ruta'
+                                    : 'Toda la cartera'}
+                                  )
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -885,6 +911,73 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                             </p>
                           </div>
                         </label>
+
+                        {/* 4. Panel Exclusivo de Cobrador de Ruta (Cuentas por Cobrar) */}
+                        <div
+                          className={`p-3 rounded-xl border transition-all space-y-2.5 ${
+                            isRouteCollector
+                              ? 'bg-amber-500/15 border-amber-400/70'
+                              : 'bg-white/5 border-white/10 hover:bg-white/10'
+                          }`}
+                        >
+                          <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isRouteCollector}
+                              onChange={(e) => setIsRouteCollector(e.target.checked)}
+                              className="mt-0.5 rounded text-amber-500 focus:ring-amber-500 w-4 h-4 cursor-pointer shrink-0"
+                            />
+                            <div className="text-xs flex-1">
+                              <div className="font-extrabold text-amber-300 flex items-center gap-1.5 flex-wrap">
+                                <span>🛵 Habilitar Panel Exclusivo de Cobrador de Ruta (Clientes por Cobrar)</span>
+                                <span className="px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-200 text-[10px] font-black border border-amber-400/30">
+                                  Cobrador de Ruta
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-300 mt-0.5">
+                                Le activa un panel exclusivo de <strong>Cuentas por Cobrar / Ruta de Cobro</strong> donde podrá ver el saldo y abonos de los clientes en deuda, registrar abonos en ruta, recibir alertas cuando ya toque cobrar, programar el siguiente cobro y enviar alertas al Administrador.
+                              </p>
+                            </div>
+                          </label>
+
+                          {isRouteCollector && (
+                            <div className="pl-7 pt-2 border-t border-amber-400/20 space-y-2">
+                              <span className="block text-[11px] font-bold text-amber-200">
+                                ¿Qué cuentas por cobrar podrá ver y gestionar este Cobrador de Ruta?
+                              </span>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setRouteCollectorScope('all')}
+                                  className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                                    routeCollectorScope === 'all'
+                                      ? 'bg-amber-500 text-slate-950 font-black border-amber-300'
+                                      : 'bg-slate-900/60 text-slate-300 border-white/15 hover:bg-white/10 font-semibold'
+                                  }`}
+                                >
+                                  <span className="block">📋 Todas las Deudas de la Tienda</span>
+                                  <span className="text-[10px] opacity-85 block mt-0.5">
+                                    Ve todos los clientes con saldo pendiente para cobrar en ruta
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRouteCollectorScope('assigned')}
+                                  className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                                    routeCollectorScope === 'assigned'
+                                      ? 'bg-amber-500 text-slate-950 font-black border-amber-300'
+                                      : 'bg-slate-900/60 text-slate-300 border-white/15 hover:bg-white/10 font-semibold'
+                                  }`}
+                                >
+                                  <span className="block">🎯 Solo Deudas Asignadas a su Ruta</span>
+                                  <span className="text-[10px] opacity-85 block mt-0.5">
+                                    Solo ve los clientes que el Administrador le asigne a él
+                                  </span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* Warehouse Billing Assignment Section (Shown when store has Warehouses module enabled) */}

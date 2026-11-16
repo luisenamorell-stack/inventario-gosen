@@ -3,6 +3,7 @@ import {
   Product,
   SaleRecord,
   StoreSettings,
+  UserAccount,
   UserSession,
   CashRegisterShift,
   CashOutMovement,
@@ -12,11 +13,16 @@ import {
   POSFinanceStoreData,
   CreditAccountControlMeta,
   CreditCollectionNoticeLog,
+  RouteCollectorAlert,
+  RouteCollectorGlobalConfig,
   LoyaltyCustomerProfile,
   LoyaltyProgramConfig,
   LoyaltyTransactionLog,
   CreditContractData,
   isStoreCreditContractEnabled,
+  isCollaboratorRouteCollector,
+  doesCreditAccountBelongToCollector,
+  normalizeCollectorIdentifier,
 } from '../types';
 import {
   Wallet,
@@ -52,10 +58,18 @@ import {
   Sparkles,
   Settings,
   History,
+  MapPin,
+  Navigation,
+  ExternalLink,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { PrintFormatModal } from './PrintFormatModal';
 import { CreditContractModal } from './CreditContractModal';
+import {
+  CustomerGpsLocationModal,
+  captureDeviceGpsLocation,
+  reverseGeocodeCoordinates,
+} from './CustomerGpsLocationModal';
 import {
   buildShiftArqueoHtml,
   downloadShiftArqueoPdf,
@@ -84,9 +98,12 @@ interface POSFinanceTabsProps {
   sales: SaleRecord[];
   storeSettings: StoreSettings;
   userSession?: UserSession | null;
+  users?: UserAccount[];
   posFinanceData: POSFinanceStoreData;
   onSavePOSFinanceData: (updated: POSFinanceStoreData) => Promise<void>;
   onRecordCreditPayment: (sale: SaleRecord, abone: CreditPaymentAbone) => Promise<SaleRecord>;
+  onRecordSale?: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
+  onSaveUser?: (user: UserAccount) => Promise<void>;
   onViewSaleTicket: (sale: SaleRecord) => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
@@ -97,9 +114,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   sales,
   storeSettings,
   userSession,
+  users = [],
   posFinanceData,
   onSavePOSFinanceData,
   onRecordCreditPayment,
+  onRecordSale,
+  onSaveUser,
   onViewSaleTicket,
   showToast,
 }) => {
@@ -389,9 +409,136 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   >('biweekly');
   const [ctrlInstallmentAmount, setCtrlInstallmentAmount] = useState<string>('');
   const [ctrlNotes, setCtrlNotes] = useState<string>('');
+  const [ctrlAssignedCollectorUsername, setCtrlAssignedCollectorUsername] = useState<string>('');
+  const [ctrlCustomerAddressOrRoute, setCtrlCustomerAddressOrRoute] = useState<string>('');
   const [manualNoticeChannel, setManualNoticeChannel] = useState<'call' | 'in_person'>('call');
   const [manualNoticeNote, setManualNoticeNote] = useState<string>('');
   const [isSavingControl, setIsSavingControl] = useState<boolean>(false);
+
+  // ==================== COBRADOR DE RUTA & ADMIN CONFIG / ALERTS STATE ====================
+  const matchedCollaborator = useMemo(() => {
+    if (isAdminSession || !userSession) return undefined;
+    return users.find(
+      (u) =>
+        u.id === userSession.userId ||
+        u.username.trim().toLowerCase() === (userSession.username || '').trim().toLowerCase()
+    );
+  }, [isAdminSession, userSession, users]);
+
+  const canViewCostsAndProfits =
+    isAdminSession ||
+    Boolean(
+      matchedCollaborator?.salesPermissions?.canViewCostsAndProfits ??
+        userSession?.salesPermissions?.canViewCostsAndProfits
+    );
+
+  const routeCollectorConfig = useMemo<RouteCollectorGlobalConfig>(() => {
+    const raw = posFinanceData.routeCollectorConfig;
+    return {
+      autoCalculateNextDateOnAbone: raw?.autoCalculateNextDateOnAbone !== false,
+      defaultPaymentFrequency: raw?.defaultPaymentFrequency || 'weekly',
+      upcomingAlertDays: Math.max(1, Math.min(15, Number(raw?.upcomingAlertDays) || 3)),
+      notifyAdminOnEveryAbone: raw?.notifyAdminOnEveryAbone !== false,
+      notifyAdminOnReschedule: raw?.notifyAdminOnReschedule !== false,
+      enabledCollectorUsernames: Array.isArray(raw?.enabledCollectorUsernames)
+        ? raw.enabledCollectorUsernames
+        : [],
+    };
+  }, [posFinanceData.routeCollectorConfig]);
+
+  const routeCollectorAlerts = useMemo<RouteCollectorAlert[]>(() => {
+    return Array.isArray(posFinanceData.routeCollectorAlerts)
+      ? posFinanceData.routeCollectorAlerts
+      : [];
+  }, [posFinanceData.routeCollectorAlerts]);
+
+  const unreadCollectorAlertsCount = useMemo(
+    () => routeCollectorAlerts.filter((a) => a.status === 'unread').length,
+    [routeCollectorAlerts]
+  );
+
+  const isCurrentUserRouteCollector = useMemo(() => {
+    return isCollaboratorRouteCollector(userSession, users, posFinanceData);
+  }, [userSession, users, posFinanceData]);
+
+  // Collaborator users list (for assigning route collectors)
+  const collaboratorUsers = useMemo(
+    () => users.filter((u) => u.role === 'collaborator' && u.isActive !== false),
+    [users]
+  );
+
+  const activeRouteCollectors = useMemo(
+    () =>
+      collaboratorUsers.filter((u) => {
+        const cleanUname = normalizeCollectorIdentifier(u.username);
+        const cleanName = normalizeCollectorIdentifier(u.name);
+        const inEnabled = (routeCollectorConfig.enabledCollectorUsernames || []).some((raw) => {
+          const norm = normalizeCollectorIdentifier(raw);
+          return norm === cleanUname || norm === cleanName;
+        });
+        const hasAssignedAccount = Object.values(posFinanceData.creditAccountControls || {}).some(
+          (meta) => doesCreditAccountBelongToCollector(meta, null, u)
+        );
+        return Boolean(u.salesPermissions?.isRouteCollector || inEnabled || hasAssignedAccount);
+      }),
+    [collaboratorUsers, routeCollectorConfig.enabledCollectorUsernames, posFinanceData.creditAccountControls]
+  );
+
+  // Admin can toggle between 'admin_full' and 'route_collector_view' or filter by collector
+  const [adminCreditsViewMode, setAdminCreditsViewMode] = useState<'admin_full' | 'route_panel'>(
+    'admin_full'
+  );
+  const [selectedCollectorFilter, setSelectedCollectorFilter] = useState<string>('all');
+  const [showAdminCollectorConfigModal, setShowAdminCollectorConfigModal] =
+    useState<boolean>(false);
+  const [showAdminAlertsModal, setShowAdminAlertsModal] = useState<boolean>(false);
+
+  // Quick Schedule Next Collection Date Modal (for Route Collector / Admin)
+  const [selectedSaleForQuickSchedule, setSelectedSaleForQuickSchedule] =
+    useState<SaleRecord | null>(null);
+  const [quickScheduleDate, setQuickScheduleDate] = useState<string>('');
+  const [quickScheduleFrequency, setQuickScheduleFrequency] = useState<
+    'daily' | 'weekly' | 'biweekly' | 'monthly' | 'custom'
+  >('weekly');
+  const [quickScheduleNote, setQuickScheduleNote] = useState<string>('');
+  const [isSavingQuickSchedule, setIsSavingQuickSchedule] = useState<boolean>(false);
+
+  // Collaborator -> Admin Alert Modal
+  const [selectedSaleForCollectorAlert, setSelectedSaleForCollectorAlert] =
+    useState<SaleRecord | null>(null);
+  const [collectorAlertType, setCollectorAlertType] = useState<RouteCollectorAlert['alertType']>(
+    'customer_absent'
+  );
+  const [collectorAlertMessage, setCollectorAlertMessage] = useState<string>('');
+  const [collectorAlertNextDate, setCollectorAlertNextDate] = useState<string>('');
+  const [isSendingCollectorAlert, setIsSendingCollectorAlert] = useState<boolean>(false);
+
+  // Direct Create New Credit Debt Modal (from Cuentas por Cobrar)
+  const [showCreateDebtModal, setShowCreateDebtModal] = useState<boolean>(false);
+  const [newDebtCustomerName, setNewDebtCustomerName] = useState<string>('');
+  const [newDebtCustomerPhone, setNewDebtCustomerPhone] = useState<string>('');
+  const [newDebtCustomerAddress, setNewDebtCustomerAddress] = useState<string>('');
+  const [newDebtProductId, setNewDebtProductId] = useState<string>('');
+  const [newDebtCustomItemName, setNewDebtCustomItemName] = useState<string>('');
+  const [newDebtTotalAmount, setNewDebtTotalAmount] = useState<string>('');
+  const [newDebtInitialAbono, setNewDebtInitialAbono] = useState<string>('0');
+  const [newDebtInstallmentAmount, setNewDebtInstallmentAmount] = useState<string>('');
+  const [newDebtFrequency, setNewDebtFrequency] = useState<
+    'daily' | 'weekly' | 'biweekly' | 'monthly'
+  >('weekly');
+  const [newDebtNextPaymentDate, setNewDebtNextPaymentDate] = useState<string>('');
+  const [newDebtCollectorUsername, setNewDebtCollectorUsername] = useState<string>('');
+  const [newDebtNotes, setNewDebtNotes] = useState<string>('');
+  const [newDebtGpsCoords, setNewDebtGpsCoords] = useState<{
+    lat: number;
+    lng: number;
+    accuracy?: number;
+    formattedAddress?: string;
+    plusCode?: string;
+  } | null>(null);
+  const [isCreatingDebt, setIsCreatingDebt] = useState<boolean>(false);
+  const [selectedSaleForGpsModal, setSelectedSaleForGpsModal] = useState<SaleRecord | null>(null);
+  const [isCapturingInlineGps, setIsCapturingInlineGps] = useState<boolean>(false);
 
   const inventoryCostMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -413,12 +560,39 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   };
 
   const addDaysToIso = (daysToAdd: number, baseIso?: string) => {
-    const base = baseIso && /^\d{4}-\d{2}-\d{2}$/.test(baseIso) ? new Date(`${baseIso}T12:00:00`) : new Date();
+    const base =
+      baseIso && /^\d{4}-\d{2}-\d{2}$/.test(baseIso)
+        ? new Date(`${baseIso}T12:00:00`)
+        : new Date();
     base.setDate(base.getDate() + daysToAdd);
     const yyyy = base.getFullYear();
     const mm = String(base.getMonth() + 1).padStart(2, '0');
     const dd = String(base.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const calculateNextDateByFrequency = (
+    frequency?: 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'custom',
+    currentEffectiveDate?: string
+  ): string => {
+    const todayIso = getLocalTodayIso();
+    const baseDate =
+      currentEffectiveDate &&
+      /^\d{4}-\d{2}-\d{2}$/.test(currentEffectiveDate) &&
+      currentEffectiveDate > todayIso
+        ? currentEffectiveDate
+        : todayIso;
+    const effectiveFreq =
+      frequency && frequency !== 'custom'
+        ? frequency
+        : routeCollectorConfig.defaultPaymentFrequency || 'weekly';
+    const daysMap: Record<'daily' | 'weekly' | 'biweekly' | 'monthly', number> = {
+      daily: 1,
+      weekly: 7,
+      biweekly: 15,
+      monthly: 30,
+    };
+    return addDaysToIso(daysMap[effectiveFreq] || 7, baseDate);
   };
 
   const getSaleCreditAnalytics = (sale: SaleRecord) => {
@@ -477,13 +651,14 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     }
 
     let alertStatus: 'paid' | 'overdue' | 'due_today' | 'upcoming' | 'on_track' = 'on_track';
+    const alertThresholdDays = routeCollectorConfig.upcomingAlertDays || 3;
     if (isPaid) {
       alertStatus = 'paid';
     } else if (daysDiff !== null && daysDiff < 0) {
       alertStatus = 'overdue';
     } else if (daysDiff !== null && daysDiff === 0) {
       alertStatus = 'due_today';
-    } else if (daysDiff !== null && daysDiff > 0 && daysDiff <= 3) {
+    } else if (daysDiff !== null && daysDiff > 0 && daysDiff <= alertThresholdDays) {
       alertStatus = 'upcoming';
     }
 
@@ -516,19 +691,69 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   };
 
   const creditSales = useMemo(() => {
-    return sales.filter(
+    const allCredits = sales.filter(
       (s) =>
         s.status === 'completed' &&
         (s.paymentMethod === 'credit' ||
           (s.balanceDue !== undefined && s.balanceDue > 0) ||
           (s.creditPayments && s.creditPayments.length > 0))
     );
-  }, [sales]);
+
+    // If collaborator is a Route Collector with 'assigned' scope, show accounts assigned to them or created by them
+    if (!isAdminSession && isCurrentUserRouteCollector) {
+      const scope =
+        matchedCollaborator?.salesPermissions?.routeCollectorScope ||
+        userSession?.salesPermissions?.routeCollectorScope ||
+        'all';
+      const myUsername = normalizeCollectorIdentifier(
+        matchedCollaborator?.username || userSession?.username
+      );
+      const myName = normalizeCollectorIdentifier(
+        matchedCollaborator?.name || userSession?.userName
+      );
+      const assignedList = allCredits.filter((s) => {
+        const meta = creditAccountControls[s.id];
+        if (doesCreditAccountBelongToCollector(meta, userSession, matchedCollaborator)) {
+          return true;
+        }
+        const createdByMe =
+          (Boolean(myUsername) &&
+            normalizeCollectorIdentifier(s.cashierUsername) === myUsername) ||
+          (Boolean(myName) && normalizeCollectorIdentifier(s.cashier) === myName);
+        return createdByMe;
+      });
+
+      if (scope === 'assigned' && assignedList.length > 0) {
+        return assignedList;
+      }
+      return allCredits;
+    }
+
+    return allCredits;
+  }, [
+    sales,
+    isAdminSession,
+    isCurrentUserRouteCollector,
+    matchedCollaborator,
+    userSession,
+    creditAccountControls,
+  ]);
 
   const filteredCreditSales = useMemo(() => {
     const q = creditSearch.trim().toLowerCase();
     return creditSales.filter((s) => {
       const analytics = getSaleCreditAnalytics(s);
+
+      if (selectedCollectorFilter !== 'all') {
+        const assignedUname = (analytics.controlMeta?.assignedCollectorUsername || '')
+          .trim()
+          .toLowerCase();
+        if (selectedCollectorFilter === '__unassigned__') {
+          if (assignedUname) return false;
+        } else if (assignedUname !== selectedCollectorFilter.toLowerCase()) {
+          return false;
+        }
+      }
 
       if (creditFilter === 'pending' && analytics.isPaid) return false;
       if (creditFilter === 'paid' && !analytics.isPaid) return false;
@@ -560,6 +785,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         const matchPhone = (s.customerPhone || '').toLowerCase().includes(q);
         const matchRtn = (s.customerRtn || '').toLowerCase().includes(q);
         const matchNum = (s.saleNumber || '').toLowerCase().includes(q);
+        const matchRoute = (analytics.controlMeta?.customerAddressOrRoute || '')
+          .toLowerCase()
+          .includes(q);
+        const matchCollector = (analytics.controlMeta?.assignedCollectorName || '')
+          .toLowerCase()
+          .includes(q);
         const matchAmount =
           String(s.total).includes(cleanAmountQuery) ||
           s.total.toFixed(2).includes(cleanAmountQuery) ||
@@ -569,12 +800,29 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
             it.name.toLowerCase().includes(q) ||
             it.code.toLowerCase().includes(q)
         );
-        if (!matchCust && !matchPhone && !matchRtn && !matchNum && !matchAmount && !matchItem)
+        if (
+          !matchCust &&
+          !matchPhone &&
+          !matchRtn &&
+          !matchNum &&
+          !matchRoute &&
+          !matchCollector &&
+          !matchAmount &&
+          !matchItem
+        )
           return false;
       }
       return true;
     });
-  }, [creditSales, creditSearch, creditFilter, creditAccountControls, inventoryCostMap]);
+  }, [
+    creditSales,
+    creditSearch,
+    creditFilter,
+    selectedCollectorFilter,
+    creditAccountControls,
+    inventoryCostMap,
+    routeCollectorConfig.upcomingAlertDays,
+  ]);
 
   const creditPortfolioStats = useMemo(() => {
     let totalReceivable = 0;
@@ -646,18 +894,44 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     };
   }, [creditSales, creditAccountControls, inventoryCostMap]);
 
+  const openAboneModalForSale = (sale: SaleRecord) => {
+    const analytics = getSaleCreditAnalytics(sale);
+    setSelectedSaleForAbone(sale);
+    setAboneAmount(
+      analytics.controlMeta?.installmentAmount &&
+        analytics.controlMeta.installmentAmount <= analytics.balanceDue
+        ? analytics.controlMeta.installmentAmount.toFixed(2)
+        : analytics.balanceDue.toFixed(2)
+    );
+    setAboneMethod('cash');
+    setAboneNotes('');
+    if (routeCollectorConfig.autoCalculateNextDateOnAbone !== false) {
+      const nextAutoDate = calculateNextDateByFrequency(
+        analytics.controlMeta?.paymentFrequency,
+        analytics.effectiveNextDate
+      );
+      setAboneNextDate(nextAutoDate);
+    } else {
+      setAboneNextDate(analytics.effectiveNextDate || '');
+    }
+  };
+
   const openControlModalForSale = (sale: SaleRecord) => {
     const a = getSaleCreditAnalytics(sale);
     setSelectedSaleForControl(sale);
     setCtrlCustomCost(a.totalCost.toFixed(2));
     setCtrlNextPaymentDate(a.effectiveNextDate || '');
-    setCtrlFrequency(a.controlMeta?.paymentFrequency || 'biweekly');
+    setCtrlFrequency(
+      a.controlMeta?.paymentFrequency || routeCollectorConfig.defaultPaymentFrequency || 'weekly'
+    );
     setCtrlInstallmentAmount(
       a.controlMeta?.installmentAmount && a.controlMeta.installmentAmount > 0
         ? a.controlMeta.installmentAmount.toFixed(2)
         : ''
     );
     setCtrlNotes(a.controlMeta?.collectionNotes || '');
+    setCtrlAssignedCollectorUsername(a.controlMeta?.assignedCollectorUsername || '');
+    setCtrlCustomerAddressOrRoute(a.controlMeta?.customerAddressOrRoute || '');
     setManualNoticeNote('');
   };
 
@@ -671,6 +945,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       };
       const parsedCost = parseFloat(ctrlCustomCost);
       const parsedInstallment = parseFloat(ctrlInstallmentAmount);
+      const cleanAssignedUname = normalizeCollectorIdentifier(ctrlAssignedCollectorUsername);
+      const matchedCollector = collaboratorUsers.find(
+        (u) =>
+          normalizeCollectorIdentifier(u.username) === cleanAssignedUname ||
+          normalizeCollectorIdentifier(u.name) === cleanAssignedUname
+      );
 
       const updatedMeta: CreditAccountControlMeta = {
         ...existingMeta,
@@ -681,7 +961,48 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         installmentAmount:
           !Number.isNaN(parsedInstallment) && parsedInstallment > 0 ? parsedInstallment : undefined,
         collectionNotes: ctrlNotes.trim() || undefined,
+        assignedCollectorId: matchedCollector?.id || undefined,
+        assignedCollectorUsername:
+          matchedCollector?.username || (cleanAssignedUname || undefined),
+        assignedCollectorName: matchedCollector?.name || undefined,
+        customerAddressOrRoute: ctrlCustomerAddressOrRoute.trim() || undefined,
       };
+
+      const currentEnabled = new Set(
+        (routeCollectorConfig.enabledCollectorUsernames || []).map((u) =>
+          normalizeCollectorIdentifier(u)
+        )
+      );
+      if (cleanAssignedUname) {
+        currentEnabled.add(
+          normalizeCollectorIdentifier(matchedCollector?.username || cleanAssignedUname)
+        );
+      }
+
+      if (matchedCollector && onSaveUser) {
+        await onSaveUser({
+          ...matchedCollector,
+          allowedTabs: matchedCollector.allowedTabs?.includes('sales')
+            ? matchedCollector.allowedTabs
+            : [...(matchedCollector.allowedTabs || []), 'sales'],
+          salesPermissions: {
+            canEditSales:
+              matchedCollector.salesPermissions?.canEditSales !== undefined
+                ? matchedCollector.salesPermissions.canEditSales
+                : true,
+            canCancelSales: Boolean(matchedCollector.salesPermissions?.canCancelSales),
+            canViewCostsAndProfits: Boolean(
+              matchedCollector.salesPermissions?.canViewCostsAndProfits
+            ),
+            allowedWarehouseIds:
+              matchedCollector.salesPermissions?.allowedWarehouseIds ||
+              matchedCollector.allowedWarehouseIds,
+            isRouteCollector: true,
+            routeCollectorScope:
+              matchedCollector.salesPermissions?.routeCollectorScope || 'all',
+          },
+        }).catch(() => {});
+      }
 
       await onSavePOSFinanceData({
         ...posFinanceData,
@@ -689,16 +1010,588 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           ...creditAccountControls,
           [selectedSaleForControl.id]: updatedMeta,
         },
+        routeCollectorConfig: {
+          ...routeCollectorConfig,
+          enabledCollectorUsernames: Array.from(currentEnabled),
+        },
         updatedAt: Date.now(),
       });
 
       showToast(
-        `Control de costo y alerta de cobro guardado para ${selectedSaleForControl.customerName || 'Cliente'}`,
+        `Configuración de cobro y ruta guardada para ${selectedSaleForControl.customerName || 'Cliente'}${
+          matchedCollector ? ` (Cobrador asignado: ${matchedCollector.name})` : ''
+        }`,
         'success'
       );
       setSelectedSaleForControl(null);
     } finally {
       setIsSavingControl(false);
+    }
+  };
+
+  const handleQuickScheduleNextDate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSaleForQuickSchedule || !quickScheduleDate.trim()) {
+      showToast('Selecciona la fecha del siguiente cobro.', 'warning');
+      return;
+    }
+    setIsSavingQuickSchedule(true);
+    try {
+      const now = new Date();
+      const dateStr = now.toLocaleString('es-HN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const existingMeta = creditAccountControls[selectedSaleForQuickSchedule.id] || {
+        saleId: selectedSaleForQuickSchedule.id,
+      };
+      const updatedMeta: CreditAccountControlMeta = {
+        ...existingMeta,
+        saleId: selectedSaleForQuickSchedule.id,
+        nextPaymentDate: quickScheduleDate.trim(),
+        paymentFrequency: quickScheduleFrequency,
+        collectionNotes: quickScheduleNote.trim()
+          ? `${existingMeta.collectionNotes ? existingMeta.collectionNotes + ' | ' : ''}Próximo cobro (${quickScheduleDate}): ${quickScheduleNote.trim()}`
+          : existingMeta.collectionNotes,
+      };
+
+      const nextAlerts = [...routeCollectorAlerts];
+      if (!isAdminSession && routeCollectorConfig.notifyAdminOnReschedule !== false) {
+        nextAlerts.unshift({
+          id: `ralert_${Date.now()}`,
+          saleId: selectedSaleForQuickSchedule.id,
+          saleNumber: selectedSaleForQuickSchedule.saleNumber,
+          customerName: selectedSaleForQuickSchedule.customerName || 'Cliente',
+          customerPhone: selectedSaleForQuickSchedule.customerPhone,
+          collectorId: userSession?.userId,
+          collectorUsername: userSession?.username || 'cobrador',
+          collectorName: currentUserName,
+          alertType: 'rescheduled_date',
+          title: `📅 Siguiente cobro programado para ${quickScheduleDate}`,
+          message:
+            quickScheduleNote.trim() ||
+            `El cobrador ${currentUserName} programó el siguiente cobro de ${selectedSaleForQuickSchedule.customerName || 'Cliente'} para el ${quickScheduleDate}.`,
+          scheduledNextDate: quickScheduleDate.trim(),
+          timestamp: now.getTime(),
+          dateFormatted: dateStr,
+          status: 'unread',
+        });
+      }
+
+      await onSavePOSFinanceData({
+        ...posFinanceData,
+        creditAccountControls: {
+          ...creditAccountControls,
+          [selectedSaleForQuickSchedule.id]: updatedMeta,
+        },
+        routeCollectorAlerts: nextAlerts.slice(0, 300),
+        updatedAt: Date.now(),
+      });
+
+      showToast(
+        `Siguiente cobro de ${selectedSaleForQuickSchedule.customerName || 'Cliente'} programado para el ${quickScheduleDate}.`,
+        'success'
+      );
+      setSelectedSaleForQuickSchedule(null);
+      setQuickScheduleNote('');
+    } finally {
+      setIsSavingQuickSchedule(false);
+    }
+  };
+
+  const handleSendCollectorAlertToAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSaleForCollectorAlert) return;
+    setIsSendingCollectorAlert(true);
+    try {
+      const now = new Date();
+      const dateStr = now.toLocaleString('es-HN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      const titleMap: Record<RouteCollectorAlert['alertType'], string> = {
+        abono_collected: '💵 Abono cobrado en ruta',
+        rescheduled_date: '📅 Cliente solicitó reprogramar fecha de cobro',
+        customer_absent: '🏠 Cliente no se encontraba en domicilio / negocio',
+        promise_to_pay: '🤝 Cliente prometió realizar pago en fecha acordada',
+        refused_or_issue: '🚨 Cliente con inconveniente de pago / Requiere Admin',
+        gps_location_saved: '📍 Ubicación GPS del cliente guardada en sitio',
+        custom_report: '📝 Reporte de Cobrador de Ruta',
+      };
+
+      const defaultMsgMap: Record<RouteCollectorAlert['alertType'], string> = {
+        abono_collected: `Abono cobrado en ruta a ${selectedSaleForCollectorAlert.customerName}.`,
+        rescheduled_date: `El cliente solicitó reprogramar la fecha de cobro${collectorAlertNextDate ? ` para el ${collectorAlertNextDate}` : ''}.`,
+        customer_absent: `Se visitó al cliente ${selectedSaleForCollectorAlert.customerName} en ruta pero no se encontraba en su domicilio/negocio.`,
+        promise_to_pay: `El cliente ${selectedSaleForCollectorAlert.customerName} se comprometió a pagar${collectorAlertNextDate ? ` el día ${collectorAlertNextDate}` : ' próximamente'}.`,
+        refused_or_issue: `Atención Administrador: El cliente ${selectedSaleForCollectorAlert.customerName} presentó inconveniente o negativa de pago. Requiere seguimiento.`,
+        gps_location_saved: `Se capturó la dirección GPS del cliente ${selectedSaleForCollectorAlert.customerName} en el lugar.`,
+        custom_report: `Reporte de ruta sobre la cuenta ${selectedSaleForCollectorAlert.saleNumber}.`,
+      };
+
+      const newAlert: RouteCollectorAlert = {
+        id: `ralert_${Date.now()}`,
+        saleId: selectedSaleForCollectorAlert.id,
+        saleNumber: selectedSaleForCollectorAlert.saleNumber,
+        customerName: selectedSaleForCollectorAlert.customerName || 'Cliente',
+        customerPhone: selectedSaleForCollectorAlert.customerPhone,
+        collectorId: userSession?.userId,
+        collectorUsername: userSession?.username || 'cobrador',
+        collectorName: currentUserName,
+        alertType: collectorAlertType,
+        title: titleMap[collectorAlertType],
+        message: collectorAlertMessage.trim() || defaultMsgMap[collectorAlertType],
+        scheduledNextDate: collectorAlertNextDate.trim() || undefined,
+        timestamp: now.getTime(),
+        dateFormatted: dateStr,
+        status: 'unread',
+      };
+
+      const nextControls = { ...creditAccountControls };
+      if (collectorAlertNextDate.trim()) {
+        const existingMeta = nextControls[selectedSaleForCollectorAlert.id] || {
+          saleId: selectedSaleForCollectorAlert.id,
+        };
+        nextControls[selectedSaleForCollectorAlert.id] = {
+          ...existingMeta,
+          saleId: selectedSaleForCollectorAlert.id,
+          nextPaymentDate: collectorAlertNextDate.trim(),
+        };
+      }
+
+      await onSavePOSFinanceData({
+        ...posFinanceData,
+        creditAccountControls: nextControls,
+        routeCollectorAlerts: [newAlert, ...routeCollectorAlerts].slice(0, 300),
+        updatedAt: Date.now(),
+      });
+
+      showToast(
+        `Alerta enviada al Administrador sobre ${selectedSaleForCollectorAlert.customerName || 'Cliente'}.`,
+        'success'
+      );
+      setSelectedSaleForCollectorAlert(null);
+      setCollectorAlertMessage('');
+      setCollectorAlertNextDate('');
+    } finally {
+      setIsSendingCollectorAlert(false);
+    }
+  };
+
+  const handleMarkCollectorAlertReviewed = async (alertId: string) => {
+    const updatedAlerts = routeCollectorAlerts.map((a) =>
+      a.id === alertId
+        ? {
+            ...a,
+            status: 'reviewed' as const,
+            reviewedBy: currentUserName,
+            reviewedAt: Date.now(),
+          }
+        : a
+    );
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      routeCollectorAlerts: updatedAlerts,
+      updatedAt: Date.now(),
+    });
+  };
+
+  const handleMarkAllCollectorAlertsReviewed = async () => {
+    const updatedAlerts = routeCollectorAlerts.map((a) => ({
+      ...a,
+      status: 'reviewed' as const,
+      reviewedBy: currentUserName,
+      reviewedAt: Date.now(),
+    }));
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      routeCollectorAlerts: updatedAlerts,
+      updatedAt: Date.now(),
+    });
+    showToast('Todas las alertas de cobradores fueron marcadas como revisadas.', 'success');
+  };
+
+  const handleToggleCollaboratorRouteCollector = async (
+    collab: UserAccount,
+    enable: boolean,
+    scope: 'all' | 'assigned' = 'all'
+  ) => {
+    const cleanUname = collab.username.trim().toLowerCase();
+    const currentEnabled = new Set(
+      (routeCollectorConfig.enabledCollectorUsernames || []).map((u) => u.trim().toLowerCase())
+    );
+    if (enable) {
+      currentEnabled.add(cleanUname);
+    } else {
+      currentEnabled.delete(cleanUname);
+    }
+
+    if (onSaveUser) {
+      await onSaveUser({
+        ...collab,
+        allowedTabs: collab.allowedTabs?.includes('sales')
+          ? collab.allowedTabs
+          : [...(collab.allowedTabs || []), 'sales'],
+        salesPermissions: {
+          canEditSales:
+            collab.salesPermissions?.canEditSales !== undefined
+              ? collab.salesPermissions.canEditSales
+              : true,
+          canCancelSales: Boolean(collab.salesPermissions?.canCancelSales),
+          canViewCostsAndProfits: Boolean(collab.salesPermissions?.canViewCostsAndProfits),
+          allowedWarehouseIds: collab.salesPermissions?.allowedWarehouseIds || collab.allowedWarehouseIds,
+          isRouteCollector: enable,
+          routeCollectorScope: scope,
+        },
+      });
+    }
+
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      routeCollectorConfig: {
+        ...routeCollectorConfig,
+        enabledCollectorUsernames: Array.from(currentEnabled),
+      },
+      updatedAt: Date.now(),
+    });
+
+    showToast(
+      enable
+        ? `Panel de Cobrador de Ruta habilitado para ${collab.name} (@${collab.username}).`
+        : `Panel de Cobrador de Ruta desactivado para ${collab.name}.`,
+      'success'
+    );
+  };
+
+  const handleCreateDirectCreditDebt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onRecordSale) {
+      showToast('Para crear una deuda usa el botón de Nueva Venta o recarga la vista.', 'warning');
+      return;
+    }
+    const cleanCust = newDebtCustomerName.trim();
+    if (!cleanCust) {
+      showToast('Ingresa el nombre del cliente para la cuenta por cobrar.', 'warning');
+      return;
+    }
+    const totalAmt = Math.max(0, parseFloat(newDebtTotalAmount) || 0);
+    if (totalAmt <= 0) {
+      showToast('Ingresa el monto total de la deuda / artículo al crédito.', 'warning');
+      return;
+    }
+    const initAbono = Math.max(0, Math.min(totalAmt, parseFloat(newDebtInitialAbono) || 0));
+    const balance = Math.max(0, totalAmt - initAbono);
+    if (balance <= 0.01) {
+      showToast('El saldo pendiente a cobrar debe ser mayor a L. 0.00.', 'warning');
+      return;
+    }
+
+    const matchedProduct = inventory.find((p) => p.id === newDebtProductId);
+    const articleTitle =
+      newDebtCustomItemName.trim() ||
+      (matchedProduct ? matchedProduct.name : 'Artículo Financiado al Crédito');
+
+    setIsCreatingDebt(true);
+    try {
+      const now = new Date();
+      const dateStr = now.toLocaleString('es-HN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const saleId = `sale_crd_${Date.now()}`;
+      const saleNumber = `CRD-${String(Date.now()).slice(-6)}`;
+
+      const initialPayments: CreditPaymentAbone[] =
+        initAbono > 0
+          ? [
+              {
+                id: `abn_init_${Date.now()}`,
+                amount: initAbono,
+                paymentMethod: 'cash',
+                timestamp: now.getTime(),
+                date: dateStr,
+                receivedBy: currentUserName,
+                notes: 'Prima / Abono inicial al crear cuenta por cobrar',
+              },
+            ]
+          : [];
+
+      const effectiveFirstDate =
+        newDebtNextPaymentDate.trim() || calculateNextDateByFrequency(newDebtFrequency);
+
+      const newCreditSaleData: Omit<SaleRecord, 'id'> = {
+        saleNumber,
+        companyId: storeSettings.companyId || 'gosen',
+        date: dateStr,
+        timestamp: now.getTime(),
+        items: [
+          {
+            productId: matchedProduct?.id || `custom_${Date.now()}`,
+            code: matchedProduct?.code || 'CREDITO',
+            name: articleTitle,
+            category: matchedProduct?.category || 'Crédito',
+            cost: matchedProduct ? Number(matchedProduct.cost) || 0 : 0,
+            price: totalAmt,
+            creditPrice: totalAmt,
+            unitDiscount: 0,
+            quantity: 1,
+            subtotal: totalAmt,
+          },
+        ],
+        totalItems: 1,
+        subtotal: totalAmt,
+        discount: 0,
+        tax: 0,
+        total: totalAmt,
+        paymentMethod: 'credit',
+        customerName: cleanCust,
+        customerPhone: newDebtCustomerPhone.trim() || undefined,
+        customerAddress: newDebtCustomerAddress.trim() || undefined,
+        notes: newDebtNotes.trim() || `Cuenta por cobrar (${newDebtFrequency})`,
+        status: 'completed',
+        cashier: currentUserName,
+        cashierUserId: userSession?.userId,
+        cashierUsername: userSession?.username,
+        cashierRole: userSession?.role || 'admin',
+        amountPaid: initAbono,
+        change: 0,
+        balanceDue: balance,
+        creditDueDate: effectiveFirstDate,
+        creditStatus: 'pending',
+        creditPayments: initialPayments,
+      };
+
+      const recordedResult = await onRecordSale(newCreditSaleData);
+      const recordedSaleId =
+        recordedResult && typeof recordedResult === 'object' && 'id' in recordedResult
+          ? recordedResult.id
+          : saleId;
+      const cleanAssignedUname = normalizeCollectorIdentifier(newDebtCollectorUsername);
+      const matchedCollector = collaboratorUsers.find(
+        (u) =>
+          normalizeCollectorIdentifier(u.username) === cleanAssignedUname ||
+          normalizeCollectorIdentifier(u.name) === cleanAssignedUname
+      );
+      const parsedInstallment = parseFloat(newDebtInstallmentAmount);
+
+      const newControlMeta: CreditAccountControlMeta = {
+        saleId: recordedSaleId,
+        customTotalCost: matchedProduct ? Number(matchedProduct.cost) || 0 : 0,
+        nextPaymentDate: effectiveFirstDate,
+        paymentFrequency: newDebtFrequency,
+        installmentAmount:
+          !Number.isNaN(parsedInstallment) && parsedInstallment > 0 ? parsedInstallment : undefined,
+        collectionNotes: newDebtNotes.trim() || undefined,
+        assignedCollectorId: matchedCollector?.id || undefined,
+        assignedCollectorUsername:
+          matchedCollector?.username || (cleanAssignedUname || undefined),
+        assignedCollectorName: matchedCollector?.name || undefined,
+        customerAddressOrRoute: newDebtCustomerAddress.trim() || undefined,
+        customerGpsLat: newDebtGpsCoords?.lat,
+        customerGpsLng: newDebtGpsCoords?.lng,
+        customerGpsAccuracy: newDebtGpsCoords?.accuracy,
+        customerGpsCapturedAt: newDebtGpsCoords ? Date.now() : undefined,
+        customerGpsCapturedBy: newDebtGpsCoords ? currentUserName : undefined,
+        customerGpsFormattedAddress: newDebtGpsCoords?.formattedAddress,
+        customerGpsPlusCode: newDebtGpsCoords?.plusCode,
+        autoAdvanceNextDate: true,
+      };
+
+      const currentEnabled = new Set(
+        (routeCollectorConfig.enabledCollectorUsernames || []).map((u) =>
+          normalizeCollectorIdentifier(u)
+        )
+      );
+      if (cleanAssignedUname) {
+        currentEnabled.add(
+          normalizeCollectorIdentifier(matchedCollector?.username || cleanAssignedUname)
+        );
+      }
+
+      if (matchedCollector && onSaveUser) {
+        await onSaveUser({
+          ...matchedCollector,
+          allowedTabs: matchedCollector.allowedTabs?.includes('sales')
+            ? matchedCollector.allowedTabs
+            : [...(matchedCollector.allowedTabs || []), 'sales'],
+          salesPermissions: {
+            canEditSales:
+              matchedCollector.salesPermissions?.canEditSales !== undefined
+                ? matchedCollector.salesPermissions.canEditSales
+                : true,
+            canCancelSales: Boolean(matchedCollector.salesPermissions?.canCancelSales),
+            canViewCostsAndProfits: Boolean(
+              matchedCollector.salesPermissions?.canViewCostsAndProfits
+            ),
+            allowedWarehouseIds:
+              matchedCollector.salesPermissions?.allowedWarehouseIds ||
+              matchedCollector.allowedWarehouseIds,
+            isRouteCollector: true,
+            routeCollectorScope:
+              matchedCollector.salesPermissions?.routeCollectorScope || 'all',
+          },
+        }).catch(() => {});
+      }
+
+      await onSavePOSFinanceData({
+        ...posFinanceData,
+        creditAccountControls: {
+          ...creditAccountControls,
+          [recordedSaleId]: newControlMeta,
+        },
+        routeCollectorConfig: {
+          ...routeCollectorConfig,
+          enabledCollectorUsernames: Array.from(currentEnabled),
+        },
+        updatedAt: Date.now(),
+      });
+
+      showToast(
+        `¡Cuenta por cobrar creada para ${cleanCust}! Saldo: L. ${balance.toFixed(2)} • Próximo cobro: ${effectiveFirstDate}`,
+        'success'
+      );
+      setShowCreateDebtModal(false);
+      setNewDebtCustomerName('');
+      setNewDebtCustomerPhone('');
+      setNewDebtCustomerAddress('');
+      setNewDebtGpsCoords(null);
+      setNewDebtProductId('');
+      setNewDebtCustomItemName('');
+      setNewDebtTotalAmount('');
+      setNewDebtInitialAbono('0');
+      setNewDebtInstallmentAmount('');
+      setNewDebtNotes('');
+    } finally {
+      setIsCreatingDebt(false);
+    }
+  };
+
+  const handleSaveCustomerGpsAddress = async (
+    sale: SaleRecord,
+    payload: {
+      addressOrRoute: string;
+      lat: number;
+      lng: number;
+      accuracy?: number;
+      formattedAddress: string;
+      plusCode?: string;
+    }
+  ) => {
+    const now = new Date();
+    const dateStr = now.toLocaleString('es-HN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const existingMeta: CreditAccountControlMeta = creditAccountControls[sale.id] || {
+      saleId: sale.id,
+    };
+
+    const updatedMeta: CreditAccountControlMeta = {
+      ...existingMeta,
+      saleId: sale.id,
+      customerAddressOrRoute: payload.addressOrRoute,
+      customerGpsLat: payload.lat,
+      customerGpsLng: payload.lng,
+      customerGpsAccuracy: payload.accuracy,
+      customerGpsCapturedAt: now.getTime(),
+      customerGpsCapturedBy: currentUserName,
+      customerGpsFormattedAddress: payload.formattedAddress,
+      customerGpsPlusCode: payload.plusCode,
+    };
+
+    const nextAlerts = [...routeCollectorAlerts];
+    if (!isAdminSession) {
+      const gpsAlert: RouteCollectorAlert = {
+        id: `rc_gps_${Date.now()}`,
+        saleId: sale.id,
+        saleNumber: sale.saleNumber,
+        customerName: sale.customerName || 'Cliente',
+        customerPhone: sale.customerPhone,
+        collectorId: userSession?.userId,
+        collectorUsername: userSession?.username || currentUserName,
+        collectorName: currentUserName,
+        alertType: 'gps_location_saved',
+        title: `📍 Ubicación GPS capturada en sitio (${sale.customerName || 'Cliente'})`,
+        message: `${currentUserName} registró la dirección GPS del cliente en ${payload.addressOrRoute} [Coordenadas: ${payload.lat.toFixed(
+          6
+        )}, ${payload.lng.toFixed(6)}]`,
+        gpsLat: payload.lat,
+        gpsLng: payload.lng,
+        timestamp: now.getTime(),
+        dateFormatted: dateStr,
+        status: 'unread',
+      };
+      nextAlerts.unshift(gpsAlert);
+    }
+
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      creditAccountControls: {
+        ...creditAccountControls,
+        [sale.id]: updatedMeta,
+      },
+      routeCollectorAlerts: nextAlerts.slice(0, 150),
+      updatedAt: now.getTime(),
+    });
+
+    showToast(
+      `¡Dirección y punto GPS guardados para ${sale.customerName || 'Cliente'}!`,
+      'success'
+    );
+  };
+
+  const handleCaptureInlineGpsForField = async (target: 'control' | 'new_debt') => {
+    setIsCapturingInlineGps(true);
+    try {
+      const pos = await captureDeviceGpsLocation();
+      const geo = await reverseGeocodeCoordinates(pos.lat, pos.lng);
+      const label = geo.plusCode
+        ? `${geo.formattedAddress} (${geo.plusCode})`
+        : geo.formattedAddress;
+      if (target === 'control') {
+        setCtrlCustomerAddressOrRoute(label);
+        if (selectedSaleForControl) {
+          await handleSaveCustomerGpsAddress(selectedSaleForControl, {
+            addressOrRoute: label,
+            lat: pos.lat,
+            lng: pos.lng,
+            accuracy: pos.accuracy,
+            formattedAddress: geo.formattedAddress,
+            plusCode: geo.plusCode,
+          });
+        }
+      } else {
+        setNewDebtCustomerAddress(label);
+        setNewDebtGpsCoords({
+          lat: pos.lat,
+          lng: pos.lng,
+          accuracy: pos.accuracy,
+          formattedAddress: geo.formattedAddress,
+          plusCode: geo.plusCode,
+        });
+        showToast(
+          `📍 Dirección GPS detectada: ${geo.formattedAddress} (±${pos.accuracy}m)`,
+          'success'
+        );
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'No se pudo obtener el GPS actual.', 'warning');
+    } finally {
+      setIsCapturingInlineGps(false);
     }
   };
 
@@ -780,18 +1673,19 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     setIsSubmittingAbone(true);
     try {
       const now = new Date();
+      const dateStr = now.toLocaleString('es-HN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
       const newAbone: CreditPaymentAbone = {
         id: `abn_${Date.now()}`,
         amount: Math.min(currentBal, amt),
         paymentMethod: aboneMethod,
         timestamp: now.getTime(),
-        date: now.toLocaleString('es-HN', {
-          day: '2-digit',
-          month: 'short',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
+        date: dateStr,
         receivedBy: currentUserName,
         notes: aboneNotes.trim() || '',
       };
@@ -799,32 +1693,71 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       const analyticsBefore = getSaleCreditAnalytics(selectedSaleForAbone);
       const updatedSale = await onRecordCreditPayment(selectedSaleForAbone, newAbone);
 
-      // Update nextPaymentDate if specified or if paid in full clear alert
+      // Update nextPaymentDate (auto-calculated by frequency if not manually set) or clear if paid in full
       const newRemainingBalance = updatedSale.balanceDue ?? Math.max(0, currentBal - newAbone.amount);
-      if (aboneNextDate.trim() || creditAccountControls[selectedSaleForAbone.id]) {
-        const existingMeta = creditAccountControls[selectedSaleForAbone.id] || {
+      const existingMeta = creditAccountControls[selectedSaleForAbone.id] || {
+        saleId: selectedSaleForAbone.id,
+      };
+      const resolvedNextPaymentDate =
+        newRemainingBalance <= 0.01
+          ? undefined
+          : aboneNextDate.trim() ||
+            (routeCollectorConfig.autoCalculateNextDateOnAbone !== false
+              ? calculateNextDateByFrequency(
+                  existingMeta.paymentFrequency,
+                  analyticsBefore.effectiveNextDate
+                )
+              : existingMeta.nextPaymentDate);
+
+      const updatedMeta: CreditAccountControlMeta = {
+        ...existingMeta,
+        saleId: selectedSaleForAbone.id,
+        nextPaymentDate: resolvedNextPaymentDate,
+      };
+
+      const nextAlerts = [...routeCollectorAlerts];
+      if (!isAdminSession && routeCollectorConfig.notifyAdminOnEveryAbone !== false) {
+        nextAlerts.unshift({
+          id: `ralert_${Date.now()}`,
           saleId: selectedSaleForAbone.id,
-        };
-        const updatedMeta: CreditAccountControlMeta = {
-          ...existingMeta,
-          saleId: selectedSaleForAbone.id,
-          nextPaymentDate:
-            newRemainingBalance <= 0.01
-              ? undefined
-              : aboneNextDate.trim() || existingMeta.nextPaymentDate,
-        };
-        await onSavePOSFinanceData({
-          ...posFinanceData,
-          creditAccountControls: {
-            ...creditAccountControls,
-            [selectedSaleForAbone.id]: updatedMeta,
-          },
-          updatedAt: Date.now(),
+          saleNumber: selectedSaleForAbone.saleNumber,
+          customerName: selectedSaleForAbone.customerName || 'Cliente',
+          customerPhone: selectedSaleForAbone.customerPhone,
+          collectorId: userSession?.userId,
+          collectorUsername: userSession?.username || 'cobrador',
+          collectorName: currentUserName,
+          alertType: 'abono_collected',
+          title: `💵 Abono cobrado en ruta: +L. ${newAbone.amount.toFixed(2)}`,
+          message: `${currentUserName} registró un abono de L. ${newAbone.amount.toFixed(2)} (${
+            aboneMethod === 'cash'
+              ? 'Efectivo'
+              : aboneMethod === 'transfer'
+              ? 'Transferencia'
+              : 'Tarjeta'
+          }) de ${selectedSaleForAbone.customerName || 'Cliente'}. Nuevo saldo: L. ${newRemainingBalance.toFixed(2)}.${
+            resolvedNextPaymentDate ? ` Próximo cobro programado: ${resolvedNextPaymentDate}.` : ' ¡Cuenta liquidada!'
+          }`,
+          amountCollected: newAbone.amount,
+          scheduledNextDate: resolvedNextPaymentDate,
+          timestamp: now.getTime(),
+          dateFormatted: dateStr,
+          status: 'unread',
         });
       }
 
+      await onSavePOSFinanceData({
+        ...posFinanceData,
+        creditAccountControls: {
+          ...creditAccountControls,
+          [selectedSaleForAbone.id]: updatedMeta,
+        },
+        routeCollectorAlerts: nextAlerts.slice(0, 300),
+        updatedAt: Date.now(),
+      });
+
       const newPaidTotal = (Number(selectedSaleForAbone.amountPaid) || 0) + newAbone.amount;
       const crossedIntoProfit =
+        canViewCostsAndProfits &&
         newRemainingBalance > 0.01 &&
         newPaidTotal >= analyticsBefore.totalCost - 0.01 &&
         analyticsBefore.totalCost > 0;
@@ -835,10 +1768,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       setAboneNextDate('');
       showToast(
         newRemainingBalance <= 0.01
-          ? `¡Cuenta de ${updatedSale.customerName} liquidada en su totalidad! Ganancia total: L. ${analyticsBefore.expectedTotalProfit.toFixed(2)}`
+          ? `¡Cuenta de ${updatedSale.customerName} liquidada en su totalidad!`
           : crossedIntoProfit
           ? `Abono registrado. ¡Precio Costo (L. ${analyticsBefore.totalCost.toFixed(2)}) 100% recuperado! Los L. ${newRemainingBalance.toFixed(2)} que restan son 100% GANANCIA.`
-          : `Abono de L. ${newAbone.amount.toFixed(2)} registrado. Nuevo saldo: L. ${newRemainingBalance.toFixed(2)}`,
+          : `Abono de L. ${newAbone.amount.toFixed(2)} registrado. Nuevo saldo: L. ${newRemainingBalance.toFixed(2)}${
+              resolvedNextPaymentDate ? ` • Próximo cobro: ${resolvedNextPaymentDate}` : ''
+            }`,
         'success'
       );
     } finally {
@@ -2965,8 +3900,10 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     );
   }
 
-  // ==================== RENDER MODE 2: CREDIT ACCOUNTS / CARTERA ====================
+  // ==================== RENDER MODE 2: CREDIT ACCOUNTS / CARTERA & COBRADOR DE RUTA ====================
   if (mode === 'credits') {
+    const isRoutePanelActive = !canViewCostsAndProfits || adminCreditsViewMode === 'route_panel';
+
     const aboneModalAnalytics = selectedSaleForAbone
       ? getSaleCreditAnalytics(selectedSaleForAbone)
       : null;
@@ -2999,1468 +3936,2874 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     return (
       <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-32">
         <div className="w-full max-w-[1640px] mx-auto space-y-5">
-        {/* Top KPI Cards: Cartera, Costo vs Ganancia & Alertas */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-          <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs">
-            <span className="text-[11px] font-bold uppercase text-amber-700 block">
-              Total por Cobrar (Cartera)
-            </span>
-            <span className="text-xl sm:text-2xl font-black text-amber-700 mt-1 block tabular-nums">
-              L. {creditPortfolioStats.totalReceivable.toFixed(2)}
-            </span>
-            <span className="text-[11px] text-slate-500">
-              {creditPortfolioStats.pendingAccountsCount} cuenta(s) activa(s)
-            </span>
-          </div>
-
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-            <span className="text-[11px] font-bold uppercase text-slate-600 block">
-              Costo por Recuperar
-            </span>
-            <span className="text-xl sm:text-2xl font-black text-slate-900 mt-1 block tabular-nums">
-              L. {creditPortfolioStats.totalCostRemainingInStreet.toFixed(2)}
-            </span>
-            <span className="text-[11px] text-slate-500">
-              {creditPortfolioStats.accountsRecoveringCostCount} cuenta(s) cubriendo costo
-            </span>
-          </div>
-
-          <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-xs">
-            <span className="text-[11px] font-bold uppercase text-emerald-700 block">
-              Ganancia por Cobrar (Calle)
-            </span>
-            <span className="text-xl sm:text-2xl font-black text-emerald-700 mt-1 block tabular-nums">
-              L. {creditPortfolioStats.totalProfitRemainingInStreet.toFixed(2)}
-            </span>
-            <span className="text-[11px] text-emerald-700 font-semibold">
-              {creditPortfolioStats.accountsInProfitZoneCount} cuenta(s) 100% en Ganancia
-            </span>
-          </div>
-
-          <div className="bg-white p-4 rounded-2xl border border-teal-200 shadow-xs">
-            <span className="text-[11px] font-bold uppercase text-teal-700 block">
-              Ganancia Ya Cobrada (Mano)
-            </span>
-            <span className="text-xl sm:text-2xl font-black text-teal-700 mt-1 block tabular-nums">
-              L. {creditPortfolioStats.totalRealizedProfitInHand.toFixed(2)}
-            </span>
-            <span className="text-[11px] text-slate-500 tabular-nums">
-              Total abonado: L. {creditPortfolioStats.totalCollectedFromCredits.toFixed(2)}
-            </span>
-          </div>
-
-          <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-xs col-span-2 lg:col-span-1">
-            <span className="text-[11px] font-bold uppercase text-rose-700 block">
-              Alertas de Cobro de Abono
-            </span>
-            <span className="text-xl sm:text-2xl font-black text-rose-600 mt-1 block tabular-nums">
-              {creditPortfolioStats.totalAlertsCount}
-            </span>
-            <span className="text-[11px] text-slate-500">
-              {creditPortfolioStats.overdueCount} vencido(s) · {creditPortfolioStats.dueTodayCount} hoy ·{' '}
-              {creditPortfolioStats.upcomingCount} próx.
-            </span>
-          </div>
-        </div>
-
-        {/* Centro de Alertas y Avisos de Cobro */}
-        {creditPortfolioStats.alertSales.length > 0 && (
-          <div className="bg-white rounded-2xl border border-rose-200 p-4 shadow-xs space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
-              <div className="flex items-center gap-2">
-                <Bell className="w-4 h-4 text-rose-600 shrink-0" />
+          {/* ==================== TOP HEADER: ADMIN CONTROL BAR OR EXCLUSIVE ROUTE COLLECTOR BANNER ==================== */}
+          {isAdminSession ? (
+            <div className="bg-slate-900 text-white p-4 sm:p-5 rounded-2xl border border-slate-800 shadow-md flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0 font-black text-lg">
+                  🛵
+                </div>
                 <div>
-                  <h3 className="text-xs sm:text-sm font-black text-slate-900">
-                    Centro de Alertas y Avisos de Cobro de Abonos ({creditPortfolioStats.alertSales.length})
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Cuentas con fecha de abono vencida, que corresponden cobrar hoy o en los próximos 3 días
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-sm sm:text-base font-black text-white">
+                      Cuentas por Cobrar y Gestión de Cobradores de Ruta
+                    </h2>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-400/30">
+                      {activeRouteCollectors.length} cobrador(es) activo(s)
+                    </span>
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5">
+                    Crea deudas de artículos para clientes, asigna el panel exclusivo de Cobrador de Ruta a colaboradores, programa cobros automáticos y recibe alertas en tiempo real.
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setCreditFilter(creditFilter === 'alerts' ? 'pending' : 'alerts')}
-                className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs cursor-pointer self-start sm:self-auto whitespace-nowrap"
-              >
-                {creditFilter === 'alerts' ? 'Ver todas las pendientes' : 'Filtrar solo alertas'}
-              </button>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {onRecordSale && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewDebtFrequency(routeCollectorConfig.defaultPaymentFrequency || 'weekly');
+                      setNewDebtNextPaymentDate(
+                        calculateNextDateByFrequency(
+                          routeCollectorConfig.defaultPaymentFrequency || 'weekly'
+                        )
+                      );
+                      setShowCreateDebtModal(true);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                  >
+                    <Plus className="w-4 h-4 shrink-0" />
+                    <span>Crear Deuda a Cliente</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowAdminCollectorConfigModal(true)}
+                  className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                >
+                  <Settings className="w-4 h-4 shrink-0" />
+                  <span>Configurar Cobradores y Reglas</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAdminAlertsModal(true)}
+                  className={`px-3 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer border transition-all whitespace-nowrap ${
+                    unreadCollectorAlertsCount > 0
+                      ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400 animate-pulse'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <Bell className="w-4 h-4 shrink-0" />
+                  <span>Alertas de Cobradores</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                      unreadCollectorAlertsCount > 0
+                        ? 'bg-white text-rose-700'
+                        : 'bg-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {unreadCollectorAlertsCount > 0
+                      ? `${unreadCollectorAlertsCount} nueva(s)`
+                      : routeCollectorAlerts.length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAdminCreditsViewMode(
+                      adminCreditsViewMode === 'admin_full' ? 'route_panel' : 'admin_full'
+                    )
+                  }
+                  className={`px-3 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer border whitespace-nowrap ${
+                    adminCreditsViewMode === 'route_panel'
+                      ? 'bg-teal-500 text-slate-950 border-teal-400 font-black'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  }`}
+                  title="Alternar entre la vista financiera completa del Administrador y el Panel de Cobrador de Ruta"
+                >
+                  <span>
+                    {adminCreditsViewMode === 'route_panel'
+                      ? '📊 Volver a Vista Admin'
+                      : '🛵 Ver Panel Cobrador'}
+                  </span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-amber-950 text-white p-4 sm:p-5 rounded-2xl border border-amber-500/30 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0 text-xl font-black">
+                  🛵
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-md bg-amber-500 text-slate-950 text-[10px] font-black uppercase tracking-wider">
+                      Panel Exclusivo • Cobrador de Ruta
+                    </span>
+                    <span className="text-xs font-bold text-amber-200">
+                      Colaborador: {currentUserName}
+                    </span>
+                  </div>
+                  <h2 className="text-sm sm:text-base font-black text-white mt-1">
+                    Control de Clientes por Cobrar, Abonos y Alertas de Ruta
+                  </h2>
+                  <p className="text-[11px] text-slate-300">
+                    Registra abonos en ruta, consulta saldos pendientes, programa el siguiente cobro y envía alertas al Administrador.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 self-stretch sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setCreditFilter(creditFilter === 'alerts' ? 'pending' : 'alerts')}
+                  className={`flex-1 sm:flex-initial px-3 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer border ${
+                    creditPortfolioStats.totalAlertsCount > 0
+                      ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400'
+                      : 'bg-slate-800 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <Bell className="w-4 h-4 shrink-0" />
+                  <span>
+                    Cobros para Hoy / Vencidos ({creditPortfolioStats.overdueCount + creditPortfolioStats.dueTodayCount})
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== UNREAD COLLECTOR ALERTS BANNER FOR ADMIN ==================== */}
+          {isAdminSession && unreadCollectorAlertsCount > 0 && (
+            <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 font-black">
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs sm:text-sm font-black text-rose-950">
+                    🔔 Tienes {unreadCollectorAlertsCount} alerta(s) nueva(s) enviada(s) por tus Cobradores de Ruta
+                  </h3>
+                  <p className="text-[11px] text-rose-800 mt-0.5">
+                    Última alerta: <strong>{routeCollectorAlerts.find((a) => a.status === 'unread')?.title}</strong> —{' '}
+                    {routeCollectorAlerts.find((a) => a.status === 'unread')?.customerName} (por{' '}
+                    {routeCollectorAlerts.find((a) => a.status === 'unread')?.collectorName})
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowAdminAlertsModal(true)}
+                  className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs cursor-pointer"
+                >
+                  Ver Bandeja de Alertas
+                </button>
+                <button
+                  type="button"
+                  onClick={handleMarkAllCollectorAlertsReviewed}
+                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs cursor-pointer"
+                >
+                  Marcar leídas
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== TOP KPI CARDS (ROUTE MODE VS ADMIN FULL MODE) ==================== */}
+          {isRoutePanelActive ? (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs">
+                <span className="text-[11px] font-bold uppercase text-amber-700 block">
+                  Saldo por Cobrar en Ruta
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-amber-700 mt-1 block tabular-nums">
+                  L. {creditPortfolioStats.totalReceivable.toFixed(2)}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  {creditPortfolioStats.pendingAccountsCount} cliente(s) con deuda activa
+                </span>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-xs">
+                <span className="text-[11px] font-bold uppercase text-rose-700 block">
+                  ¡Toca Cobrar Hoy / Vencidos!
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-rose-600 mt-1 block tabular-nums">
+                  {creditPortfolioStats.overdueCount + creditPortfolioStats.dueTodayCount}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  {creditPortfolioStats.overdueCount} atrasado(s) · {creditPortfolioStats.dueTodayCount} tocan hoy
+                </span>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-indigo-200 shadow-xs">
+                <span className="text-[11px] font-bold uppercase text-indigo-700 block">
+                  Próximos Cobros Programados
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-indigo-700 mt-1 block tabular-nums">
+                  {creditPortfolioStats.upcomingCount}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  En los próximos {routeCollectorConfig.upcomingAlertDays} día(s)
+                </span>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-xs">
+                <span className="text-[11px] font-bold uppercase text-emerald-700 block">
+                  Total Abonos Recibidos
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-emerald-700 mt-1 block tabular-nums">
+                  L. {creditPortfolioStats.totalCollectedFromCredits.toFixed(2)}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  Pagos acumulados de la cartera
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+              <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs">
+                <span className="text-[11px] font-bold uppercase text-amber-700 block">
+                  Total por Cobrar (Cartera)
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-amber-700 mt-1 block tabular-nums">
+                  L. {creditPortfolioStats.totalReceivable.toFixed(2)}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  {creditPortfolioStats.pendingAccountsCount} cuenta(s) activa(s)
+                </span>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+                <span className="text-[11px] font-bold uppercase text-slate-600 block">
+                  Costo por Recuperar
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-slate-900 mt-1 block tabular-nums">
+                  L. {creditPortfolioStats.totalCostRemainingInStreet.toFixed(2)}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  {creditPortfolioStats.accountsRecoveringCostCount} cuenta(s) cubriendo costo
+                </span>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-xs">
+                <span className="text-[11px] font-bold uppercase text-emerald-700 block">
+                  Ganancia por Cobrar (Calle)
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-emerald-700 mt-1 block tabular-nums">
+                  L. {creditPortfolioStats.totalProfitRemainingInStreet.toFixed(2)}
+                </span>
+                <span className="text-[11px] text-emerald-700 font-semibold">
+                  {creditPortfolioStats.accountsInProfitZoneCount} cuenta(s) 100% en Ganancia
+                </span>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-teal-200 shadow-xs">
+                <span className="text-[11px] font-bold uppercase text-teal-700 block">
+                  Ganancia Ya Cobrada (Mano)
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-teal-700 mt-1 block tabular-nums">
+                  L. {creditPortfolioStats.totalRealizedProfitInHand.toFixed(2)}
+                </span>
+                <span className="text-[11px] text-slate-500 tabular-nums">
+                  Total abonado: L. {creditPortfolioStats.totalCollectedFromCredits.toFixed(2)}
+                </span>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-xs col-span-2 lg:col-span-1">
+                <span className="text-[11px] font-bold uppercase text-rose-700 block">
+                  Alertas de Cobro de Abono
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-rose-600 mt-1 block tabular-nums">
+                  {creditPortfolioStats.totalAlertsCount}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  {creditPortfolioStats.overdueCount} vencido(s) · {creditPortfolioStats.dueTodayCount} hoy ·{' '}
+                  {creditPortfolioStats.upcomingCount} próx.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== CENTRO DE ALERTAS DE RUTA Y AVISOS DE COBRO ==================== */}
+          {creditPortfolioStats.alertSales.length > 0 && (
+            <div className="bg-white rounded-2xl border border-rose-200 p-4 shadow-xs space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-rose-600 shrink-0" />
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-black text-slate-900">
+                      Alertas de Ruta: Clientes que Toca Cobrar ({creditPortfolioStats.alertSales.length})
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      Clientes con fecha de abono vencida, que corresponden cobrar hoy o en los próximos{' '}
+                      {routeCollectorConfig.upcomingAlertDays} días
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCreditFilter(creditFilter === 'alerts' ? 'pending' : 'alerts')}
+                  className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs cursor-pointer self-start sm:self-auto whitespace-nowrap"
+                >
+                  {creditFilter === 'alerts' ? 'Ver todas las pendientes' : 'Filtrar solo alertas'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                {creditPortfolioStats.alertSales.slice(0, 6).map(({ sale, analytics }) => {
+                  const isOverdue = analytics.alertStatus === 'overdue';
+                  const isDueToday = analytics.alertStatus === 'due_today';
+                  const templateToUse: CreditCollectionNoticeLog['type'] = isOverdue
+                    ? 'overdue'
+                    : isDueToday
+                    ? 'due_today'
+                    : 'preventive';
+
+                  return (
+                    <div
+                      key={`alert_${sale.id}`}
+                      className={`p-3 rounded-xl border flex flex-col justify-between gap-2 ${
+                        isOverdue
+                          ? 'bg-rose-50/60 border-rose-200'
+                          : isDueToday
+                          ? 'bg-amber-50/70 border-amber-200'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                            <span
+                              className={
+                                isOverdue
+                                  ? 'text-rose-700'
+                                  : isDueToday
+                                  ? 'text-amber-800'
+                                  : 'text-slate-700'
+                              }
+                            >
+                              {isOverdue
+                                ? `🚨 Cobro Atrasado (${Math.abs(analytics.daysDiff || 0)}d)`
+                                : isDueToday
+                                ? '🔔 ¡Toca Cobrar Hoy!'
+                                : `📅 Próximo Abono en ${analytics.daysDiff}d`}
+                            </span>
+                            <span className="text-slate-400">·</span>
+                            <span className="font-mono text-slate-600">{sale.saleNumber}</span>
+                          </div>
+                          <p className="text-xs font-black text-slate-900 mt-0.5">
+                            {sale.customerName || 'Cliente'}
+                          </p>
+                          <p className="text-[11px] text-slate-600 tabular-nums">
+                            Fecha cobro: <strong>{analytics.effectiveNextDate}</strong>
+                            {analytics.controlMeta?.installmentAmount
+                              ? ` · Cuota: L. ${analytics.controlMeta.installmentAmount.toFixed(2)}`
+                              : ''}
+                          </p>
+                          {analytics.controlMeta?.customerAddressOrRoute && (
+                            <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                              📍 {analytics.controlMeta.customerAddressOrRoute}
+                            </p>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-xs font-black text-slate-900 block tabular-nums">
+                            L. {analytics.balanceDue.toFixed(2)}
+                          </span>
+                          <span className="text-[10px] text-slate-500 block">
+                            Abonado: L. {analytics.paid.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => openAboneModalForSale(sale)}
+                          className="flex-1 py-1.5 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] cursor-pointer whitespace-nowrap"
+                        >
+                          💵 Abonar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedSaleForQuickSchedule(sale);
+                            setQuickScheduleFrequency(
+                              analytics.controlMeta?.paymentFrequency ||
+                                routeCollectorConfig.defaultPaymentFrequency ||
+                                'weekly'
+                            );
+                            setQuickScheduleDate(
+                              calculateNextDateByFrequency(
+                                analytics.controlMeta?.paymentFrequency,
+                                analytics.effectiveNextDate
+                              )
+                            );
+                            setQuickScheduleNote('');
+                          }}
+                          className="py-1.5 px-2.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 font-bold text-[11px] cursor-pointer whitespace-nowrap"
+                          title="Programar o cambiar fecha del siguiente cobro"
+                        >
+                          📅 Próx. Cobro
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedSaleForCollectorAlert(sale);
+                            setCollectorAlertType('customer_absent');
+                            setCollectorAlertMessage('');
+                            setCollectorAlertNextDate('');
+                          }}
+                          className="py-1.5 px-2 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-[11px] cursor-pointer"
+                          title="Enviar alerta de cobro al Administrador"
+                        >
+                          📣 Alerta
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSendCreditReminderWhatsApp(sale, templateToUse)}
+                          className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center justify-center cursor-pointer"
+                          title="Enviar recordatorio por WhatsApp al cliente"
+                        >
+                          <WhatsAppIcon className="w-3.5 h-3.5 fill-white shrink-0" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ==================== SEARCH, COLLECTOR FILTER & STATUS FILTER BAR ==================== */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1">
+              <div className="relative flex-1 max-w-md">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Buscar cliente, teléfono, dirección/ruta o factura..."
+                  value={creditSearch}
+                  onChange={(e) => setCreditSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              {isAdminSession && collaboratorUsers.length > 0 && (
+                <select
+                  value={selectedCollectorFilter}
+                  onChange={(e) => setSelectedCollectorFilter(e.target.value)}
+                  className="px-3 py-2 bg-amber-50/70 border border-amber-200 rounded-xl text-xs font-bold text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="all">🛵 Todos los Cobradores ({creditSales.length})</option>
+                  {collaboratorUsers.map((col) => (
+                    <option key={col.id} value={col.username}>
+                      🛵 Ruta de: {col.name} (@{col.username})
+                    </option>
+                  ))}
+                  <option value="__unassigned__">Sin cobrador asignado</option>
+                </select>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-              {creditPortfolioStats.alertSales.slice(0, 6).map(({ sale, analytics }) => {
-                const isOverdue = analytics.alertStatus === 'overdue';
-                const isDueToday = analytics.alertStatus === 'due_today';
-                const templateToUse: CreditCollectionNoticeLog['type'] = isOverdue
-                  ? 'overdue'
-                  : isDueToday
-                  ? 'due_today'
-                  : 'preventive';
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setCreditFilter('pending')}
+                  className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                    creditFilter === 'pending'
+                      ? 'bg-amber-600 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Pendientes ({creditPortfolioStats.pendingAccountsCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreditFilter('alerts')}
+                  className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                    creditFilter === 'alerts'
+                      ? 'bg-rose-600 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Alertas Cobro ({creditPortfolioStats.totalAlertsCount})
+                </button>
+                {!isRoutePanelActive && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setCreditFilter('profit_zone')}
+                      className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                        creditFilter === 'profit_zone'
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      En Ganancia ({creditPortfolioStats.accountsInProfitZoneCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreditFilter('recovering_cost')}
+                      className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                        creditFilter === 'recovering_cost'
+                          ? 'bg-slate-800 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Cubriendo Costo ({creditPortfolioStats.accountsRecoveringCostCount})
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setCreditFilter('paid')}
+                  className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                    creditFilter === 'paid'
+                      ? 'bg-teal-700 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Pagadas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreditFilter('all')}
+                  className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                    creditFilter === 'all'
+                      ? 'bg-slate-900 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Todas ({creditSales.length})
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (filteredCreditSales.length === 0) {
+                    showToast('No hay cuentas por cobrar en esta vista para imprimir.', 'warning');
+                    return;
+                  }
+                  setShowCreditPortfolioPrintModal(true);
+                }}
+                className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                title="Imprimir o descargar en PDF la Cartera de Cuentas por Cobrar"
+              >
+                <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Imprimir / PDF Ruta</span>
+              </button>
+            </div>
+          </div>
+
+          {/* ==================== CREDIT ACCOUNTS / ROUTE CARDS LIST ==================== */}
+          {filteredCreditSales.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-400">
+              <Users className="w-12 h-12 mx-auto mb-2 text-slate-300 stroke-1" />
+              <p className="font-bold text-slate-700 text-base">
+                No hay cuentas por cobrar en esta vista
+              </p>
+              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                Para registrar una deuda de un artículo para un cliente, presiona{' '}
+                <strong>"Crear Deuda a Cliente"</strong> arriba o selecciona{' '}
+                <strong>"Crédito / Fiado"</strong> al facturar en Nueva Venta (POS).
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredCreditSales.map((sale) => {
+                const analytics = getSaleCreditAnalytics(sale);
+                const {
+                  totalSale,
+                  totalCost,
+                  expectedTotalProfit,
+                  paid,
+                  balanceDue: bal,
+                  isPaid,
+                  costRecovered,
+                  costRemainingToRecover,
+                  isCostRecovered,
+                  realizedProfitCollected,
+                  remainingProfitToCollect,
+                  effectiveNextDate,
+                  daysDiff,
+                  alertStatus,
+                  controlMeta,
+                  noticeCount,
+                } = analytics;
+                const abonos = sale.creditPayments || [];
+
+                // Progress bar proportions relative to totalSale
+                const costShareOfSalePct =
+                  totalSale > 0 ? Math.min(100, (totalCost / totalSale) * 100) : 0;
+                const paidCostBarPct =
+                  totalSale > 0
+                    ? Math.min(costShareOfSalePct, (costRecovered / totalSale) * 100)
+                    : 0;
+                const paidProfitBarPct =
+                  totalSale > 0
+                    ? Math.min(
+                        Math.max(0, 100 - costShareOfSalePct),
+                        (realizedProfitCollected / totalSale) * 100
+                      )
+                    : 0;
+                const simplePaidPct =
+                  totalSale > 0 ? Math.min(100, (paid / totalSale) * 100) : 0;
+
+                const freqLabel =
+                  controlMeta?.paymentFrequency === 'weekly'
+                    ? 'Semanal (7d)'
+                    : controlMeta?.paymentFrequency === 'biweekly'
+                    ? 'Quincenal (15d)'
+                    : controlMeta?.paymentFrequency === 'monthly'
+                    ? 'Mensual (30d)'
+                    : controlMeta?.paymentFrequency === 'daily'
+                    ? 'Diario (1d)'
+                    : 'Personalizado';
 
                 return (
                   <div
-                    key={`alert_${sale.id}`}
-                    className={`p-3 rounded-xl border flex flex-col justify-between gap-2 ${
-                      isOverdue
-                        ? 'bg-rose-50/60 border-rose-200'
-                        : isDueToday
-                        ? 'bg-amber-50/70 border-amber-200'
-                        : 'bg-slate-50 border-slate-200'
+                    key={sale.id}
+                    className={`bg-white rounded-2xl border p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-4 ${
+                      isPaid
+                        ? 'border-emerald-200'
+                        : alertStatus === 'overdue'
+                        ? 'border-rose-300 ring-1 ring-rose-200'
+                        : alertStatus === 'due_today'
+                        ? 'border-amber-400 ring-1 ring-amber-200'
+                        : isCostRecovered && !isRoutePanelActive
+                        ? 'border-emerald-300'
+                        : 'border-amber-200/90'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-1.5 text-[11px] font-bold">
-                          <span
-                            className={
-                              isOverdue
-                                ? 'text-rose-700'
-                                : isDueToday
-                                ? 'text-amber-800'
-                                : 'text-slate-700'
-                            }
-                          >
-                            {isOverdue
-                              ? `Cobro Atrasado (${Math.abs(analytics.daysDiff || 0)}d)`
-                              : isDueToday
-                              ? '¡Toca Cobrar Hoy!'
-                              : `Próximo Abono en ${analytics.daysDiff}d`}
-                          </span>
-                          <span className="text-slate-400">·</span>
-                          <span className="font-mono text-slate-600">{sale.saleNumber}</span>
+                    <div className="space-y-3.5">
+                      {/* Header */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                            <span className="font-mono font-bold text-slate-800">
+                              {sale.saleNumber}
+                            </span>
+                            <span aria-hidden="true" className="text-slate-300">
+                              ·
+                            </span>
+                            {isRoutePanelActive ? (
+                              <span
+                                className={`text-[11px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                  isPaid
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : alertStatus === 'overdue'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : alertStatus === 'due_today'
+                                    ? 'bg-amber-100 text-amber-900'
+                                    : 'bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {isPaid
+                                  ? '✓ Liquidado'
+                                  : alertStatus === 'overdue'
+                                  ? `🚨 Vencido (${Math.abs(daysDiff || 0)}d)`
+                                  : alertStatus === 'due_today'
+                                  ? '🔔 ¡Cobrar Hoy!'
+                                  : 'Cuenta Activa'}
+                              </span>
+                            ) : (
+                              <span
+                                className={`text-[11px] font-black uppercase ${
+                                  isPaid
+                                    ? 'text-emerald-700'
+                                    : isCostRecovered
+                                    ? 'text-emerald-700'
+                                    : 'text-amber-700'
+                                }`}
+                              >
+                                {isPaid
+                                  ? 'Liquidado'
+                                  : isCostRecovered
+                                  ? 'Costo Cubierto · En Ganancia'
+                                  : 'Recuperando Costo'}
+                              </span>
+                            )}
+                            {controlMeta?.assignedCollectorName && (
+                              <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-900 text-[10px] font-bold">
+                                🛵 {controlMeta.assignedCollectorName}
+                              </span>
+                            )}
+                          </div>
+
+                          <h3 className="text-base font-black text-slate-900 mt-1 flex items-center gap-1.5">
+                            <User className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>{sale.customerName || 'Cliente'}</span>
+                          </h3>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-0.5">
+                            {sale.customerPhone && (
+                              <>
+                                <span className="flex items-center gap-1 font-semibold text-emerald-700">
+                                  <Phone className="w-3 h-3" />
+                                  {sale.customerPhone}
+                                </span>
+                                <span aria-hidden="true">·</span>
+                              </>
+                            )}
+                            <span>Fecha: {sale.date}</span>
+                          </div>
+                          {(controlMeta?.customerAddressOrRoute ||
+                            (typeof controlMeta?.customerGpsLat === 'number' &&
+                              typeof controlMeta?.customerGpsLng === 'number')) && (
+                            <div className="mt-1.5 p-2 rounded-xl bg-amber-50/80 border border-amber-200/80 flex flex-wrap items-center justify-between gap-2">
+                              <div className="text-xs text-slate-800">
+                                <span className="font-bold text-amber-950 flex items-center gap-1">
+                                  <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                                  <span>
+                                    {controlMeta?.customerAddressOrRoute ||
+                                      controlMeta?.customerGpsFormattedAddress ||
+                                      `Coordenadas GPS: ${controlMeta?.customerGpsLat?.toFixed(
+                                        5
+                                      )}, ${controlMeta?.customerGpsLng?.toFixed(5)}`}
+                                  </span>
+                                </span>
+                                {typeof controlMeta?.customerGpsLat === 'number' &&
+                                  typeof controlMeta?.customerGpsLng === 'number' && (
+                                    <span className="text-[10px] font-semibold text-emerald-800 block mt-0.5">
+                                      🛰️ GPS Exacto: {controlMeta.customerGpsLat.toFixed(5)},{' '}
+                                      {controlMeta.customerGpsLng.toFixed(5)}
+                                      {controlMeta.customerGpsAccuracy
+                                        ? ` (±${controlMeta.customerGpsAccuracy}m)`
+                                        : ''}
+                                      {controlMeta.customerGpsCapturedBy
+                                        ? ` · Por: ${controlMeta.customerGpsCapturedBy}`
+                                        : ''}
+                                    </span>
+                                  )}
+                              </div>
+
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {typeof controlMeta?.customerGpsLat === 'number' &&
+                                  typeof controlMeta?.customerGpsLng === 'number' && (
+                                    <a
+                                      href={`https://www.google.com/maps/dir/?api=1&destination=${controlMeta.customerGpsLat},${controlMeta.customerGpsLng}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] flex items-center gap-1 shadow-2xs"
+                                      title="Abrir navegación GPS en Google Maps hacia el cliente"
+                                    >
+                                      <Navigation className="w-3 h-3" />
+                                      <span>Ir con GPS</span>
+                                    </a>
+                                  )}
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedSaleForGpsModal(sale)}
+                                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                                >
+                                  <MapPin className="w-3 h-3 text-emerald-700" />
+                                  <span>Ver Mapa / Actualizar GPS</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <p className="text-xs font-black text-slate-900 mt-0.5">
-                          {sale.customerName || 'Cliente'}
-                        </p>
-                        <p className="text-[11px] text-slate-600 tabular-nums">
-                          Fecha abono: <strong>{analytics.effectiveNextDate}</strong>
-                          {analytics.controlMeta?.installmentAmount
-                            ? ` · Cuota: L. ${analytics.controlMeta.installmentAmount.toFixed(2)}`
-                            : ''}
-                        </p>
+
+                        <div className="text-right shrink-0">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                            Saldo Pendiente
+                          </span>
+                          <span
+                            className={`text-lg sm:text-xl font-black block tabular-nums ${
+                              isPaid ? 'text-emerald-600' : 'text-amber-700'
+                            }`}
+                          >
+                            L. {bal.toFixed(2)}
+                          </span>
+                          <span className="text-[11px] text-slate-500 block tabular-nums">
+                            Total: L. {totalSale.toFixed(2)} · Abonado: L. {paid.toFixed(2)}
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-right shrink-0">
-                        <span className="text-xs font-black text-slate-900 block tabular-nums">
-                          L. {analytics.balanceDue.toFixed(2)}
-                        </span>
-                        <span className="text-[10px] text-slate-500 block">
-                          {analytics.noticeCount > 0
-                            ? `${analytics.noticeCount} aviso(s)`
-                            : 'Sin avisos'}
-                        </span>
+
+                      {/* ==================== ROUTE COLLECTOR PROGRESS SUMMARY OR ADMIN COST VS PROFIT ==================== */}
+                      {isRoutePanelActive ? (
+                        <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2">
+                          <div className="grid grid-cols-3 gap-2 text-center bg-white rounded-lg p-2 border border-amber-200/60 text-[11px]">
+                            <div>
+                              <span className="text-slate-500 block">Total Deuda</span>
+                              <span className="font-black text-slate-900 tabular-nums">
+                                L. {totalSale.toFixed(2)}
+                              </span>
+                            </div>
+                            <div className="border-x border-slate-100">
+                              <span className="text-emerald-700 font-semibold block">
+                                Total Abonado
+                              </span>
+                              <span className="font-black text-emerald-700 tabular-nums">
+                                L. {paid.toFixed(2)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-amber-800 font-semibold block">
+                                Saldo a Cobrar
+                              </span>
+                              <span className="font-black text-amber-800 tabular-nums">
+                                L. {bal.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 tabular-nums">
+                              <span>Avance de pago del cliente ({simplePaidPct.toFixed(0)}%)</span>
+                              {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 ? (
+                                <span className="text-amber-900 font-black">
+                                  Cuota acordada: L. {controlMeta.installmentAmount.toFixed(2)}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="h-2.5 w-full bg-slate-200 rounded-full overflow-hidden">
+                              <div
+                                style={{ width: `${simplePaidPct}%` }}
+                                className="h-full bg-emerald-600 transition-all duration-200"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={`p-3 rounded-xl border space-y-2.5 ${
+                            isCostRecovered
+                              ? 'bg-emerald-50/70 border-emerald-200'
+                              : 'bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <TrendingUp
+                                className={`w-4 h-4 shrink-0 ${
+                                  isCostRecovered ? 'text-emerald-700' : 'text-slate-700'
+                                }`}
+                              />
+                              <span className="text-xs font-black text-slate-900">
+                                Control de Precio Costo vs. Ganancia
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openControlModalForSale(sale)}
+                              className="text-[11px] font-bold text-slate-700 hover:text-slate-900 underline flex items-center gap-1 cursor-pointer"
+                              title="Editar el Precio Costo, Cobrador de Ruta y Fecha de este artículo/cuenta"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>Configurar Cuenta</span>
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 text-center bg-white/90 rounded-lg p-2 border border-slate-200/80 text-[11px]">
+                            <div>
+                              <span className="text-slate-500 block">Precio Venta</span>
+                              <span className="font-black text-slate-900 tabular-nums">
+                                L. {totalSale.toFixed(2)}
+                              </span>
+                            </div>
+                            <div className="border-x border-slate-100">
+                              <span className="text-slate-500 block">Precio Costo</span>
+                              <span className="font-black text-slate-800 tabular-nums">
+                                L. {totalCost.toFixed(2)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-emerald-700 font-semibold block">
+                                Ganancia Total
+                              </span>
+                              <span className="font-black text-emerald-700 tabular-nums">
+                                L. {expectedTotalProfit.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 tabular-nums">
+                              <span>
+                                Costo cubierto: L. {costRecovered.toFixed(2)} / L.{' '}
+                                {totalCost.toFixed(2)}
+                              </span>
+                              <span className="text-emerald-700">
+                                Ganancia cobrada: L. {realizedProfitCollected.toFixed(2)} / L.{' '}
+                                {expectedTotalProfit.toFixed(2)}
+                              </span>
+                            </div>
+                            <div className="relative h-2.5 w-full bg-slate-200 rounded-full overflow-hidden flex">
+                              <div
+                                style={{ width: `${paidCostBarPct}%` }}
+                                className="h-full bg-amber-500 transition-all duration-200"
+                              />
+                              <div
+                                style={{ width: `${paidProfitBarPct}%` }}
+                                className="h-full bg-emerald-600 transition-all duration-200"
+                              />
+                              {costShareOfSalePct > 0 && costShareOfSalePct < 100 && (
+                                <div
+                                  style={{ left: `${costShareOfSalePct}%` }}
+                                  className="absolute top-0 bottom-0 w-0.5 bg-slate-900/70"
+                                />
+                              )}
+                            </div>
+                          </div>
+
+                          {isPaid ? (
+                            <div className="p-2 rounded-lg bg-emerald-100/80 border border-emerald-200 text-emerald-950 text-xs flex items-center justify-between gap-2">
+                              <span className="font-bold">
+                                Cuenta 100% Liquidada — Costo (L. {totalCost.toFixed(2)}) y Ganancia
+                                Total cobrados:
+                              </span>
+                              <span className="font-black text-emerald-800 tabular-nums shrink-0">
+                                + L. {expectedTotalProfit.toFixed(2)}
+                              </span>
+                            </div>
+                          ) : isCostRecovered ? (
+                            <div className="p-2.5 rounded-lg bg-emerald-600 text-white text-xs space-y-1 shadow-2xs">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-black uppercase tracking-tight">
+                                  ✓ ¡Precio Costo (L. {totalCost.toFixed(2)}) 100% Recuperado!
+                                </span>
+                                <span className="font-mono font-black text-emerald-100 tabular-nums shrink-0">
+                                  Ganancia Pura
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-emerald-50 leading-snug">
+                                El cliente ya abonó <strong>L. {paid.toFixed(2)}</strong>. Todo lo
+                                que queda de abonar (
+                                <strong className="underline">
+                                  L. {remainingProfitToCollect.toFixed(2)}
+                                </strong>
+                                ) es <strong>100% GANANCIA</strong>.
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="p-2 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-950 text-[11px] leading-snug">
+                              <span className="font-bold">Etapa 1 (Recuperando Precio Costo):</span>{' '}
+                              Faltan{' '}
+                              <strong className="font-black tabular-nums">
+                                L. {costRemainingToRecover.toFixed(2)}
+                              </strong>{' '}
+                              de abono para cubrir el Costo (L. {totalCost.toFixed(2)}).
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ==================== CONTROL DE PRÓXIMO COBRO, FRECUENCIA Y ALERTAS ==================== */}
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <Bell
+                              className={`w-3.5 h-3.5 shrink-0 ${
+                                alertStatus === 'overdue'
+                                  ? 'text-rose-600'
+                                  : alertStatus === 'due_today'
+                                  ? 'text-amber-600'
+                                  : 'text-slate-600'
+                              }`}
+                            />
+                            <span className="font-black text-slate-900">
+                              Programación de Cobro y Alertas
+                            </span>
+                          </div>
+
+                          {!isPaid && (
+                            <span
+                              className={`text-[11px] font-bold ${
+                                alertStatus === 'overdue'
+                                  ? 'text-rose-600'
+                                  : alertStatus === 'due_today'
+                                  ? 'text-amber-700'
+                                  : alertStatus === 'upcoming'
+                                  ? 'text-amber-600'
+                                  : 'text-slate-600'
+                              }`}
+                            >
+                              {alertStatus === 'overdue'
+                                ? `🚨 Cobro Atrasado (${Math.abs(daysDiff || 0)} día(s))`
+                                : alertStatus === 'due_today'
+                                ? '🔔 ¡Hoy Toca Cobrar Abono!'
+                                : alertStatus === 'upcoming'
+                                ? `📅 Próximo abono en ${daysDiff} día(s)`
+                                : effectiveNextDate
+                                ? `Programado: ${effectiveNextDate}`
+                                : 'Sin fecha de próximo abono'}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+                          <div>
+                            <span>
+                              Siguiente Cobro:{' '}
+                              <strong className="text-slate-900">
+                                {effectiveNextDate || 'No asignado'}
+                              </strong>
+                            </span>
+                            <span aria-hidden="true" className="mx-1.5 text-slate-300">
+                              ·
+                            </span>
+                            <span>Frecuencia: {freqLabel}</span>
+                            {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 && (
+                              <>
+                                <span aria-hidden="true" className="mx-1.5 text-slate-300">
+                                  ·
+                                </span>
+                                <span className="font-bold text-slate-900 tabular-nums">
+                                  Cuota: L. {controlMeta.installmentAmount.toFixed(2)}
+                                </span>
+                              </>
+                            )}
+                          </div>
+
+                          <div className="text-slate-500">
+                            {noticeCount > 0 ? (
+                              <span>
+                                Avisos: <strong className="text-slate-800">{noticeCount}</strong>
+                              </span>
+                            ) : (
+                              <span>0 avisos</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {controlMeta?.collectionNotes && (
+                          <p className="text-[11px] text-slate-600 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/80">
+                            📝 <strong>Nota de cobro:</strong> {controlMeta.collectionNotes}
+                          </p>
+                        )}
+
+                        {!isPaid && (
+                          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedSaleForQuickSchedule(sale);
+                                setQuickScheduleFrequency(
+                                  controlMeta?.paymentFrequency ||
+                                    routeCollectorConfig.defaultPaymentFrequency ||
+                                    'weekly'
+                                );
+                                setQuickScheduleDate(
+                                  calculateNextDateByFrequency(
+                                    controlMeta?.paymentFrequency,
+                                    effectiveNextDate
+                                  )
+                                );
+                                setQuickScheduleNote('');
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-amber-300 text-amber-950 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                            >
+                              <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Programar Siguiente Cobro</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSaleForGpsModal(sale)}
+                              className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
+                              title="Capturar la dirección exacta del cliente estando en el lugar usando el GPS del teléfono"
+                            >
+                              <MapPin className="w-3.5 h-3.5" />
+                              <span>
+                                {typeof controlMeta?.customerGpsLat === 'number'
+                                  ? '📍 Actualizar GPS Cliente'
+                                  : '📍 Agregar Dirección con GPS'}
+                              </span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedSaleForCollectorAlert(sale);
+                                setCollectorAlertType('customer_absent');
+                                setCollectorAlertMessage('');
+                                setCollectorAlertNextDate('');
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                            >
+                              <Bell className="w-3.5 h-3.5 text-rose-600" />
+                              <span>Enviar Alerta al Admin</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSendCreditReminderWhatsApp(
+                                  sale,
+                                  alertStatus === 'overdue'
+                                    ? 'overdue'
+                                    : alertStatus === 'due_today'
+                                    ? 'due_today'
+                                    : 'preventive'
+                                )
+                              }
+                              className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
+                              <span>
+                                {alertStatus === 'overdue'
+                                  ? 'WhatsApp Atraso'
+                                  : alertStatus === 'due_today'
+                                  ? 'WhatsApp Toca Hoy'
+                                  : 'Recordatorio'}
+                              </span>
+                            </button>
+
+                            {isAdminSession && (
+                              <button
+                                type="button"
+                                onClick={() => openControlModalForSale(sale)}
+                                className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                              >
+                                <Settings className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Configurar / Asignar</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
+
+                      {/* Items summary */}
+                      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                          Artículo(s) en Deuda:
+                        </span>
+                        {(sale.items || []).map((it, idx) => (
+                          <div
+                            key={idx}
+                            className="flex justify-between text-slate-700 tabular-nums"
+                          >
+                            <span>
+                              <strong>{it.quantity}x</strong> {it.name}
+                            </span>
+                            <span className="font-semibold">L. {it.subtotal.toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Abonos History */}
+                      {abonos.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                            Historial de Abonos Recibidos ({abonos.length})
+                          </p>
+                          <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
+                            {abonos.map((cp) => (
+                              <div
+                                key={cp.id}
+                                className="flex items-center justify-between text-[11px] bg-emerald-50/60 border border-emerald-100 px-2.5 py-1 rounded-lg tabular-nums"
+                              >
+                                <span className="text-slate-600">
+                                  {cp.date} (
+                                  {cp.paymentMethod === 'cash'
+                                    ? 'Efectivo'
+                                    : cp.paymentMethod === 'transfer'
+                                    ? 'Transf.'
+                                    : 'Tarjeta'}
+                                  {cp.receivedBy ? ` · ${cp.receivedBy}` : ''})
+                                </span>
+                                <span className="font-bold text-emerald-700">
+                                  + L. {cp.amount.toFixed(2)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-1.5 pt-1">
+                    {/* Actions */}
+                    <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
+                      {!isPaid && (
+                        <button
+                          type="button"
+                          onClick={() => openAboneModalForSale(sale)}
+                          className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 col-span-2 sm:col-span-1"
+                        >
+                          <DollarSign className="w-4 h-4 shrink-0" />
+                          <span>Registrar Abono</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
-                        onClick={() => handleSendCreditReminderWhatsApp(sale, templateToUse)}
-                        className="flex-1 py-1.5 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                        onClick={() => handleSendCreditReminderWhatsApp(sale, 'statement')}
+                        className="min-h-[42px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
                       >
-                        <WhatsAppIcon className="w-3.5 h-3.5 fill-white shrink-0" />
-                        <span>Enviar Aviso Cobro</span>
+                        <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
+                        <span>WhatsApp</span>
                       </button>
+
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedSaleForAbone(sale);
-                          setAboneAmount(
-                            analytics.controlMeta?.installmentAmount &&
-                              analytics.controlMeta.installmentAmount <= analytics.balanceDue
-                              ? analytics.controlMeta.installmentAmount.toFixed(2)
-                              : analytics.balanceDue.toFixed(2)
-                          );
-                          setAboneMethod('cash');
-                          setAboneNotes('');
-                          setAboneNextDate(analytics.effectiveNextDate || '');
-                        }}
-                        className="py-1.5 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] cursor-pointer whitespace-nowrap"
+                        onClick={() => setCreditSaleForPrintModal(sale)}
+                        className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                        title="Imprimir o descargar en PDF el Estado de Cuenta del cliente"
                       >
-                        Abonar
+                        <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Estado Cuenta</span>
                       </button>
+
                       {isStoreCreditContractEnabled(storeSettings) && (
                         <button
                           type="button"
                           onClick={() => setSelectedSaleForContract(sale)}
-                          className="py-1.5 px-2 rounded-lg bg-amber-50 border border-amber-300 hover:bg-amber-100 text-amber-900 font-bold text-[11px] cursor-pointer"
-                          title="Ver / Imprimir Contrato de Crédito con Reserva de Dominio"
+                          className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
+                          title="Ver, editar, imprimir o enviar el Contrato de Arrendamiento con Reserva de Dominio"
                         >
-                          <FileText className="w-3.5 h-3.5 text-amber-700" />
+                          <FileText className="w-4 h-4 text-amber-700 shrink-0" />
+                          <span>Contrato de Crédito</span>
                         </button>
                       )}
+
                       <button
                         type="button"
-                        onClick={() => openControlModalForSale(sale)}
-                        className="py-1.5 px-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-[11px] cursor-pointer"
-                        title="Configurar fecha de abono, costo y bitácora de avisos"
+                        onClick={() => onViewSaleTicket(sale)}
+                        className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                        title="Ver Factura Original"
                       >
-                        <Bell className="w-3.5 h-3.5" />
+                        <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>Ver Factura</span>
                       </button>
                     </div>
                   </div>
                 );
               })}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Search & Filter Bar */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Buscar cliente, teléfono o N° de factura..."
-              value={creditSearch}
-              onChange={(e) => setCreditSearch(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
-              <button
-                type="button"
-                onClick={() => setCreditFilter('pending')}
-                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
-                  creditFilter === 'pending'
-                    ? 'bg-amber-600 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Pendientes ({creditPortfolioStats.pendingAccountsCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreditFilter('alerts')}
-                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
-                  creditFilter === 'alerts'
-                    ? 'bg-rose-600 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Alertas Cobro ({creditPortfolioStats.totalAlertsCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreditFilter('profit_zone')}
-                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
-                  creditFilter === 'profit_zone'
-                    ? 'bg-emerald-600 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                En Ganancia ({creditPortfolioStats.accountsInProfitZoneCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreditFilter('recovering_cost')}
-                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
-                  creditFilter === 'recovering_cost'
-                    ? 'bg-slate-800 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Cubriendo Costo ({creditPortfolioStats.accountsRecoveringCostCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreditFilter('paid')}
-                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
-                  creditFilter === 'paid'
-                    ? 'bg-teal-700 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Pagadas
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreditFilter('all')}
-                className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
-                  creditFilter === 'all'
-                    ? 'bg-slate-900 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Todas ({creditSales.length})
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                if (filteredCreditSales.length === 0) {
-                  showToast('No hay cuentas por cobrar en esta vista para imprimir.', 'warning');
-                  return;
-                }
-                setShowCreditPortfolioPrintModal(true);
-              }}
-              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
-              title="Imprimir o descargar en PDF la Cartera de Cuentas por Cobrar"
-            >
-              <Printer className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Imprimir / PDF Cartera</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Credit Accounts List */}
-        {filteredCreditSales.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-400">
-            <Users className="w-12 h-12 mx-auto mb-2 text-slate-300 stroke-1" />
-            <p className="font-bold text-slate-700 text-base">
-              No hay cuentas por cobrar en esta vista
-            </p>
-            <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-              Para registrar una venta al crédito ("Fiado"), selecciona el método de pago{' '}
-              <strong>"Crédito / Fiado"</strong> al cobrar en la pestaña Nueva Venta (POS).
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredCreditSales.map((sale) => {
-              const analytics = getSaleCreditAnalytics(sale);
-              const {
-                totalSale,
-                totalCost,
-                expectedTotalProfit,
-                paid,
-                balanceDue: bal,
-                isPaid,
-                costRecovered,
-                costRemainingToRecover,
-                isCostRecovered,
-                realizedProfitCollected,
-                remainingProfitToCollect,
-                effectiveNextDate,
-                daysDiff,
-                alertStatus,
-                controlMeta,
-                noticeCount,
-              } = analytics;
-              const abonos = sale.creditPayments || [];
-
-              // Progress bar proportions relative to totalSale
-              const costShareOfSalePct =
-                totalSale > 0 ? Math.min(100, (totalCost / totalSale) * 100) : 0;
-              const paidCostBarPct =
-                totalSale > 0 ? Math.min(costShareOfSalePct, (costRecovered / totalSale) * 100) : 0;
-              const paidProfitBarPct =
-                totalSale > 0
-                  ? Math.min(
-                      Math.max(0, 100 - costShareOfSalePct),
-                      (realizedProfitCollected / totalSale) * 100
-                    )
-                  : 0;
-
-              const freqLabel =
-                controlMeta?.paymentFrequency === 'weekly'
-                  ? 'Semanal'
-                  : controlMeta?.paymentFrequency === 'biweekly'
-                  ? 'Quincenal'
-                  : controlMeta?.paymentFrequency === 'monthly'
-                  ? 'Mensual'
-                  : controlMeta?.paymentFrequency === 'daily'
-                  ? 'Diario'
-                  : 'Personalizado';
-
-              return (
-                <div
-                  key={sale.id}
-                  className={`bg-white rounded-2xl border p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-4 ${
-                    isPaid
-                      ? 'border-emerald-200'
-                      : alertStatus === 'overdue'
-                      ? 'border-rose-300'
-                      : isCostRecovered
-                      ? 'border-emerald-300'
-                      : 'border-amber-200/90'
-                  }`}
-                >
-                  <div className="space-y-3.5">
-                    {/* Header */}
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                          <span className="font-mono font-bold text-slate-800">
-                            {sale.saleNumber}
-                          </span>
-                          <span aria-hidden="true" className="text-slate-300">
-                            ·
-                          </span>
-                          <span
-                            className={`text-[11px] font-black uppercase ${
-                              isPaid
-                                ? 'text-emerald-700'
-                                : isCostRecovered
-                                ? 'text-emerald-700'
-                                : 'text-amber-700'
-                            }`}
-                          >
-                            {isPaid
-                              ? 'Liquidado'
-                              : isCostRecovered
-                              ? 'Costo Cubierto · En Ganancia'
-                              : 'Recuperando Costo'}
-                          </span>
-                        </div>
-                        <h3 className="text-base font-black text-slate-900 mt-1 flex items-center gap-1.5">
-                          <User className="w-4 h-4 text-amber-600 shrink-0" />
-                          <span>{sale.customerName || 'Cliente'}</span>
-                        </h3>
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-0.5">
-                          {sale.customerPhone && (
-                            <>
-                              <span className="flex items-center gap-1 font-semibold text-emerald-700">
-                                <Phone className="w-3 h-3" />
-                                {sale.customerPhone}
-                              </span>
-                              <span aria-hidden="true">·</span>
-                            </>
-                          )}
-                          <span>Compra: {sale.date}</span>
-                        </div>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                          Saldo Pendiente
-                        </span>
-                        <span
-                          className={`text-lg sm:text-xl font-black block tabular-nums ${
-                            isPaid ? 'text-emerald-600' : 'text-amber-700'
-                          }`}
-                        >
-                          L. {bal.toFixed(2)}
-                        </span>
-                        <span className="text-[11px] text-slate-500 block tabular-nums">
-                          Venta: L. {totalSale.toFixed(2)} · Abonado: L. {paid.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* ==================== CONTROL DE COSTO VS. GANANCIA ==================== */}
-                    <div
-                      className={`p-3 rounded-xl border space-y-2.5 ${
-                        isCostRecovered
-                          ? 'bg-emerald-50/70 border-emerald-200'
-                          : 'bg-slate-50 border-slate-200'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
-                          <TrendingUp
-                            className={`w-4 h-4 shrink-0 ${
-                              isCostRecovered ? 'text-emerald-700' : 'text-slate-700'
-                            }`}
-                          />
-                          <span className="text-xs font-black text-slate-900">
-                            Control de Precio Costo vs. Ganancia
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => openControlModalForSale(sale)}
-                          className="text-[11px] font-bold text-slate-700 hover:text-slate-900 underline flex items-center gap-1 cursor-pointer"
-                          title="Editar el Precio Costo de este artículo/cuenta"
-                        >
-                          <Pencil className="w-3 h-3" />
-                          <span>Ajustar Costo</span>
-                        </button>
-                      </div>
-
-                      {/* 3 Key Figures: Venta | Precio Costo | Ganancia Total */}
-                      <div className="grid grid-cols-3 gap-2 text-center bg-white/90 rounded-lg p-2 border border-slate-200/80 text-[11px]">
-                        <div>
-                          <span className="text-slate-500 block">Precio Venta</span>
-                          <span className="font-black text-slate-900 tabular-nums">
-                            L. {totalSale.toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="border-x border-slate-100">
-                          <span className="text-slate-500 block">Precio Costo</span>
-                          <span className="font-black text-slate-800 tabular-nums">
-                            L. {totalCost.toFixed(2)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-emerald-700 font-semibold block">
-                            Ganancia Total
-                          </span>
-                          <span className="font-black text-emerald-700 tabular-nums">
-                            L. {expectedTotalProfit.toFixed(2)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Dual-Zone Progress Bar: Cost Recovery + Profit Zone */}
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 tabular-nums">
-                          <span>
-                            Costo cubierto: L. {costRecovered.toFixed(2)} / L. {totalCost.toFixed(2)}
-                          </span>
-                          <span className="text-emerald-700">
-                            Ganancia cobrada: L. {realizedProfitCollected.toFixed(2)} / L.{' '}
-                            {expectedTotalProfit.toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="relative h-2.5 w-full bg-slate-200 rounded-full overflow-hidden flex">
-                          {/* Cost recovered segment */}
-                          <div
-                            style={{ width: `${paidCostBarPct}%` }}
-                            className="h-full bg-amber-500 transition-all duration-200"
-                            title={`Costo recuperado: L. ${costRecovered.toFixed(2)}`}
-                          />
-                          {/* Profit collected segment */}
-                          <div
-                            style={{ width: `${paidProfitBarPct}%` }}
-                            className="h-full bg-emerald-600 transition-all duration-200"
-                            title={`Ganancia ya cobrada: L. ${realizedProfitCollected.toFixed(2)}`}
-                          />
-                          {/* Marker for Cost Threshold */}
-                          {costShareOfSalePct > 0 && costShareOfSalePct < 100 && (
-                            <div
-                              style={{ left: `${costShareOfSalePct}%` }}
-                              className="absolute top-0 bottom-0 w-0.5 bg-slate-900/70"
-                              title={`Meta de Precio Costo: L. ${totalCost.toFixed(2)}`}
-                            />
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Automatic Dynamic Status Message */}
-                      {isPaid ? (
-                        <div className="p-2 rounded-lg bg-emerald-100/80 border border-emerald-200 text-emerald-950 text-xs flex items-center justify-between gap-2">
-                          <span className="font-bold">
-                            Cuenta 100% Liquidada — Costo (L. {totalCost.toFixed(2)}) y Ganancia
-                            Total cobrados:
-                          </span>
-                          <span className="font-black text-emerald-800 tabular-nums shrink-0">
-                            + L. {expectedTotalProfit.toFixed(2)}
-                          </span>
-                        </div>
-                      ) : isCostRecovered ? (
-                        <div className="p-2.5 rounded-lg bg-emerald-600 text-white text-xs space-y-1 shadow-2xs">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-black uppercase tracking-tight">
-                              ✓ ¡Precio Costo (L. {totalCost.toFixed(2)}) 100% Recuperado!
-                            </span>
-                            <span className="font-mono font-black text-emerald-100 tabular-nums shrink-0">
-                              Ganancia Pura
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-emerald-50 leading-snug">
-                            El cliente ya abonó <strong>L. {paid.toFixed(2)}</strong>. Todo lo que
-                            queda de abonar (
-                            <strong className="underline">
-                              L. {remainingProfitToCollect.toFixed(2)}
-                            </strong>
-                            ) es <strong>100% GANANCIA</strong> para el negocio
-                            {realizedProfitCollected > 0.01
-                              ? ` (y ya tienes L. ${realizedProfitCollected.toFixed(2)} de ganancia cobrada en mano).`
-                              : '.'}
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="p-2 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-950 text-[11px] leading-snug">
-                          <span className="font-bold"> Etapa 1 (Recuperando Precio Costo):</span>{' '}
-                          Faltan{' '}
-                          <strong className="font-black tabular-nums">
-                            L. {costRemainingToRecover.toFixed(2)}
-                          </strong>{' '}
-                          de abono para llegar al Precio Costo (L. {totalCost.toFixed(2)}). Al
-                          llegar a L. {totalCost.toFixed(2)}, los{' '}
-                          <strong className="text-emerald-800 font-black tabular-nums">
-                            L. {expectedTotalProfit.toFixed(2)}
-                          </strong>{' '}
-                          restantes serán 100% Ganancia.
-                        </div>
-                      )}
-                    </div>
-
-                    {/* ==================== CONTROL DE AVISOS Y ALERTAS DE COBRO ==================== */}
-                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
-                          <Bell
-                            className={`w-3.5 h-3.5 shrink-0 ${
-                              alertStatus === 'overdue'
-                                ? 'text-rose-600'
-                                : alertStatus === 'due_today'
-                                ? 'text-amber-600'
-                                : 'text-slate-600'
-                            }`}
-                          />
-                          <span className="font-black text-slate-900">
-                            Alertas y Control de Avisos de Cobro
-                          </span>
-                        </div>
-
-                        {!isPaid && (
-                          <span
-                            className={`text-[11px] font-bold ${
-                              alertStatus === 'overdue'
-                                ? 'text-rose-600'
-                                : alertStatus === 'due_today'
-                                ? 'text-amber-700'
-                                : alertStatus === 'upcoming'
-                                ? 'text-amber-600'
-                                : 'text-slate-600'
-                            }`}
-                          >
-                            {alertStatus === 'overdue'
-                              ? `Cobro Atrasado (${Math.abs(daysDiff || 0)} día(s))`
-                              : alertStatus === 'due_today'
-                              ? '¡Hoy Toca Cobrar Abono!'
-                              : alertStatus === 'upcoming'
-                              ? `Próximo abono en ${daysDiff} día(s)`
-                              : effectiveNextDate
-                              ? `Programado: ${effectiveNextDate}`
-                              : 'Sin fecha de próximo abono'}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
-                        <div>
-                          <span>
-                            Próx. Abono:{' '}
-                            <strong className="text-slate-900">
-                              {effectiveNextDate || 'No asignado'}
-                            </strong>
-                          </span>
-                          {controlMeta?.paymentFrequency && (
-                            <>
-                              <span aria-hidden="true" className="mx-1.5 text-slate-300">
-                                ·
-                              </span>
-                              <span>Frecuencia: {freqLabel}</span>
-                            </>
-                          )}
-                          {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 && (
-                            <>
-                              <span aria-hidden="true" className="mx-1.5 text-slate-300">
-                                ·
-                              </span>
-                              <span className="font-bold text-slate-900 tabular-nums">
-                                Cuota: L. {controlMeta.installmentAmount.toFixed(2)}
-                              </span>
-                            </>
-                          )}
-                        </div>
-
-                        <div className="text-slate-500">
-                          {noticeCount > 0 ? (
-                            <span>
-                              Avisos: <strong className="text-slate-800">{noticeCount}</strong> (Últ:{' '}
-                              {controlMeta?.lastNoticeDate})
-                            </span>
-                          ) : (
-                            <span>0 avisos registrados</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {!isPaid && (
-                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => openControlModalForSale(sale)}
-                            className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                          >
-                            <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                            <span>Programar Alerta / Bitácora ({noticeCount})</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleSendCreditReminderWhatsApp(
-                                sale,
-                                alertStatus === 'overdue'
-                                  ? 'overdue'
-                                  : alertStatus === 'due_today'
-                                  ? 'due_today'
-                                  : 'preventive'
-                              )
-                            }
-                            className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                          >
-                            <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
-                            <span>
-                              {alertStatus === 'overdue'
-                                ? 'Enviar Aviso Atraso'
-                                : alertStatus === 'due_today'
-                                ? 'Aviso Toca Hoy'
-                                : 'Recordatorio Abono'}
-                            </span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Items summary */}
-                    <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-1">
-                      {(sale.items || []).map((it, idx) => (
-                        <div key={idx} className="flex justify-between text-slate-700 tabular-nums">
-                          <span>
-                            <strong>{it.quantity}x</strong> {it.name}
-                          </span>
-                          <span className="font-semibold">L. {it.subtotal.toFixed(2)}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Abonos History */}
-                    {abonos.length > 0 && (
-                      <div className="space-y-1">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Historial de Abonos ({abonos.length})
-                        </p>
-                        <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
-                          {abonos.map((cp) => (
-                            <div
-                              key={cp.id}
-                              className="flex items-center justify-between text-[11px] bg-emerald-50/60 border border-emerald-100 px-2.5 py-1 rounded-lg tabular-nums"
-                            >
-                              <span className="text-slate-600">
-                                {cp.date} (
-                                {cp.paymentMethod === 'cash'
-                                  ? 'Efectivo'
-                                  : cp.paymentMethod === 'transfer'
-                                  ? 'Transf.'
-                                  : 'Tarjeta'}
-                                )
-                              </span>
-                              <span className="font-bold text-emerald-700">
-                                + L. {cp.amount.toFixed(2)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
-                    {!isPaid && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedSaleForAbone(sale);
-                          setAboneAmount(
-                            controlMeta?.installmentAmount &&
-                              controlMeta.installmentAmount <= bal
-                              ? controlMeta.installmentAmount.toFixed(2)
-                              : bal.toFixed(2)
-                          );
-                          setAboneMethod('cash');
-                          setAboneNotes('');
-                          setAboneNextDate(effectiveNextDate || '');
-                        }}
-                        className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 col-span-2 sm:col-span-1"
-                      >
-                        <DollarSign className="w-4 h-4 shrink-0" />
-                        <span>Registrar Abono</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => handleSendCreditReminderWhatsApp(sale, 'statement')}
-                      className="min-h-[42px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
-                    >
-                      <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
-                      <span>WhatsApp</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setCreditSaleForPrintModal(sale)}
-                      className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
-                      title="Imprimir o descargar en PDF el Estado de Cuenta del cliente"
-                    >
-                      <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>Estado Cuenta</span>
-                    </button>
-
-                    {isStoreCreditContractEnabled(storeSettings) && (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSaleForContract(sale)}
-                        className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
-                        title="Ver, editar, imprimir o enviar el Contrato de Arrendamiento con Reserva de Dominio"
-                      >
-                        <FileText className="w-4 h-4 text-amber-700 shrink-0" />
-                        <span>Contrato de Crédito</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => onViewSaleTicket(sale)}
-                      className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
-                      title="Ver Factura Original"
-                    >
-                      <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>Ver Factura</span>
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* ==================== MODAL 1: REGISTRAR ABONO + SIMULADOR COSTO VS GANANCIA ==================== */}
-        {selectedSaleForAbone && aboneModalAnalytics && (
-          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden max-h-[92vh] flex flex-col">
-              <div className="px-5 py-4 bg-amber-600 text-white flex items-center justify-between shrink-0">
-                <div>
-                  <h3 className="font-black text-sm sm:text-base">
-                    Registrar Abono de Cliente
-                  </h3>
-                  <p className="text-xs text-amber-100">
-                    {selectedSaleForAbone.customerName} • {selectedSaleForAbone.saleNumber}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedSaleForAbone(null)}
-                  className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <form
-                onSubmit={handleSubmitCreditAbone}
-                className="p-5 space-y-4 overflow-y-auto"
-              >
-                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between text-xs">
+          {/* ==================== MODAL 1: REGISTRAR ABONO + PROGRAMACIÓN AUTOMÁTICA DE SIGUIENTE COBRO ==================== */}
+          {selectedSaleForAbone && aboneModalAnalytics && (
+            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden max-h-[92vh] flex flex-col">
+                <div className="px-5 py-4 bg-amber-600 text-white flex items-center justify-between shrink-0">
                   <div>
-                    <span className="font-bold text-amber-950 block">Saldo Pendiente Actual:</span>
-                    <span className="text-[11px] text-amber-800 tabular-nums">
-                      Venta: L. {aboneModalAnalytics.totalSale.toFixed(2)} · Costo: L.{' '}
-                      {aboneModalAnalytics.totalCost.toFixed(2)}
-                    </span>
+                    <h3 className="font-black text-sm sm:text-base">
+                      Registrar Abono de Cliente
+                    </h3>
+                    <p className="text-xs text-amber-100">
+                      {selectedSaleForAbone.customerName} • {selectedSaleForAbone.saleNumber}
+                    </p>
                   </div>
-                  <span className="text-lg font-black text-amber-800 tabular-nums">
-                    L. {aboneModalAnalytics.balanceDue.toFixed(2)}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSaleForAbone(null)}
+                    className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
 
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                    <label className="text-xs font-bold text-slate-700">
-                      Monto del Abono (L.)
-                    </label>
-                    <div className="flex items-center gap-2">
-                      {aboneModalAnalytics.controlMeta?.installmentAmount &&
-                        aboneModalAnalytics.controlMeta.installmentAmount <=
-                          aboneModalAnalytics.balanceDue && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setAboneAmount(
-                                aboneModalAnalytics.controlMeta!.installmentAmount!.toFixed(2)
-                              )
-                            }
-                            className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer"
-                          >
-                            Usar cuota (L.{' '}
-                            {aboneModalAnalytics.controlMeta.installmentAmount.toFixed(2)})
-                          </button>
-                        )}
-                      {!aboneModalAnalytics.isCostRecovered &&
-                        aboneModalAnalytics.costRemainingToRecover <=
-                          aboneModalAnalytics.balanceDue && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setAboneAmount(
-                                aboneModalAnalytics.costRemainingToRecover.toFixed(2)
-                              )
-                            }
-                            className="text-[11px] font-bold text-slate-700 hover:underline cursor-pointer"
-                          >
-                            Cubrir costo faltante (L.{' '}
-                            {aboneModalAnalytics.costRemainingToRecover.toFixed(2)})
-                          </button>
-                        )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAboneAmount(aboneModalAnalytics.balanceDue.toFixed(2))
-                        }
-                        className="text-[11px] font-bold text-amber-700 hover:underline cursor-pointer"
-                      >
-                        Liquidar todo
-                      </button>
-                    </div>
-                  </div>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    required
-                    value={aboneAmount}
-                    onChange={(e) => setAboneAmount(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 tabular-nums"
-                  />
-                </div>
-
-                {/* Live Cost vs Profit Impact Preview */}
-                <div
-                  className={`p-3 rounded-xl border text-xs space-y-1.5 ${
-                    simulatedIsCostRecovered
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
-                      : 'bg-slate-50 border-slate-200 text-slate-800'
-                  }`}
+                <form
+                  onSubmit={handleSubmitCreditAbone}
+                  className="p-5 space-y-4 overflow-y-auto"
                 >
-                  <div className="flex items-center justify-between font-bold">
-                    <span>Proyección tras este abono:</span>
-                    <span className="tabular-nums">
-                      Total Abonado: L. {simulatedNewPaid.toFixed(2)} / L.{' '}
-                      {aboneModalAnalytics.totalSale.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-slate-200/60 tabular-nums">
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between text-xs">
                     <div>
-                      <span className="text-slate-500 block">Costo Recuperado:</span>
-                      <span className="font-black">
-                        L. {simulatedCostRecovered.toFixed(2)} de L.{' '}
-                        {aboneModalAnalytics.totalCost.toFixed(2)}
+                      <span className="font-bold text-amber-950 block">
+                        Saldo Pendiente Actual:
+                      </span>
+                      <span className="text-[11px] text-amber-800 tabular-nums">
+                        Total Deuda: L. {aboneModalAnalytics.totalSale.toFixed(2)} · Abonado: L.{' '}
+                        {aboneModalAnalytics.paid.toFixed(2)}
                       </span>
                     </div>
-                    <div>
-                      <span className="text-slate-500 block">Nuevo Saldo Restante:</span>
-                      <span className="font-black">L. {simulatedNewBalance.toFixed(2)}</span>
+                    <span className="text-lg font-black text-amber-800 tabular-nums">
+                      L. {aboneModalAnalytics.balanceDue.toFixed(2)}
+                    </span>
+                  </div>
+
+                  {/* Quick GPS capture option while collecting abono at customer's location */}
+                  <div className="p-2.5 rounded-xl bg-emerald-50/80 border border-emerald-200 flex items-center justify-between gap-2 text-xs">
+                    <div className="text-[11px] text-emerald-950">
+                      <span className="font-black block">
+                        📍 ¿Estás cobrando en el lugar del cliente?
+                      </span>
+                      <span className="text-emerald-800">
+                        {aboneModalAnalytics.controlMeta?.customerAddressOrRoute ||
+                          'Puedes guardar la dirección exacta con GPS desde aquí.'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSaleForGpsModal(selectedSaleForAbone)}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      <MapPin className="w-3.5 h-3.5" />
+                      <span>Capturar GPS</span>
+                    </button>
+                  </div>
+
+                  <div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                      <label className="text-xs font-bold text-slate-700">
+                        Monto del Abono (L.)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        {aboneModalAnalytics.controlMeta?.installmentAmount &&
+                          aboneModalAnalytics.controlMeta.installmentAmount <=
+                            aboneModalAnalytics.balanceDue && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAboneAmount(
+                                  aboneModalAnalytics.controlMeta!.installmentAmount!.toFixed(2)
+                                )
+                              }
+                              className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer"
+                            >
+                              Usar cuota (L.{' '}
+                              {aboneModalAnalytics.controlMeta.installmentAmount.toFixed(2)})
+                            </button>
+                          )}
+                        {canViewCostsAndProfits &&
+                          !aboneModalAnalytics.isCostRecovered &&
+                          aboneModalAnalytics.costRemainingToRecover <=
+                            aboneModalAnalytics.balanceDue && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAboneAmount(
+                                  aboneModalAnalytics.costRemainingToRecover.toFixed(2)
+                                )
+                              }
+                              className="text-[11px] font-bold text-slate-700 hover:underline cursor-pointer"
+                            >
+                              Cubrir costo faltante (L.{' '}
+                              {aboneModalAnalytics.costRemainingToRecover.toFixed(2)})
+                            </button>
+                          )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAboneAmount(aboneModalAnalytics.balanceDue.toFixed(2))
+                          }
+                          className="text-[11px] font-bold text-amber-700 hover:underline cursor-pointer"
+                        >
+                          Liquidar todo
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      value={aboneAmount}
+                      onChange={(e) => setAboneAmount(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 tabular-nums"
+                    />
+                  </div>
+
+                  {/* Balance Projection */}
+                  <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-slate-800 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between font-bold">
+                      <span>Proyección tras este abono:</span>
+                      <span className="tabular-nums text-emerald-700">
+                        Total Abonado: L. {simulatedNewPaid.toFixed(2)} / L.{' '}
+                        {aboneModalAnalytics.totalSale.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200/60 tabular-nums">
+                      <span className="text-slate-600 font-semibold">
+                        Nuevo Saldo Pendiente del Cliente:
+                      </span>
+                      <span className="text-sm font-black text-amber-800">
+                        L. {simulatedNewBalance.toFixed(2)}
+                      </span>
+                    </div>
+                    {canViewCostsAndProfits && (
+                      <div className="pt-1 border-t border-slate-200/60 text-[11px]">
+                        {simulatedIsCostRecovered ? (
+                          <span className="font-bold text-emerald-700">
+                            ✓ Precio Costo (L. {aboneModalAnalytics.totalCost.toFixed(2)}) cubierto
+                            • Ganancia en mano: L. {simulatedRealizedProfit.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-amber-900">
+                            Faltarán <strong>L. {simulatedCostRemaining.toFixed(2)}</strong> para
+                            recuperar el Precio Costo.
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Método de Pago del Abono
+                    </label>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      {(['cash', 'transfer', 'card'] as const).map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setAboneMethod(m)}
+                          className={`py-2 px-2 rounded-xl font-bold border cursor-pointer ${
+                            aboneMethod === m
+                              ? 'bg-slate-900 text-white border-slate-900'
+                              : 'bg-white text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          {m === 'cash'
+                            ? 'Efectivo'
+                            : m === 'transfer'
+                            ? 'Transferencia'
+                            : 'Tarjeta'}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                  {simulatedIsCostRecovered ? (
-                    <p className="text-[11px] font-bold text-emerald-800 pt-1">
-                      ✓ ¡Precio Costo (L. {aboneModalAnalytics.totalCost.toFixed(2)}) 100%
-                      cubierto!{' '}
-                      {simulatedNewBalance > 0.01
-                        ? `Todo el saldo restante (L. ${simulatedNewBalance.toFixed(2)}) queda como 100% GANANCIA (más L. ${simulatedRealizedProfit.toFixed(2)} ya en mano).`
-                        : `Cuenta liquidada con L. ${aboneModalAnalytics.expectedTotalProfit.toFixed(2)} de ganancia total.`}
-                    </p>
-                  ) : (
-                    <p className="text-[11px] text-amber-900 pt-1">
-                      Faltarán <strong>L. {simulatedCostRemaining.toFixed(2)}</strong> para
-                      terminar de recuperar el Precio Costo; después los{' '}
-                      <strong>L. {aboneModalAnalytics.expectedTotalProfit.toFixed(2)}</strong>{' '}
-                      restantes serán Ganancia.
-                    </p>
-                  )}
-                </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    Método de Pago del Abono
-                  </label>
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    {(['cash', 'transfer', 'card'] as const).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => setAboneMethod(m)}
-                        className={`py-2 px-2 rounded-xl font-bold border cursor-pointer ${
-                          aboneMethod === m
-                            ? 'bg-slate-900 text-white border-slate-900'
-                            : 'bg-white text-slate-700 border-slate-200'
-                        }`}
-                      >
-                        {m === 'cash' ? 'Efectivo' : m === 'transfer' ? 'Transferencia' : 'Tarjeta'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                  {/* Schedule Next Payment Alert inside Abono Modal (Auto-Calculated + Manual) */}
+                  {simulatedNewBalance > 0.01 && (
+                    <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        <div>
+                          <label className="text-xs font-black text-amber-950 block">
+                            📅 Programar Siguiente Cobro (Alerta Automática)
+                          </label>
+                          <span className="text-[10px] text-amber-800 block">
+                            ⚡ La app calculó automáticamente la siguiente fecha según la frecuencia estimada; puedes ajustarla si el cliente pidió otra fecha.
+                          </span>
+                        </div>
+                      </div>
 
-                {/* Schedule Next Payment Alert inside Abono Modal */}
-                {simulatedNewBalance > 0.01 && (
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-slate-800">
-                        Programar Próxima Fecha de Abono (Alerta)
-                      </label>
-                      <div className="flex items-center gap-1 text-[10px]">
+                      <div className="flex flex-wrap items-center gap-1 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => setAboneNextDate(addDaysToIso(1))}
+                          className="px-2 py-1 rounded-lg bg-white border border-amber-300 font-bold text-amber-900 hover:bg-amber-100 cursor-pointer"
+                        >
+                          Mañana (+1d)
+                        </button>
                         <button
                           type="button"
                           onClick={() => setAboneNextDate(addDaysToIso(7))}
-                          className="px-2 py-0.5 rounded bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          className="px-2 py-1 rounded-lg bg-white border border-amber-300 font-bold text-amber-900 hover:bg-amber-100 cursor-pointer"
                         >
-                          +7 días
+                          Semanal (+7d)
                         </button>
                         <button
                           type="button"
                           onClick={() => setAboneNextDate(addDaysToIso(15))}
-                          className="px-2 py-0.5 rounded bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          className="px-2 py-1 rounded-lg bg-white border border-amber-300 font-bold text-amber-900 hover:bg-amber-100 cursor-pointer"
                         >
-                          +15 días
+                          Quincenal (+15d)
                         </button>
                         <button
                           type="button"
                           onClick={() => setAboneNextDate(addDaysToIso(30))}
-                          className="px-2 py-0.5 rounded bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          className="px-2 py-1 rounded-lg bg-white border border-amber-300 font-bold text-amber-900 hover:bg-amber-100 cursor-pointer"
                         >
-                          +30 días
+                          Mensual (+30d)
+                        </button>
+                      </div>
+
+                      <input
+                        type="date"
+                        value={aboneNextDate}
+                        onChange={(e) => setAboneNextDate(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 text-xs font-black text-slate-900"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Nota / Referencia de Ruta (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej. Abono cobrado en ruta por visita domiciliaria..."
+                      value={aboneNotes}
+                      onChange={(e) => setAboneNotes(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSaleForAbone(null)}
+                      className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingAbone}
+                      className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs cursor-pointer shadow-md"
+                    >
+                      {isSubmittingAbone ? 'Guardando...' : 'Confirmar Abono'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== MODAL 2: CONFIGURAR CUENTA, COBRADOR DE RUTA, ALERTA Y BITÁCORA ==================== */}
+          {selectedSaleForControl && controlModalAnalytics && (
+            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden max-h-[92vh] flex flex-col">
+                <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                  <div>
+                    <h3 className="font-black text-sm sm:text-base">
+                      Configuración de Cuenta por Cobrar, Ruta y Alertas
+                    </h3>
+                    <p className="text-xs text-slate-300">
+                      {selectedSaleForControl.customerName} • {selectedSaleForControl.saleNumber} •
+                      Venta Total: L. {controlModalAnalytics.totalSale.toFixed(2)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSaleForControl(null)}
+                    className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="p-5 overflow-y-auto space-y-5">
+                  <form onSubmit={handleSaveCreditAccountControl} className="space-y-4">
+                    {/* Section A: Assign Route Collector & Customer Route Address */}
+                    <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3">
+                      <span className="text-xs font-black text-amber-950 block">
+                        1. Asignación de Cobrador de Ruta y Dirección del Cliente
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Cobrador de Ruta Responsable
+                          </label>
+                          <select
+                            value={ctrlAssignedCollectorUsername}
+                            onChange={(e) => setCtrlAssignedCollectorUsername(e.target.value)}
+                            className="w-full px-2.5 py-2 rounded-xl bg-white border border-amber-300 text-xs font-bold text-slate-900"
+                          >
+                            <option value="">-- Todos / Sin cobrador específico --</option>
+                            {collaboratorUsers.map((col) => (
+                              <option key={col.id} value={col.username}>
+                                🛵 {col.name} (@{col.username})
+                                {col.salesPermissions?.isRouteCollector ? ' [Cobrador Activo]' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <label className="block text-[11px] font-bold text-slate-700">
+                              Dirección / Zona / Ruta del Cliente
+                            </label>
+                            <button
+                              type="button"
+                              disabled={isCapturingInlineGps}
+                              onClick={() => handleCaptureInlineGpsForField('control')}
+                              className="px-2 py-0.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] flex items-center gap-1 cursor-pointer"
+                            >
+                              <MapPin className="w-3 h-3" />
+                              <span>
+                                {isCapturingInlineGps ? 'Obteniendo GPS...' : '📍 Usar mi GPS aquí'}
+                              </span>
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Ej. Barrio El Centro, 2 cuadras al sur..."
+                            value={ctrlCustomerAddressOrRoute}
+                            onChange={(e) => setCtrlCustomerAddressOrRoute(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 text-xs font-semibold text-slate-900"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section B: Cost & Profit Configuration (Admin only) */}
+                    {canViewCostsAndProfits && (
+                      <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-slate-900">
+                            2. Precio Costo vs. Ganancia de la Cuenta
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCtrlCustomCost(
+                                controlModalAnalytics.calculatedItemsCost.toFixed(2)
+                              )
+                            }
+                            className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer"
+                          >
+                            Usar costo de inventario (L.{' '}
+                            {controlModalAnalytics.calculatedItemsCost.toFixed(2)})
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                              Precio Costo Total de la Venta (L.)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={ctrlCustomCost}
+                              onChange={(e) => setCtrlCustomCost(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-black text-slate-900 tabular-nums"
+                            />
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-white border border-emerald-200 flex flex-col justify-center">
+                            <span className="text-[10px] font-bold uppercase text-slate-400">
+                              Ganancia Total al Liquidar
+                            </span>
+                            <span className="text-base font-black text-emerald-700 tabular-nums">
+                              L.{' '}
+                              {Math.max(
+                                0,
+                                controlModalAnalytics.totalSale - (parseFloat(ctrlCustomCost) || 0)
+                              ).toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Section C: Payment Alert & Schedule */}
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                      <span className="text-xs font-black text-slate-900 block">
+                        3. Programación de Fecha Estimada y Alerta de Próximo Cobro
+                      </span>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Fecha Próximo Cobro
+                          </label>
+                          <input
+                            type="date"
+                            value={ctrlNextPaymentDate}
+                            onChange={(e) => setCtrlNextPaymentDate(e.target.value)}
+                            className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Frecuencia Estimada
+                          </label>
+                          <select
+                            value={ctrlFrequency}
+                            onChange={(e) =>
+                              setCtrlFrequency(
+                                e.target.value as
+                                  | 'weekly'
+                                  | 'biweekly'
+                                  | 'monthly'
+                                  | 'daily'
+                                  | 'custom'
+                              )
+                            }
+                            className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                          >
+                            <option value="daily">Diario (cada día)</option>
+                            <option value="weekly">Semanal (cada 7 días)</option>
+                            <option value="biweekly">Quincenal (cada 15 días)</option>
+                            <option value="monthly">Mensual (cada 30 días)</option>
+                            <option value="custom">Personalizado</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Cuota Acordada (L.)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Ej. 500.00"
+                            value={ctrlInstallmentAmount}
+                            onChange={(e) => setCtrlInstallmentAmount(e.target.value)}
+                            className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900 tabular-nums"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span className="text-slate-500 font-semibold">Programar rápido:</span>
+                        <button
+                          type="button"
+                          onClick={() => setCtrlNextPaymentDate(getLocalTodayIso())}
+                          className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        >
+                          Hoy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCtrlNextPaymentDate(addDaysToIso(7));
+                            setCtrlFrequency('weekly');
+                          }}
+                          className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        >
+                          +7 días (Semanal)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCtrlNextPaymentDate(addDaysToIso(15));
+                            setCtrlFrequency('biweekly');
+                          }}
+                          className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        >
+                          +15 días (Quincenal)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCtrlNextPaymentDate(addDaysToIso(30));
+                            setCtrlFrequency('monthly');
+                          }}
+                          className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        >
+                          +30 días (Mensual)
+                        </button>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Acuerdos / Notas de Cobro
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ej. Paga los sábados al cobrador en ruta..."
+                          value={ctrlNotes}
+                          onChange={(e) => setCtrlNotes(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={isSavingControl}
+                        className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black text-xs cursor-pointer shadow-sm"
+                      >
+                        {isSavingControl
+                          ? 'Guardando...'
+                          : 'Guardar Configuración de Cuenta y Ruta'}
+                      </button>
+                    </div>
+                  </form>
+
+                  {/* Section D: Send & Log Collection Notices */}
+                  <div className="border-t border-slate-200 pt-4 space-y-3">
+                    <span className="text-xs font-black text-slate-900 block">
+                      4. Enviar Aviso de Cobro por WhatsApp o Registrar Visita
+                    </span>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSendCreditReminderWhatsApp(selectedSaleForControl, 'preventive')
+                        }
+                        className="p-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 font-bold text-[11px] text-center cursor-pointer"
+                      >
+                        Recordatorio Preventivo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSendCreditReminderWhatsApp(selectedSaleForControl, 'due_today')
+                        }
+                        className="p-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-bold text-[11px] text-center cursor-pointer"
+                      >
+                        Aviso: Hoy Toca Abono
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSendCreditReminderWhatsApp(selectedSaleForControl, 'overdue')
+                        }
+                        className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-900 font-bold text-[11px] text-center cursor-pointer"
+                      >
+                        Aviso Cobro Vencido
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSendCreditReminderWhatsApp(selectedSaleForControl, 'statement')
+                        }
+                        className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-[11px] text-center cursor-pointer"
+                      >
+                        Estado de Cuenta
+                      </button>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                      <span className="text-[11px] font-bold text-slate-700 block">
+                        Registrar aviso realizado por Llamada o Visita en Ruta:
+                      </span>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <select
+                          value={manualNoticeChannel}
+                          onChange={(e) =>
+                            setManualNoticeChannel(e.target.value as 'call' | 'in_person')
+                          }
+                          className="px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700"
+                        >
+                          <option value="call">Llamada Telefónica</option>
+                          <option value="in_person">Visita en Ruta / En Persona</option>
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="Ej. Se visitó y confirmó abono para mañana..."
+                          value={manualNoticeNote}
+                          onChange={(e) => setManualNoticeNote(e.target.value)}
+                          className="flex-1 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const note =
+                              manualNoticeNote.trim() ||
+                              (manualNoticeChannel === 'call'
+                                ? 'Aviso de cobro vía llamada telefónica'
+                                : 'Visita de cobro en persona');
+                            await recordCollectionNoticeLog(
+                              selectedSaleForControl,
+                              'preventive',
+                              manualNoticeChannel,
+                              note
+                            );
+                            setManualNoticeNote('');
+                            showToast('Aviso de cobro registrado en la bitácora.', 'success');
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer whitespace-nowrap"
+                        >
+                          Registrar Aviso
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <span className="text-[11px] font-bold uppercase text-slate-400 block">
+                        Bitácora de Avisos Enviados ({controlModalAnalytics.notices.length})
+                      </span>
+                      {controlModalAnalytics.notices.length === 0 ? (
+                        <p className="text-xs text-slate-400 italic">
+                          Aún no se han registrado avisos de cobro para esta cuenta.
+                        </p>
+                      ) : (
+                        <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                          {controlModalAnalytics.notices.map((ntc) => (
+                            <div
+                              key={ntc.id}
+                              className="p-2 rounded-lg bg-slate-50 border border-slate-200 text-[11px] flex items-start justify-between gap-2"
+                            >
+                              <div>
+                                <span className="font-bold text-slate-800">
+                                  {ntc.channel === 'whatsapp'
+                                    ? 'WhatsApp'
+                                    : ntc.channel === 'call'
+                                    ? 'Llamada'
+                                    : 'En Persona'}{' '}
+                                  — {ntc.note || ntc.notes}
+                                </span>
+                                <span className="text-slate-400 block">
+                                  Por: {ntc.sentBy} · {ntc.date || ntc.dateFormatted}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== MODAL 3: PROGRAMAR SIGUIENTE COBRO RÁPIDO (COBRADOR / ADMIN) ==================== */}
+          {selectedSaleForQuickSchedule && (
+            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+                <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
+                  <div>
+                    <h3 className="font-black text-sm sm:text-base flex items-center gap-1.5">
+                      <Calendar className="w-4 h-4 text-amber-400" />
+                      <span>Programar Siguiente Cobro</span>
+                    </h3>
+                    <p className="text-xs text-slate-300">
+                      {selectedSaleForQuickSchedule.customerName} •{' '}
+                      {selectedSaleForQuickSchedule.saleNumber}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSaleForQuickSchedule(null)}
+                    className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleQuickScheduleNextDate} className="p-5 space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Frecuencia Estimada de Cobro
+                    </label>
+                    <select
+                      value={quickScheduleFrequency}
+                      onChange={(e) => {
+                        const freq = e.target.value as
+                          | 'daily'
+                          | 'weekly'
+                          | 'biweekly'
+                          | 'monthly'
+                          | 'custom';
+                        setQuickScheduleFrequency(freq);
+                        if (freq !== 'custom') {
+                          setQuickScheduleDate(calculateNextDateByFrequency(freq));
+                        }
+                      }}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-300 text-xs font-bold text-slate-900"
+                    >
+                      <option value="daily">Diario (+1 día)</option>
+                      <option value="weekly">Semanal (+7 días)</option>
+                      <option value="biweekly">Quincenal (+15 días)</option>
+                      <option value="monthly">Mensual (+30 días)</option>
+                      <option value="custom">Fecha personalizada</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold text-slate-700">
+                        Fecha del Próximo Cobro
+                      </label>
+                      <div className="flex items-center gap-1 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => setQuickScheduleDate(addDaysToIso(1))}
+                          className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-bold text-slate-700 cursor-pointer"
+                        >
+                          Mañana
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQuickScheduleDate(addDaysToIso(7))}
+                          className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-bold text-slate-700 cursor-pointer"
+                        >
+                          +7d
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQuickScheduleDate(addDaysToIso(15))}
+                          className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-bold text-slate-700 cursor-pointer"
+                        >
+                          +15d
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQuickScheduleDate(addDaysToIso(30))}
+                          className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-bold text-slate-700 cursor-pointer"
+                        >
+                          +30d
                         </button>
                       </div>
                     </div>
                     <input
                       type="date"
-                      value={aboneNextDate}
-                      onChange={(e) => setAboneNextDate(e.target.value)}
-                      className="w-full px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-800"
+                      required
+                      value={quickScheduleDate}
+                      onChange={(e) => setQuickScheduleDate(e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-xl bg-white border border-amber-300 text-sm font-black text-slate-900"
                     />
                   </div>
-                )}
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Nota / Referencia (Opcional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ej. Abono quincenal en efectivo..."
-                    value={aboneNotes}
-                    onChange={(e) => setAboneNotes(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Motivo / Nota para el Administrador (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej. Cliente pidió que pasemos el próximo sábado..."
+                      value={quickScheduleNote}
+                      onChange={(e) => setQuickScheduleNote(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                    />
+                  </div>
 
-                <div className="flex items-center gap-2 pt-2">
+                  <div className="flex items-center gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSaleForQuickSchedule(null)}
+                      className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingQuickSchedule}
+                      className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs cursor-pointer shadow-md"
+                    >
+                      {isSavingQuickSchedule ? 'Guardando...' : 'Guardar Fecha de Cobro'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== MODAL 4: ENVIAR ALERTA DE COBRADOR AL ADMINISTRADOR ==================== */}
+          {selectedSaleForCollectorAlert && (
+            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+                <div className="px-5 py-4 bg-rose-600 text-white flex items-center justify-between">
+                  <div>
+                    <h3 className="font-black text-sm sm:text-base flex items-center gap-1.5">
+                      <Bell className="w-4 h-4" />
+                      <span>Enviar Alerta al Administrador</span>
+                    </h3>
+                    <p className="text-xs text-rose-100">
+                      Cliente: {selectedSaleForCollectorAlert.customerName} •{' '}
+                      {selectedSaleForCollectorAlert.saleNumber}
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setSelectedSaleForAbone(null)}
-                    className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                    onClick={() => setSelectedSaleForCollectorAlert(null)}
+                    className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
                   >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSubmittingAbone}
-                    className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs cursor-pointer shadow-md"
-                  >
-                    {isSubmittingAbone ? 'Guardando...' : 'Confirmar Abono'}
+                    <X className="w-5 h-5" />
                   </button>
                 </div>
-              </form>
-            </div>
-          </div>
-        )}
 
-        {/* ==================== MODAL 2: CONFIGURAR COSTO, ALERTA Y BITÁCORA DE AVISOS ==================== */}
-        {selectedSaleForControl && controlModalAnalytics && (
-          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden max-h-[92vh] flex flex-col">
-              <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
-                <div>
-                  <h3 className="font-black text-sm sm:text-base">
-                    Control de Costo, Alerta de Cobro y Avisos
-                  </h3>
-                  <p className="text-xs text-slate-300">
-                    {selectedSaleForControl.customerName} • {selectedSaleForControl.saleNumber} •
-                    Venta Total: L. {controlModalAnalytics.totalSale.toFixed(2)}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedSaleForControl(null)}
-                  className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="p-5 overflow-y-auto space-y-5">
-                <form onSubmit={handleSaveCreditAccountControl} className="space-y-4">
-                  {/* Section A: Cost & Profit Configuration */}
-                  <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-slate-900">
-                        1. Precio Costo vs. Ganancia de la Cuenta
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setCtrlCustomCost(controlModalAnalytics.calculatedItemsCost.toFixed(2))
-                        }
-                        className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer"
-                      >
-                        Usar costo de inventario (L.{' '}
-                        {controlModalAnalytics.calculatedItemsCost.toFixed(2)})
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Precio Costo Total de la Venta (L.)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={ctrlCustomCost}
-                          onChange={(e) => setCtrlCustomCost(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-black text-slate-900 tabular-nums"
-                        />
-                      </div>
-                      <div className="p-2.5 rounded-xl bg-white border border-emerald-200 flex flex-col justify-center">
-                        <span className="text-[10px] font-bold uppercase text-slate-400">
-                          Ganancia Total al Liquidar
-                        </span>
-                        <span className="text-base font-black text-emerald-700 tabular-nums">
-                          L.{' '}
-                          {Math.max(
-                            0,
-                            controlModalAnalytics.totalSale - (parseFloat(ctrlCustomCost) || 0)
-                          ).toFixed(2)}
-                        </span>
-                        <span className="text-[10px] text-slate-500">
-                          Al abonar L. {(parseFloat(ctrlCustomCost) || 0).toFixed(2)}, el resto es
-                          100% ganancia
-                        </span>
-                      </div>
+                <form onSubmit={handleSendCollectorAlertToAdmin} className="p-5 space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Selecciona el Tipo de Alerta de Ruta
+                    </label>
+                    <div className="space-y-1.5">
+                      {(
+                        [
+                          {
+                            id: 'customer_absent',
+                            label: '🏠 Cliente no se encontraba en domicilio / negocio',
+                          },
+                          {
+                            id: 'promise_to_pay',
+                            label: '🤝 Cliente prometió pagar en nueva fecha acordada',
+                          },
+                          {
+                            id: 'rescheduled_date',
+                            label: '📅 Solicita reprogramar fecha de cobro',
+                          },
+                          {
+                            id: 'refused_or_issue',
+                            label: '🚨 Inconveniente / Negativa de pago (Requiere Admin)',
+                          },
+                          {
+                            id: 'custom_report',
+                            label: '📝 Otro reporte o nota para el Administrador',
+                          },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setCollectorAlertType(opt.id)}
+                          className={`w-full text-left px-3 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                            collectorAlertType === opt.id
+                              ? 'bg-rose-50 border-rose-500 text-rose-950 shadow-2xs'
+                              : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-white'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
                     </div>
                   </div>
 
-                  {/* Section B: Payment Alert & Schedule */}
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-                    <span className="text-xs font-black text-slate-900 block">
-                      2. Programación de Alerta de Próximo Abono
-                    </span>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Programar / Actualizar Fecha de Siguiente Cobro (Opcional)
+                    </label>
+                    <input
+                      type="date"
+                      value={collectorAlertNextDate}
+                      onChange={(e) => setCollectorAlertNextDate(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                    />
+                  </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Fecha Próximo Abono
-                        </label>
-                        <input
-                          type="date"
-                          value={ctrlNextPaymentDate}
-                          onChange={(e) => setCtrlNextPaymentDate(e.target.value)}
-                          className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
-                        />
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Detalle o Mensaje para el Administrador
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Escribe cualquier detalle de la visita o acuerdo con el cliente..."
+                      value={collectorAlertMessage}
+                      onChange={(e) => setCollectorAlertMessage(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSaleForCollectorAlert(null)}
+                      className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSendingCollectorAlert}
+                      className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs cursor-pointer shadow-md"
+                    >
+                      {isSendingCollectorAlert ? 'Enviando...' : '📣 Enviar Alerta al Admin'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== MODAL 5: PANEL DEL ADMINISTRADOR PARA CONFIGURAR COBRADORES Y REGLAS ==================== */}
+          {showAdminCollectorConfigModal && isAdminSession && (
+            <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden max-h-[92vh] flex flex-col">
+                <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                  <div>
+                    <h3 className="font-black text-sm sm:text-base flex items-center gap-2">
+                      <Settings className="w-4 h-4 text-amber-400" />
+                      <span>Panel del Administrador: Configurar Cobradores de Ruta y Reglas</span>
+                    </h3>
+                    <p className="text-xs text-slate-300">
+                      Elige a qué colaborador(es) activar el Panel Exclusivo de Cliente por Cobrar y configura las reglas automáticas.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminCollectorConfigModal(false)}
+                    className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="p-5 overflow-y-auto space-y-5">
+                  {/* 1. Collaborator Route Collector Selector */}
+                  <div className="space-y-3">
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-black text-slate-900">
+                        1. Colaboradores con Panel Exclusivo de Cobrador de Ruta
+                      </h4>
+                      <p className="text-xs text-slate-500">
+                        Activa el interruptor en el colaborador que desees convertir en Cobrador de Ruta. Podrá ver las deudas, registrar abonos, programar cobros y enviarte alertas.
+                      </p>
+                    </div>
+
+                    {collaboratorUsers.length === 0 ? (
+                      <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500">
+                        No tienes colaboradores creados aún. Ve al módulo <strong>Usuarios</strong> en el menú lateral para crear un colaborador.
                       </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {collaboratorUsers.map((collab) => {
+                          const isEnabled =
+                            Boolean(collab.salesPermissions?.isRouteCollector) ||
+                            (routeCollectorConfig.enabledCollectorUsernames || []).includes(
+                              collab.username.trim().toLowerCase()
+                            );
+                          const scope =
+                            collab.salesPermissions?.routeCollectorScope === 'assigned'
+                              ? 'assigned'
+                              : 'all';
 
+                          return (
+                            <div
+                              key={collab.id}
+                              className={`p-3.5 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                                isEnabled
+                                  ? 'bg-amber-50/70 border-amber-300'
+                                  : 'bg-slate-50 border-slate-200'
+                              }`}
+                            >
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-black text-slate-900 text-xs sm:text-sm">
+                                    {collab.name}
+                                  </span>
+                                  <span className="font-mono text-xs text-slate-500">
+                                    @{collab.username}
+                                  </span>
+                                  {isEnabled && (
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black">
+                                      🛵 Cobrador Activo
+                                    </span>
+                                  )}
+                                </div>
+                                {isEnabled && (
+                                  <div className="flex items-center gap-2 mt-2 text-[11px]">
+                                    <span className="text-slate-600 font-semibold">Alcance:</span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleToggleCollaboratorRouteCollector(collab, true, 'all')
+                                      }
+                                      className={`px-2 py-0.5 rounded-md font-bold border cursor-pointer ${
+                                        scope === 'all'
+                                          ? 'bg-slate-900 text-white border-slate-900'
+                                          : 'bg-white text-slate-700 border-slate-300'
+                                      }`}
+                                    >
+                                      Ver todas las deudas
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleToggleCollaboratorRouteCollector(
+                                          collab,
+                                          true,
+                                          'assigned'
+                                        )
+                                      }
+                                      className={`px-2 py-0.5 rounded-md font-bold border cursor-pointer ${
+                                        scope === 'assigned'
+                                          ? 'bg-slate-900 text-white border-slate-900'
+                                          : 'bg-white text-slate-700 border-slate-300'
+                                      }`}
+                                    >
+                                      Solo deudas asignadas a él
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleToggleCollaboratorRouteCollector(collab, !isEnabled, scope)
+                                }
+                                className={`px-3.5 py-2 rounded-xl font-black text-xs cursor-pointer transition-all shrink-0 ${
+                                  isEnabled
+                                    ? 'bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300'
+                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                                }`}
+                              >
+                                {isEnabled
+                                  ? 'Quitar Panel de Cobrador'
+                                  : '🛵 Activar Panel Cobrador'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. Global Automatic Rules */}
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                    <h4 className="text-xs sm:text-sm font-black text-slate-900">
+                      2. Reglas Automáticas de Programación de Cobro y Alertas
+                    </h4>
+
+                    <label className="flex items-start gap-2.5 cursor-pointer text-xs">
+                      <input
+                        type="checkbox"
+                        checked={routeCollectorConfig.autoCalculateNextDateOnAbone}
+                        onChange={async (e) => {
+                          await onSavePOSFinanceData({
+                            ...posFinanceData,
+                            routeCollectorConfig: {
+                              ...routeCollectorConfig,
+                              autoCalculateNextDateOnAbone: e.target.checked,
+                            },
+                            updatedAt: Date.now(),
+                          });
+                        }}
+                        className="mt-0.5 rounded text-amber-600 w-4 h-4"
+                      />
+                      <div>
+                        <span className="font-bold text-slate-900 block">
+                          Programar automáticamente el siguiente cobro según la fecha/frecuencia estimada
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Al registrar un abono, la app calcula y propone automáticamente la siguiente fecha (+1 día Diario, +7 días Semanal, +15 días Quincenal, +30 días Mensual).
+                        </span>
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2.5 cursor-pointer text-xs">
+                      <input
+                        type="checkbox"
+                        checked={routeCollectorConfig.notifyAdminOnEveryAbone}
+                        onChange={async (e) => {
+                          await onSavePOSFinanceData({
+                            ...posFinanceData,
+                            routeCollectorConfig: {
+                              ...routeCollectorConfig,
+                              notifyAdminOnEveryAbone: e.target.checked,
+                            },
+                            updatedAt: Date.now(),
+                          });
+                        }}
+                        className="mt-0.5 rounded text-amber-600 w-4 h-4"
+                      />
+                      <div>
+                        <span className="font-bold text-slate-900 block">
+                          Recibir alerta automática cada vez que el Cobrador registre un Abono o reprograme fecha
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Envía una notificación inmediata a tu Bandeja de Alertas de Administrador.
+                        </span>
+                      </div>
+                    </label>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Frecuencia de Cobro
+                          Frecuencia Predeterminada para Nuevas Deudas
                         </label>
                         <select
-                          value={ctrlFrequency}
-                          onChange={(e) =>
-                            setCtrlFrequency(
-                              e.target.value as
-                                | 'weekly'
-                                | 'biweekly'
-                                | 'monthly'
-                                | 'daily'
-                                | 'custom'
-                            )
-                          }
-                          className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                          value={routeCollectorConfig.defaultPaymentFrequency}
+                          onChange={async (e) => {
+                            await onSavePOSFinanceData({
+                              ...posFinanceData,
+                              routeCollectorConfig: {
+                                ...routeCollectorConfig,
+                                defaultPaymentFrequency: e.target.value as
+                                  | 'daily'
+                                  | 'weekly'
+                                  | 'biweekly'
+                                  | 'monthly',
+                              },
+                              updatedAt: Date.now(),
+                            });
+                          }}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
                         >
-                          <option value="daily">Diario</option>
+                          <option value="daily">Diario (cada día)</option>
                           <option value="weekly">Semanal (cada 7 días)</option>
                           <option value="biweekly">Quincenal (cada 15 días)</option>
                           <option value="monthly">Mensual (cada 30 días)</option>
-                          <option value="custom">Personalizado</option>
                         </select>
                       </div>
 
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Cuota Acordada (L.)
+                          Días de Anticipación para Alerta de Próximo Cobro
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="15"
+                          value={routeCollectorConfig.upcomingAlertDays}
+                          onChange={async (e) => {
+                            const days = Math.max(1, Math.min(15, parseInt(e.target.value, 10) || 3));
+                            await onSavePOSFinanceData({
+                              ...posFinanceData,
+                              routeCollectorConfig: {
+                                ...routeCollectorConfig,
+                                upcomingAlertDays: days,
+                              },
+                              updatedAt: Date.now(),
+                            });
+                          }}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminCollectorConfigModal(false)}
+                    className="px-5 py-2 rounded-xl bg-slate-900 text-white font-black text-xs cursor-pointer"
+                  >
+                    Listo
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== MODAL 6: BANDEJA DE ALERTAS DE COBRADORES DE RUTA (ADMIN) ==================== */}
+          {showAdminAlertsModal && isAdminSession && (
+            <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden max-h-[92vh] flex flex-col">
+                <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                  <div>
+                    <h3 className="font-black text-sm sm:text-base flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-rose-400" />
+                      <span>
+                        Bandeja de Alertas de Cobradores de Ruta ({routeCollectorAlerts.length})
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-300">
+                      Reportes de abonos cobrados, reprogramaciones y alertas enviadas por tus colaboradores.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminAlertsModal(false)}
+                    className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="p-5 overflow-y-auto space-y-3 flex-1">
+                  {routeCollectorAlerts.length === 0 ? (
+                    <div className="p-8 text-center text-slate-400 text-xs">
+                      Aún no se han recibido alertas de los cobradores de ruta.
+                    </div>
+                  ) : (
+                    <>
+                      {unreadCollectorAlertsCount > 0 && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={handleMarkAllCollectorAlertsReviewed}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer"
+                          >
+                            ✓ Marcar todas como revisadas ({unreadCollectorAlertsCount})
+                          </button>
+                        </div>
+                      )}
+                      {routeCollectorAlerts.map((al) => (
+                        <div
+                          key={al.id}
+                          className={`p-3.5 rounded-xl border space-y-1.5 ${
+                            al.status === 'unread'
+                              ? 'bg-rose-50/70 border-rose-300'
+                              : 'bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <span className="text-xs font-black text-slate-900 block">
+                                {al.title}
+                              </span>
+                              <span className="text-[11px] font-bold text-slate-600">
+                                Cliente: <strong>{al.customerName}</strong> ({al.saleNumber}) · Cobrador:{' '}
+                                <strong className="text-amber-800">{al.collectorName}</strong>
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 shrink-0">
+                              {al.dateFormatted}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-700">{al.message}</p>
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {al.scheduledNextDate && (
+                                <span className="text-[11px] font-bold text-amber-800">
+                                  📅 Siguiente cobro: {al.scheduledNextDate}
+                                </span>
+                              )}
+                              {typeof al.gpsLat === 'number' && typeof al.gpsLng === 'number' && (
+                                <a
+                                  href={`https://www.google.com/maps/dir/?api=1&destination=${al.gpsLat},${al.gpsLng}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1"
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                  <span>Ver Punto GPS en Google Maps</span>
+                                </a>
+                              )}
+                            </div>
+                            {al.status === 'unread' ? (
+                              <button
+                                type="button"
+                                onClick={() => handleMarkCollectorAlertReviewed(al.id)}
+                                className="px-2.5 py-1 rounded-lg bg-white border border-rose-300 hover:bg-rose-100 text-rose-800 font-bold text-[11px] cursor-pointer"
+                              >
+                                Marcar como revisada
+                              </button>
+                            ) : (
+                              <span className="text-[10px] font-bold text-emerald-700">
+                                ✓ Revisada
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== MODAL 7: CREAR NUEVA DEUDA DE ARTÍCULO PARA CLIENTE ==================== */}
+          {showCreateDebtModal && (
+            <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden max-h-[92vh] flex flex-col">
+                <div className="px-5 py-4 bg-emerald-700 text-white flex items-center justify-between shrink-0">
+                  <div>
+                    <h3 className="font-black text-sm sm:text-base">
+                      Crear Nueva Deuda de Artículo para Cliente
+                    </h3>
+                    <p className="text-xs text-emerald-100">
+                      Registra una cuenta por cobrar, programa su fecha estimada de cobro y asígnala a un Cobrador de Ruta.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateDebtModal(false)}
+                    className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form
+                  onSubmit={handleCreateDirectCreditDebt}
+                  className="p-5 overflow-y-auto space-y-4"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Nombre del Cliente *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ej. María Fernanda López"
+                        value={newDebtCustomerName}
+                        onChange={(e) => setNewDebtCustomerName(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Teléfono / WhatsApp
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej. 9988-7766"
+                        value={newDebtCustomerPhone}
+                        onChange={(e) => setNewDebtCustomerPhone(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <label className="block text-xs font-bold text-slate-700">
+                        Dirección / Ruta del Cliente (Para el Cobrador)
+                      </label>
+                      <button
+                        type="button"
+                        disabled={isCapturingInlineGps}
+                        onClick={() => handleCaptureInlineGpsForField('new_debt')}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        <span>
+                          {isCapturingInlineGps
+                            ? 'Capturando GPS...'
+                            : '📍 Obtener Dirección con GPS Aquí'}
+                        </span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Ej. Col. Kennedy, bloque 4, casa 12..."
+                      value={newDebtCustomerAddress}
+                      onChange={(e) => setNewDebtCustomerAddress(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                    />
+                    {newDebtGpsCoords && (
+                      <p className="text-[11px] font-bold text-emerald-700 mt-1">
+                        ✓ Coordenadas GPS listas: {newDebtGpsCoords.lat.toFixed(6)},{' '}
+                        {newDebtGpsCoords.lng.toFixed(6)}
+                        {newDebtGpsCoords.accuracy ? ` (±${newDebtGpsCoords.accuracy}m)` : ''}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Seleccionar Artículo del Inventario (Opcional)
+                      </label>
+                      <select
+                        value={newDebtProductId}
+                        onChange={(e) => {
+                          const pid = e.target.value;
+                          setNewDebtProductId(pid);
+                          const prod = inventory.find((p) => p.id === pid);
+                          if (prod) {
+                            setNewDebtCustomItemName(prod.name);
+                            setNewDebtTotalAmount(
+                              String(prod.creditPrice && prod.creditPrice > 0 ? prod.creditPrice : prod.price)
+                            );
+                          }
+                        }}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                      >
+                        <option value="">-- Elegir artículo o escribir abajo --</option>
+                        {inventory.slice(0, 300).map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} ({p.code}) — Contado: L. {p.price.toFixed(2)}
+                            {p.creditPrice ? ` / Crédito: L. ${p.creditPrice.toFixed(2)}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Descripción del Artículo / Concepto de la Deuda *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ej. Televisor Smart 50 pulg / Refrigeradora..."
+                        value={newDebtCustomItemName}
+                        onChange={(e) => setNewDebtCustomItemName(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Valor Total al Crédito (L.) *
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="1"
+                          required
+                          placeholder="0.00"
+                          value={newDebtTotalAmount}
+                          onChange={(e) => setNewDebtTotalAmount(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-amber-400 text-sm font-black text-slate-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Prima / Abono Inicial (L.)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="0.00"
+                          value={newDebtInitialAbono}
+                          onChange={(e) => setNewDebtInitialAbono(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-bold text-slate-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Cuota por Cobro (L.)
                         </label>
                         <input
                           type="number"
                           step="0.01"
                           min="0"
                           placeholder="Ej. 500.00"
-                          value={ctrlInstallmentAmount}
-                          onChange={(e) => setCtrlInstallmentAmount(e.target.value)}
-                          className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900 tabular-nums"
+                          value={newDebtInstallmentAmount}
+                          onChange={(e) => setNewDebtInstallmentAmount(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-bold text-slate-900"
                         />
                       </div>
                     </div>
+                  </div>
 
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                      <span className="text-slate-500 font-semibold">Programar rápido:</span>
-                      <button
-                        type="button"
-                        onClick={() => setCtrlNextPaymentDate(getLocalTodayIso())}
-                        className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
-                      >
-                        Hoy
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCtrlNextPaymentDate(addDaysToIso(7));
-                          setCtrlFrequency('weekly');
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Frecuencia de Cobro
+                      </label>
+                      <select
+                        value={newDebtFrequency}
+                        onChange={(e) => {
+                          const f = e.target.value as 'daily' | 'weekly' | 'biweekly' | 'monthly';
+                          setNewDebtFrequency(f);
+                          setNewDebtNextPaymentDate(calculateNextDateByFrequency(f));
                         }}
-                        className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900"
                       >
-                        +7 días (Semanal)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCtrlNextPaymentDate(addDaysToIso(15));
-                          setCtrlFrequency('biweekly');
-                        }}
-                        className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
-                      >
-                        +15 días (Quincenal)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCtrlNextPaymentDate(addDaysToIso(30));
-                          setCtrlFrequency('monthly');
-                        }}
-                        className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
-                      >
-                        +30 días (Mensual)
-                      </button>
+                        <option value="daily">Diario (+1d)</option>
+                        <option value="weekly">Semanal (+7d)</option>
+                        <option value="biweekly">Quincenal (+15d)</option>
+                        <option value="monthly">Mensual (+30d)</option>
+                      </select>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        Acuerdos / Notas de Cobro
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Fecha 1er Cobro
                       </label>
                       <input
-                        type="text"
-                        placeholder="Ej. Paga los días 15 y 30 de cada mes por transferencia..."
-                        value={ctrlNotes}
-                        onChange={(e) => setCtrlNotes(e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs"
+                        type="date"
+                        value={newDebtNextPaymentDate}
+                        onChange={(e) => setNewDebtNextPaymentDate(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900"
                       />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Asignar Cobrador de Ruta
+                      </label>
+                      <select
+                        value={newDebtCollectorUsername}
+                        onChange={(e) => setNewDebtCollectorUsername(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-amber-300 bg-amber-50/50 text-xs font-bold text-slate-900"
+                      >
+                        <option value="">-- Todos / Sin asignar --</option>
+                        {collaboratorUsers.map((col) => (
+                          <option key={col.id} value={col.username}>
+                            🛵 {col.name} (@{col.username})
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 
-                  <div className="flex justify-end">
+                  <div className="flex items-center justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateDebtModal(false)}
+                      className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
                     <button
                       type="submit"
-                      disabled={isSavingControl}
-                      className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black text-xs cursor-pointer shadow-sm"
+                      disabled={isCreatingDebt}
+                      className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs cursor-pointer shadow-md"
                     >
-                      {isSavingControl
-                        ? 'Guardando...'
-                        : 'Guardar Costo y Configuración de Alerta'}
+                      {isCreatingDebt ? 'Creando Cuenta...' : 'Crear Cuenta por Cobrar'}
                     </button>
                   </div>
                 </form>
-
-                {/* Section C: Send & Log Collection Notices */}
-                <div className="border-t border-slate-200 pt-4 space-y-3">
-                  <span className="text-xs font-black text-slate-900 block">
-                    3. Enviar Aviso de Cobro por WhatsApp (Se registra automáticamente)
-                  </span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleSendCreditReminderWhatsApp(selectedSaleForControl, 'preventive')
-                      }
-                      className="p-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 font-bold text-[11px] text-center cursor-pointer"
-                    >
-                      Recordatorio Preventivo
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleSendCreditReminderWhatsApp(selectedSaleForControl, 'due_today')
-                      }
-                      className="p-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-bold text-[11px] text-center cursor-pointer"
-                    >
-                      Aviso: Hoy Toca Abono
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleSendCreditReminderWhatsApp(selectedSaleForControl, 'overdue')
-                      }
-                      className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-900 font-bold text-[11px] text-center cursor-pointer"
-                    >
-                      Aviso Cobro Vencido
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleSendCreditReminderWhatsApp(selectedSaleForControl, 'statement')
-                      }
-                      className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-[11px] text-center cursor-pointer"
-                    >
-                      Estado de Cuenta
-                    </button>
-                  </div>
-
-                  {/* Manual Notice Logger (Call / In-person) */}
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                    <span className="text-[11px] font-bold text-slate-700 block">
-                      Registrar aviso realizado por Llamada o En Persona:
-                    </span>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <select
-                        value={manualNoticeChannel}
-                        onChange={(e) =>
-                          setManualNoticeChannel(e.target.value as 'call' | 'in_person')
-                        }
-                        className="px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700"
-                      >
-                        <option value="call">Llamada Telefónica</option>
-                        <option value="in_person">Visita / En Persona</option>
-                      </select>
-                      <input
-                        type="text"
-                        placeholder="Ej. Se le llamó y confirmó que pasa mañana a las 3pm..."
-                        value={manualNoticeNote}
-                        onChange={(e) => setManualNoticeNote(e.target.value)}
-                        className="flex-1 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs"
-                      />
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const note =
-                            manualNoticeNote.trim() ||
-                            (manualNoticeChannel === 'call'
-                              ? 'Aviso de cobro vía llamada telefónica'
-                              : 'Aviso de cobro en persona');
-                          await recordCollectionNoticeLog(
-                            selectedSaleForControl,
-                            'preventive',
-                            manualNoticeChannel,
-                            note
-                          );
-                          setManualNoticeNote('');
-                          showToast('Aviso de cobro registrado en la bitácora.', 'success');
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer whitespace-nowrap"
-                      >
-                        Registrar Aviso
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Notices History */}
-                  <div className="space-y-1.5">
-                    <span className="text-[11px] font-bold uppercase text-slate-400 block">
-                      Bitácora de Avisos Enviados ({controlModalAnalytics.notices.length})
-                    </span>
-                    {controlModalAnalytics.notices.length === 0 ? (
-                      <p className="text-xs text-slate-400 italic">
-                        Aún no se han registrado avisos de cobro para esta cuenta.
-                      </p>
-                    ) : (
-                      <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
-                        {controlModalAnalytics.notices.map((ntc) => (
-                          <div
-                            key={ntc.id}
-                            className="p-2 rounded-lg bg-slate-50 border border-slate-200 text-[11px] flex items-start justify-between gap-2"
-                          >
-                            <div>
-                              <span className="font-bold text-slate-800">
-                                {ntc.channel === 'whatsapp'
-                                  ? 'WhatsApp'
-                                  : ntc.channel === 'call'
-                                  ? 'Llamada'
-                                  : 'En Persona'}{' '}
-                                — {ntc.note || ntc.notes}
-                              </span>
-                              <span className="text-slate-400 block">
-                                Por: {ntc.sentBy} · {ntc.date || ntc.dateFormatted}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Multi-Printer & PDF Modal for Individual Customer Credit Statement */}
-        {creditSaleForPrintModal && (
+          {/* ==================== MODAL 8: CAPTURAR DIRECCIÓN Y UBICACIÓN GPS DEL CLIENTE EN SITIO ==================== */}
+          {selectedSaleForGpsModal && (
+            <CustomerGpsLocationModal
+              sale={selectedSaleForGpsModal}
+              controlMeta={creditAccountControls[selectedSaleForGpsModal.id]}
+              currentUserName={currentUserName}
+              onClose={() => setSelectedSaleForGpsModal(null)}
+              onSaveGpsAddress={async (payload) => {
+                await handleSaveCustomerGpsAddress(selectedSaleForGpsModal, payload);
+              }}
+              showToast={showToast}
+            />
+          )}
+
+          {/* Multi-Printer & PDF Modal for Individual Customer Credit Statement */}
+          {creditSaleForPrintModal && (
+            <PrintFormatModal
+              isOpen={Boolean(creditSaleForPrintModal)}
+              onClose={() => setCreditSaleForPrintModal(null)}
+              title={`Estado de Cuenta — ${creditSaleForPrintModal.customerName || 'Cliente'}`}
+              subtitle={`Factura ${creditSaleForPrintModal.saleNumber}`}
+              storeSettings={storeSettings}
+              buildHtml={(fmt) =>
+                buildCreditStatementHtml(creditSaleForPrintModal, storeSettings, fmt)
+              }
+              onDownloadPdf={() =>
+                downloadCreditStatementPdf(creditSaleForPrintModal, storeSettings)
+              }
+              showToast={showToast}
+            />
+          )}
+
+          {/* Multi-Printer & PDF Modal for Credit Portfolio Report */}
           <PrintFormatModal
-            isOpen={Boolean(creditSaleForPrintModal)}
-            onClose={() => setCreditSaleForPrintModal(null)}
-            title={`Estado de Cuenta — ${creditSaleForPrintModal.customerName || 'Cliente'}`}
-            subtitle={`Factura ${creditSaleForPrintModal.saleNumber}`}
+            isOpen={showCreditPortfolioPrintModal}
+            onClose={() => setShowCreditPortfolioPrintModal(false)}
+            title="Reporte General de Cartera de Cuentas por Cobrar"
+            subtitle={`${filteredCreditSales.length} cuentas filtradas`}
             storeSettings={storeSettings}
-            buildHtml={(fmt) => buildCreditStatementHtml(creditSaleForPrintModal, storeSettings, fmt)}
-            onDownloadPdf={() => downloadCreditStatementPdf(creditSaleForPrintModal, storeSettings)}
+            defaultFormat="letter"
+            buildHtml={(fmt) =>
+              buildCreditPortfolioReportHtml(filteredCreditSales, storeSettings, fmt)
+            }
+            onDownloadPdf={() =>
+              downloadCreditPortfolioReportPdf(filteredCreditSales, storeSettings)
+            }
             showToast={showToast}
           />
-        )}
 
-        {/* Multi-Printer & PDF Modal for Credit Portfolio Report */}
-        <PrintFormatModal
-          isOpen={showCreditPortfolioPrintModal}
-          onClose={() => setShowCreditPortfolioPrintModal(false)}
-          title="Reporte General de Cartera de Cuentas por Cobrar"
-          subtitle={`${filteredCreditSales.length} cuentas filtradas`}
-          storeSettings={storeSettings}
-          defaultFormat="letter"
-          buildHtml={(fmt) => buildCreditPortfolioReportHtml(filteredCreditSales, storeSettings, fmt)}
-          onDownloadPdf={() => downloadCreditPortfolioReportPdf(filteredCreditSales, storeSettings)}
-          showToast={showToast}
-        />
-
-        {/* Modal for Credit Lease Contract with Retention of Title (Contrato de Arrendamiento con Reserva de Dominio) */}
-        {selectedSaleForContract && isStoreCreditContractEnabled(storeSettings) && (
-          <CreditContractModal
-            sale={
-              creditAccountControls[selectedSaleForContract.id]?.creditContract
-                ? {
-                    ...selectedSaleForContract,
-                    creditContract: creditAccountControls[selectedSaleForContract.id].creditContract,
-                  }
-                : selectedSaleForContract
-            }
-            storeSettings={storeSettings}
-            controlMeta={creditAccountControls[selectedSaleForContract.id]}
-            inventory={inventory}
-            onClose={() => setSelectedSaleForContract(null)}
-            onSaveContract={async (updatedContract: CreditContractData) => {
-              const existingMeta: CreditAccountControlMeta =
-                creditAccountControls[selectedSaleForContract.id] || {
+          {/* Modal for Credit Lease Contract with Retention of Title (Contrato de Arrendamiento con Reserva de Dominio) */}
+          {selectedSaleForContract && isStoreCreditContractEnabled(storeSettings) && (
+            <CreditContractModal
+              sale={
+                creditAccountControls[selectedSaleForContract.id]?.creditContract
+                  ? {
+                      ...selectedSaleForContract,
+                      creditContract:
+                        creditAccountControls[selectedSaleForContract.id].creditContract,
+                    }
+                  : selectedSaleForContract
+              }
+              storeSettings={storeSettings}
+              controlMeta={creditAccountControls[selectedSaleForContract.id]}
+              inventory={inventory}
+              onClose={() => setSelectedSaleForContract(null)}
+              onSaveContract={async (updatedContract: CreditContractData) => {
+                const existingMeta: CreditAccountControlMeta =
+                  creditAccountControls[selectedSaleForContract.id] || {
+                    saleId: selectedSaleForContract.id,
+                  };
+                const nextMeta: CreditAccountControlMeta = {
+                  ...existingMeta,
                   saleId: selectedSaleForContract.id,
+                  installmentAmount: updatedContract.installmentValue,
+                  numberOfInstallments: updatedContract.numberOfInstallments,
+                  nextPaymentDate:
+                    updatedContract.firstPaymentDate || existingMeta.nextPaymentDate,
+                  creditContract: updatedContract,
                 };
-              const nextMeta: CreditAccountControlMeta = {
-                ...existingMeta,
-                saleId: selectedSaleForContract.id,
-                installmentAmount: updatedContract.installmentValue,
-                numberOfInstallments: updatedContract.numberOfInstallments,
-                nextPaymentDate: updatedContract.firstPaymentDate || existingMeta.nextPaymentDate,
-                creditContract: updatedContract,
-              };
-              await onSavePOSFinanceData({
-                ...posFinanceData,
-                creditAccountControls: {
-                  ...creditAccountControls,
-                  [selectedSaleForContract.id]: nextMeta,
-                },
-                updatedAt: Date.now(),
-              });
-              setSelectedSaleForContract((prev) =>
-                prev ? { ...prev, creditContract: updatedContract } : null
-              );
-              showToast('Contrato de Crédito actualizado y guardado en la cuenta.', 'success');
-            }}
-          />
-        )}
+                await onSavePOSFinanceData({
+                  ...posFinanceData,
+                  creditAccountControls: {
+                    ...creditAccountControls,
+                    [selectedSaleForContract.id]: nextMeta,
+                  },
+                  updatedAt: Date.now(),
+                });
+                setSelectedSaleForContract((prev) =>
+                  prev ? { ...prev, creditContract: updatedContract } : null
+                );
+                showToast('Contrato de Crédito actualizado y guardado en la cuenta.', 'success');
+              }}
+            />
+          )}
         </div>
       </div>
     );

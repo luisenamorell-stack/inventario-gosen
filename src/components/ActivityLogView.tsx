@@ -25,6 +25,7 @@ import {
   FileSpreadsheet,
   X,
   RotateCcw,
+  UtensilsCrossed,
 } from 'lucide-react';
 
 interface ActivityLogViewProps {
@@ -131,6 +132,12 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({
           label: 'Ventas (POS)',
           color: 'bg-emerald-50 text-emerald-800 border-emerald-200',
           icon: ShoppingCart,
+        };
+      case 'restaurant':
+        return {
+          label: 'Restaurante / Mesas',
+          color: 'bg-orange-50 text-orange-800 border-orange-200',
+          icon: UtensilsCrossed,
         };
       case 'inventory':
         return {
@@ -466,6 +473,7 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({
             >
               <option value="all">Módulo: Todos</option>
               <option value="sales">Ventas (POS)</option>
+              <option value="restaurant">Restaurante / Mesas</option>
               <option value="inventory">Inventario</option>
               <option value="purchases">Compras</option>
               <option value="audit">Auditoría</option>

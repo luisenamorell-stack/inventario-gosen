@@ -392,6 +392,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
               collabUser.salesPermissions?.canViewCostsAndProfits !== undefined
                 ? collabUser.salesPermissions.canViewCostsAndProfits
                 : effectiveRole === 'admin',
+            isRouteCollector: Boolean(collabUser.salesPermissions?.isRouteCollector),
+            routeCollectorScope:
+              collabUser.salesPermissions?.routeCollectorScope === 'assigned'
+                ? 'assigned'
+                : 'all',
             ...(effectiveRole !== 'admin' && assignedWarehouseIds.length > 0
               ? { allowedWarehouseIds: assignedWarehouseIds }
               : {}),
