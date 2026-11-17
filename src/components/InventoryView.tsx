@@ -1231,58 +1231,69 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
-                    <div>
-                      <span className="text-sm font-bold text-slate-400 block">
-                        Costo: L. {Number(item.cost || 0).toFixed(2)}
+                  {/* Precios y Ganancia en fila completa para evitar saltos de línea */}
+                  <div className="pt-2 border-t border-slate-100 space-y-1 text-xs">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                      <span className="text-sm font-bold text-slate-400 whitespace-nowrap tabular-nums">
+                        Costo: L.&nbsp;{Number(item.cost || 0).toFixed(2)}
                       </span>
+
                       {(Number(item.discount) || 0) > 0 ? (
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-sm text-emerald-700">
-                              L. {Math.max(0, Number(item.price || 0) - Number(item.discount || 0)).toFixed(2)}
-                            </span>
-                            <span className="text-[10px] line-through text-slate-400">
-                              L. {Number(item.price || 0).toFixed(2)}
-                            </span>
-                          </div>
+                        <div className="flex items-center gap-1.5 whitespace-nowrap tabular-nums">
+                          <span className="font-bold text-sm text-emerald-700 whitespace-nowrap">
+                            Contado: L.&nbsp;{Math.max(0, Number(item.price || 0) - Number(item.discount || 0)).toFixed(2)}
+                          </span>
+                          <span className="text-[11px] line-through text-slate-400 whitespace-nowrap">
+                            L.&nbsp;{Number(item.price || 0).toFixed(2)}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="font-bold text-sm text-emerald-700 whitespace-nowrap tabular-nums">
+                          Contado: L.&nbsp;{Number(item.price || 0).toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {(Number(item.discount) || 0) > 0 && (
                           <button
                             type="button"
                             onClick={() => handleOpenQuickDiscount(item)}
-                            className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded cursor-pointer hover:bg-rose-100"
+                            className="inline-flex items-center gap-1 text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded cursor-pointer hover:bg-rose-100 whitespace-nowrap"
                           >
                             <Tag className="w-2.5 h-2.5" />
-                            <span>Desc: -L. {Number(item.discount).toFixed(2)}</span>
+                            <span>Desc: -L.&nbsp;{Number(item.discount).toFixed(2)}</span>
                           </button>
-                        </div>
-                      ) : (
-                        <span className="font-bold text-slate-900 text-sm text-emerald-700">
-                          Contado: L. {Number(item.price || 0).toFixed(2)}
-                        </span>
-                      )}
-                      {Number(item.creditPrice) > 0 && (
-                        <div className="text-[10px] font-extrabold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded inline-block mt-0.5">
-                          Crédito: L. {Number(item.creditPrice).toFixed(2)}
-                        </div>
-                      )}
+                        )}
+                        {Number(item.creditPrice) > 0 && (
+                          <span className="text-[10px] font-extrabold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded inline-block whitespace-nowrap">
+                            Crédito: L.&nbsp;{Number(item.creditPrice).toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+
                       {(() => {
                         const finalP = Math.max(0, Number(item.price || 0) - Number(item.discount || 0));
                         const unitProfit = finalP - Number(item.cost || 0);
                         const margin = finalP > 0 ? (unitProfit / finalP) * 100 : 0;
                         return (
                           <div
-                            className={`text-[10px] font-bold mt-0.5 ${
+                            className={`text-[11px] font-bold whitespace-nowrap tabular-nums ${
                               unitProfit >= 0 ? 'text-teal-700' : 'text-rose-600'
                             }`}
                           >
-                            Ganancia: {unitProfit >= 0 ? '+' : ''}L. {unitProfit.toFixed(2)} ({margin.toFixed(0)}%)
+                            Ganancia: {unitProfit >= 0 ? '+' : ''}L.&nbsp;{unitProfit.toFixed(2)} ({margin.toFixed(0)}%)
                           </div>
                         );
                       })()}
                     </div>
+                  </div>
 
-                    <div className="text-center">
-                      <span className="text-[10px] text-slate-400 block mb-0.5">Stock</span>
+                  {/* Controles de Stock y Acciones */}
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-semibold text-slate-400">Stock:</span>
                       {inlineStockItemCode === item.code ? (
                         <div className="inline-flex items-center gap-1 bg-white border-2 border-emerald-500 rounded-lg px-1.5 py-0.5 shadow-sm">
                           <input
@@ -1327,7 +1338,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             onClick={() =>
                               handleQuickAdjustStock(item, Math.max(0, stockNumber - 1))
                             }
-                            className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center cursor-pointer active:scale-95"
+                            className="w-7 h-7 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center cursor-pointer active:scale-95"
                             title="Restar 1 al stock"
                           >
                             -
@@ -1338,7 +1349,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                               setInlineStockItemCode(item.code);
                               setInlineStockInputValue(String(stockNumber));
                             }}
-                            className={`inline-flex items-center px-2 py-0.5 rounded-md font-bold text-xs cursor-pointer border border-transparent hover:border-emerald-400 ${stockColor}`}
+                            className={`inline-flex items-center px-2.5 py-1 rounded-md font-bold text-xs cursor-pointer border border-transparent hover:border-emerald-400 tabular-nums ${stockColor}`}
                             title="Toca para escribir nuevo stock exacto"
                           >
                             {stockNumber} uds
@@ -1346,7 +1357,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                           <button
                             type="button"
                             onClick={() => handleQuickAdjustStock(item, stockNumber + 1)}
-                            className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center cursor-pointer active:scale-95"
+                            className="w-7 h-7 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center cursor-pointer active:scale-95"
                             title="Sumar 1 al stock"
                           >
                             +
@@ -1841,8 +1852,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
       {/* Modal Agregar / Editar Producto */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/55 flex items-center justify-center z-50 backdrop-blur-xs p-3 sm:p-4">
-          <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl border border-slate-200 flex flex-col max-h-[92vh] overflow-hidden">
+        <div className="fixed inset-0 bg-slate-900/55 flex items-center justify-center z-50 backdrop-blur-xs px-3 pt-3 pb-6 sm:p-4">
+          <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl border border-slate-200 flex flex-col max-h-[84dvh] sm:max-h-[90dvh] overflow-hidden">
             {/* Modal Header + Integrated Tab Bar */}
             <div className="px-5 sm:px-6 pt-5 pb-0 border-b border-slate-200 bg-white shrink-0">
               <div className="flex items-start justify-between gap-4">
@@ -1954,14 +1965,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               </div>
             </div>
 
-            {/* Form Wrapper with Scrollable Tab Body + Sticky Footer */}
+            {/* Scrollable Form Body */}
             <form
               id="product-modal-form"
               onSubmit={handleSubmit}
               noValidate
-              className="flex flex-col flex-1 min-h-0"
+              className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-5"
             >
-              <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-6">
                 {/* TAB 1: GENERAL Y PRECIOS */}
                 {productModalTab === 'general' && (
                   <div className="space-y-6">
@@ -3026,60 +3036,61 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     </div>
                   </div>
                 )}
-              </div>
-
-              {/* Sticky Modal Footer */}
-              <div className="px-5 sm:px-6 py-4 border-t border-slate-200 bg-slate-50/80 flex flex-wrap items-center justify-between gap-3 shrink-0">
-                {editingProduct ? (
-                  <button
-                    type="button"
-                    onClick={() => setItemToDelete(editingProduct)}
-                    className="px-3.5 py-2 text-rose-600 hover:bg-rose-50 rounded-xl transition-colors text-xs sm:text-sm font-semibold flex items-center gap-1.5 cursor-pointer"
-                    title="Eliminar este artículo"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    <span>Eliminar</span>
-                  </button>
-                ) : (
-                  <div />
-                )}
-
-                <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-2.5 ml-auto">
-                  <button
-                    type="button"
-                    onClick={handleCloseModal}
-                    className="px-4 py-2.5 text-slate-600 font-semibold hover:bg-slate-200/60 rounded-xl transition-colors text-xs sm:text-sm cursor-pointer"
-                  >
-                    Cancelar
-                  </button>
-                  {!editingProduct && (
-                    <button
-                      type="button"
-                      disabled={isUploadingImage || isUploadingImage2}
-                      onClick={() => saveFormProduct(true)}
-                      className="px-4 py-2.5 bg-white text-slate-800 border border-slate-300 font-semibold hover:bg-slate-100 rounded-xl transition-colors text-xs sm:text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-                      title="Guarda este artículo y abre automáticamente el siguiente código SKU corrido ascendente"
-                    >
-                      <Barcode className="w-4 h-4 text-emerald-600" />
-                      <span>Guardar y Crear Siguiente</span>
-                    </button>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={isUploadingImage || isUploadingImage2}
-                    className="px-5 py-2.5 bg-emerald-600 text-white font-semibold hover:bg-emerald-700 rounded-xl shadow-xs transition-colors text-xs sm:text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                  >
-                    <span>
-                      {isUploadingImage || isUploadingImage2
-                        ? 'Subiendo Foto...'
-                        : editingProduct
-                        ? 'Guardar Cambios'
-                        : 'Guardar Artículo'}
-                    </span>
-                  </button>
-                </div>
-              </div>
             </form>
+
+            {/* Pinned Modal Footer (Always Visible & Tappable Above Mobile Chrome) */}
+            <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-2 sm:gap-3 shrink-0">
+              {editingProduct ? (
+                <button
+                  type="button"
+                  onClick={() => setItemToDelete(editingProduct)}
+                  className="px-3 py-2.5 min-h-[42px] text-rose-600 hover:bg-rose-50 rounded-xl transition-colors text-xs sm:text-sm font-semibold flex items-center gap-1.5 cursor-pointer"
+                  title="Eliminar este artículo"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Eliminar</span>
+                </button>
+              ) : (
+                <div className="hidden sm:block" />
+              )}
+
+              <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={handleCloseModal}
+                  className="px-3.5 sm:px-4 py-2.5 min-h-[42px] text-slate-600 font-semibold hover:bg-slate-200/60 rounded-xl transition-colors text-xs sm:text-sm cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                {!editingProduct && (
+                  <button
+                    type="button"
+                    disabled={isUploadingImage || isUploadingImage2}
+                    onClick={() => saveFormProduct(true)}
+                    className="px-3.5 sm:px-4 py-2.5 min-h-[42px] bg-white text-slate-800 border border-slate-300 font-semibold hover:bg-slate-100 rounded-xl transition-colors text-xs sm:text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                    title="Guarda este artículo y abre automáticamente el siguiente código SKU corrido ascendente"
+                  >
+                    <Barcode className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="hidden sm:inline">Guardar y Crear Siguiente</span>
+                    <span className="sm:hidden">Guardar +1</span>
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  form="product-modal-form"
+                  disabled={isUploadingImage || isUploadingImage2}
+                  className="px-4 sm:px-5 py-2.5 min-h-[42px] bg-emerald-600 text-white font-semibold hover:bg-emerald-700 rounded-xl shadow-xs transition-colors text-xs sm:text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <span>
+                    {isUploadingImage || isUploadingImage2
+                      ? 'Subiendo...'
+                      : editingProduct
+                      ? 'Guardar Cambios'
+                      : 'Guardar Artículo'}
+                  </span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
