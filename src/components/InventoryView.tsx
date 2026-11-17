@@ -1233,7 +1233,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
                   <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
                     <div>
-                      <span className="text-[10px] text-slate-400 block -mb-0.5">
+                      <span className="text-sm font-bold text-slate-400 block">
                         Costo: L. {Number(item.cost || 0).toFixed(2)}
                       </span>
                       {(Number(item.discount) || 0) > 0 ? (
@@ -1572,7 +1572,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                         {item.supplier || '-'}
                       </td>
                       <td className="p-4 border-b border-slate-100 text-right">
-                        <p className="text-xs text-slate-400">
+                        <p className="text-sm font-semibold text-slate-400">
                           C: L {Number(item.cost || 0).toFixed(2)}
                         </p>
                         {(Number(item.discount) || 0) > 0 ? (
