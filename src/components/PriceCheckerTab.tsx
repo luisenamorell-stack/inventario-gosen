@@ -4,6 +4,7 @@ import {
   StoreWarehousesData,
   WarehouseLocation,
   PriceCheckerCreditHandoff,
+  StoreSettings,
 } from '../types';
 import {
   getProductStockInWarehouse,
@@ -12,6 +13,13 @@ import {
 import { playSound } from '../utils/audio';
 import { AdaptiveImage } from './AdaptiveImage';
 import { getProductColors, resolveColorSwatch } from '../utils/productColorUtils';
+import {
+  CreditQuoteSharePayload,
+  downloadCreditQuoteImage,
+  downloadCreditQuotePdf,
+  generateCreditQuoteImageBlob,
+  buildCreditQuoteWhatsAppText,
+} from '../utils/printPdfService';
 import {
   Barcode,
   Camera,
@@ -30,12 +38,17 @@ import {
   TrendingUp,
   Receipt,
   ArrowRight,
+  Image as ImageIcon,
+  FileText,
+  MessageCircle,
+  Loader2,
 } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeScannerState } from 'html5-qrcode';
 
 interface PriceCheckerTabProps {
   inventory: Product[];
   warehousesData?: StoreWarehousesData;
+  storeSettings?: StoreSettings;
   hasWarehousesModule?: boolean;
   canUseCreditCalculator?: boolean;
   canSendToPos?: boolean;
@@ -68,6 +81,7 @@ const loadDefaultCreditMarkupPct = (): number => {
 export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
   inventory,
   warehousesData,
+  storeSettings,
   hasWarehousesModule = true,
   canUseCreditCalculator = false,
   canSendToPos = false,
@@ -89,6 +103,9 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
   const [creditInstallments, setCreditInstallments] = useState<number>(12);
   const [creditDownPct, setCreditDownPct] = useState<number | null>(20);
   const [creditDownPaymentInput, setCreditDownPaymentInput] = useState<string>('0');
+  const [isExportingQuote, setIsExportingQuote] = useState<'image' | 'pdf' | 'whatsapp' | null>(
+    null
+  );
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1110,52 +1127,263 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                             </div>
                           </div>
 
-                          {/* One-Click Handoff to POS with Stipulated Credit Terms */}
-                          {canSendToPos && onSendToPosCredit && (
-                            <div className="pt-2 border-t border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                              <p className="text-[11px] text-slate-600 tabular-nums">
-                                Plan listo:{' '}
-                                <strong className="text-slate-900">
-                                  L&nbsp;{effectiveCreditTotal.toFixed(2)}
-                                </strong>{' '}
-                                · Prima{' '}
-                                <strong className="text-slate-900">
-                                  L&nbsp;{safeDownPayment.toFixed(2)}
-                                </strong>{' '}
-                                · {safeInstallments} cuotas {frequencyConfig.label.toLowerCase()} de{' '}
-                                <strong className="text-amber-900">
-                                  L&nbsp;{quotaAmount.toFixed(2)}
-                                </strong>
-                              </p>
+                          {/* Plan Listo: Quote Export (PNG Image, PDF, WhatsApp) & One-Click POS Handoff */}
+                          <div className="pt-2.5 border-t border-amber-200/80 space-y-2.5">
+                            <p className="text-[11px] text-slate-600 tabular-nums">
+                              Plan listo:{' '}
+                              <strong className="text-slate-900">
+                                L&nbsp;{effectiveCreditTotal.toFixed(2)}
+                              </strong>{' '}
+                              · Prima{' '}
+                              <strong className="text-slate-900">
+                                L&nbsp;{safeDownPayment.toFixed(2)}
+                              </strong>{' '}
+                              · {safeInstallments} cuotas {frequencyConfig.label.toLowerCase()} de{' '}
+                              <strong className="text-amber-900">
+                                L&nbsp;{quotaAmount.toFixed(2)}
+                              </strong>
+                            </p>
+
+                            <div className="flex flex-wrap items-center gap-2">
                               <button
                                 type="button"
-                                onClick={() => {
+                                disabled={isExportingQuote !== null}
+                                onClick={async () => {
                                   if (effectiveCreditTotal <= 0) {
                                     showToast(
-                                      'Ingresa un precio total al crédito válido antes de pasar a POS.',
+                                      'Ingresa un precio total al crédito válido antes de generar la imagen.',
                                       'warning'
                                     );
                                     return;
                                   }
-                                  playSound('click');
-                                  onSendToPosCredit({
-                                    id: `pc_credit_${Date.now()}`,
+                                  const payload: CreditQuoteSharePayload = {
                                     product: selectedProduct,
+                                    storeSettings,
                                     creditTotal: Number(effectiveCreditTotal.toFixed(2)),
                                     downPayment: Number(safeDownPayment.toFixed(2)),
+                                    financedBalance: Number(financedBalance.toFixed(2)),
                                     frequency: creditFrequency,
                                     installments: safeInstallments,
                                     installmentAmount: Number(quotaAmount.toFixed(2)),
-                                  });
+                                  };
+                                  setIsExportingQuote('image');
+                                  try {
+                                    playSound('click');
+                                    await downloadCreditQuoteImage(payload);
+                                    showToast(
+                                      'Imagen de cotización con foto del artículo descargada.',
+                                      'success'
+                                    );
+                                  } catch {
+                                    showToast(
+                                      'No se pudo generar la imagen de cotización.',
+                                      'error'
+                                    );
+                                  } finally {
+                                    setIsExportingQuote(null);
+                                  }
                                 }}
-                                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-sm shrink-0"
+                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 active:scale-[0.99] text-white text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-sm"
                               >
-                                <Receipt className="w-4 h-4 text-emerald-400 shrink-0" />
-                                <span>Ir a POS y Facturar al Crédito</span>
-                                <ArrowRight className="w-4 h-4 shrink-0" />
+                                {isExportingQuote === 'image' ? (
+                                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                                ) : (
+                                  <ImageIcon className="w-4 h-4 shrink-0" />
+                                )}
+                                <span>Imagen</span>
                               </button>
+
+                              <button
+                                type="button"
+                                disabled={isExportingQuote !== null}
+                                onClick={async () => {
+                                  if (effectiveCreditTotal <= 0) {
+                                    showToast(
+                                      'Ingresa un precio total al crédito válido antes de generar el PDF.',
+                                      'warning'
+                                    );
+                                    return;
+                                  }
+                                  const payload: CreditQuoteSharePayload = {
+                                    product: selectedProduct,
+                                    storeSettings,
+                                    creditTotal: Number(effectiveCreditTotal.toFixed(2)),
+                                    downPayment: Number(safeDownPayment.toFixed(2)),
+                                    financedBalance: Number(financedBalance.toFixed(2)),
+                                    frequency: creditFrequency,
+                                    installments: safeInstallments,
+                                    installmentAmount: Number(quotaAmount.toFixed(2)),
+                                  };
+                                  setIsExportingQuote('pdf');
+                                  try {
+                                    playSound('click');
+                                    await downloadCreditQuotePdf(payload);
+                                    showToast(
+                                      'Cotización en PDF generada y descargada con éxito.',
+                                      'success'
+                                    );
+                                  } catch {
+                                    showToast(
+                                      'No se pudo generar la cotización en PDF.',
+                                      'error'
+                                    );
+                                  } finally {
+                                    setIsExportingQuote(null);
+                                  }
+                                }}
+                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 active:scale-[0.99] text-white text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-sm"
+                              >
+                                {isExportingQuote === 'pdf' ? (
+                                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                                ) : (
+                                  <FileText className="w-4 h-4 shrink-0" />
+                                )}
+                                <span>PDF</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={isExportingQuote !== null}
+                                onClick={async () => {
+                                  if (effectiveCreditTotal <= 0) {
+                                    showToast(
+                                      'Ingresa un precio total al crédito válido antes de enviar por WhatsApp.',
+                                      'warning'
+                                    );
+                                    return;
+                                  }
+                                  const payload: CreditQuoteSharePayload = {
+                                    product: selectedProduct,
+                                    storeSettings,
+                                    creditTotal: Number(effectiveCreditTotal.toFixed(2)),
+                                    downPayment: Number(safeDownPayment.toFixed(2)),
+                                    financedBalance: Number(financedBalance.toFixed(2)),
+                                    frequency: creditFrequency,
+                                    installments: safeInstallments,
+                                    installmentAmount: Number(quotaAmount.toFixed(2)),
+                                  };
+                                  const whatsappText = buildCreditQuoteWhatsAppText(payload);
+                                  setIsExportingQuote('whatsapp');
+                                  try {
+                                    playSound('click');
+                                    const { blob, filename } =
+                                      await generateCreditQuoteImageBlob(payload);
+
+                                    let sharedNatively = false;
+                                    if (
+                                      typeof navigator !== 'undefined' &&
+                                      typeof navigator.share === 'function' &&
+                                      typeof File !== 'undefined'
+                                    ) {
+                                      const quoteFile = new File([blob], filename, {
+                                        type: 'image/png',
+                                      });
+                                      if (
+                                        !navigator.canShare ||
+                                        navigator.canShare({ files: [quoteFile] })
+                                      ) {
+                                        try {
+                                          await navigator.share({
+                                            files: [quoteFile],
+                                            title: `Cotización al Crédito - ${selectedProduct.name}`,
+                                            text: whatsappText,
+                                          });
+                                          sharedNatively = true;
+                                        } catch (shareErr: unknown) {
+                                          if (
+                                            shareErr instanceof Error &&
+                                            shareErr.name === 'AbortError'
+                                          ) {
+                                            return;
+                                          }
+                                        }
+                                      }
+                                    }
+
+                                    if (!sharedNatively) {
+                                      const imgUrl = URL.createObjectURL(blob);
+                                      const link = document.createElement('a');
+                                      link.href = imgUrl;
+                                      link.download = filename;
+                                      document.body.appendChild(link);
+                                      link.click();
+                                      document.body.removeChild(link);
+                                      window.setTimeout(() => URL.revokeObjectURL(imgUrl), 2000);
+
+                                      const waLink = document.createElement('a');
+                                      waLink.href = `https://api.whatsapp.com/send?text=${encodeURIComponent(
+                                        whatsappText
+                                      )}`;
+                                      waLink.target = '_blank';
+                                      waLink.rel = 'noopener noreferrer';
+                                      document.body.appendChild(waLink);
+                                      waLink.click();
+                                      document.body.removeChild(waLink);
+
+                                      showToast(
+                                        'Se descargó la imagen de la cotización y se abrió WhatsApp. Adjunta la imagen en el chat.',
+                                        'success'
+                                      );
+                                    }
+                                  } catch {
+                                    const waFallback = document.createElement('a');
+                                    waFallback.href = `https://api.whatsapp.com/send?text=${encodeURIComponent(
+                                      whatsappText
+                                    )}`;
+                                    waFallback.target = '_blank';
+                                    waFallback.rel = 'noopener noreferrer';
+                                    document.body.appendChild(waFallback);
+                                    waFallback.click();
+                                    document.body.removeChild(waFallback);
+                                    showToast(
+                                      'Se abrió WhatsApp con el plan de crédito listo para enviar.',
+                                      'info'
+                                    );
+                                  } finally {
+                                    setIsExportingQuote(null);
+                                  }
+                                }}
+                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 active:scale-[0.99] text-white text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-sm"
+                              >
+                                {isExportingQuote === 'whatsapp' ? (
+                                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                                ) : (
+                                  <MessageCircle className="w-4 h-4 shrink-0" />
+                                )}
+                                <span>Enviar WhatsApp</span>
+                              </button>
+
+                              {canSendToPos && onSendToPosCredit && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (effectiveCreditTotal <= 0) {
+                                      showToast(
+                                        'Ingresa un precio total al crédito válido antes de pasar a POS.',
+                                        'warning'
+                                      );
+                                      return;
+                                    }
+                                    playSound('click');
+                                    onSendToPosCredit({
+                                      id: `pc_credit_${Date.now()}`,
+                                      product: selectedProduct,
+                                      creditTotal: Number(effectiveCreditTotal.toFixed(2)),
+                                      downPayment: Number(safeDownPayment.toFixed(2)),
+                                      frequency: creditFrequency,
+                                      installments: safeInstallments,
+                                      installmentAmount: Number(quotaAmount.toFixed(2)),
+                                    });
+                                  }}
+                                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-sm sm:ml-auto"
+                                >
+                                  <Receipt className="w-4 h-4 text-emerald-400 shrink-0" />
+                                  <span>Ir a POS y Facturar al Crédito</span>
+                                  <ArrowRight className="w-4 h-4 shrink-0" />
+                                </button>
+                              )}
                             </div>
-                          )}
+                          </div>
                         </div>
                       </div>
                     ) : canUseCreditCalculator ? (

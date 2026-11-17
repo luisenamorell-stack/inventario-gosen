@@ -3711,6 +3711,7 @@ export const App: React.FC = () => {
               <PriceCheckerTab
                 inventory={inventory}
                 warehousesData={warehousesData}
+                storeSettings={storeSettings}
                 hasWarehousesModule={companyAllowedModules.includes('warehouses')}
                 canUseCreditCalculator={canUsePriceCheckerCreditCalc}
                 canSendToPos={isSuperAdminSession || allowedTabsList.includes('sales')}

@@ -6639,6 +6639,878 @@ export function buildTablePreBillHtml(
   `;
 }
 
+// ============================================================================
+// COTIZACIÓN DE CRÉDITO AL CLIENTE (IMAGEN PNG, PDF Y WHATSAPP)
+// ============================================================================
+export interface CreditQuoteSharePayload {
+  product: Product;
+  storeSettings?: StoreSettings;
+  creditTotal: number;
+  downPayment: number;
+  financedBalance: number;
+  frequency: 'weekly' | 'biweekly' | 'monthly';
+  installments: number;
+  installmentAmount: number;
+}
+
+function getQuoteFrequencyLabels(frequency: 'weekly' | 'biweekly' | 'monthly'): {
+  singular: string;
+  plural: string;
+} {
+  if (frequency === 'weekly') return { singular: 'Semanal', plural: 'Semanales' };
+  if (frequency === 'monthly') return { singular: 'Mensual', plural: 'Mensuales' };
+  return { singular: 'Quincenal', plural: 'Quincenales' };
+}
+
+function sanitizeQuoteFileSlug(text: string): string {
+  return (
+    (text || 'articulo')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 36) || 'articulo'
+  );
+}
+
+async function loadImageForCreditQuote(
+  url?: string,
+  maxDim = 680
+): Promise<{ dataUrl: string; width: number; height: number } | null> {
+  const cleanUrl = (url || '').trim();
+  if (!cleanUrl) return null;
+
+  const loadViaImageElement = (
+    src: string,
+    useCors: boolean
+  ): Promise<{ dataUrl: string; width: number; height: number } | null> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const timer = window.setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve(null);
+        }
+      }, 4500);
+
+      try {
+        const img = new Image();
+        if (useCors && !src.startsWith('data:')) {
+          img.crossOrigin = 'anonymous';
+        }
+        img.onload = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          try {
+            const w = img.naturalWidth || img.width || 400;
+            const h = img.naturalHeight || img.height || 400;
+            const scale = Math.min(1, maxDim / Math.max(1, w, h));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(w * scale));
+            canvas.height = Math.max(1, Math.round(h * scale));
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(null);
+              return;
+            }
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL('image/png');
+            resolve({ dataUrl, width: canvas.width, height: canvas.height });
+          } catch {
+            resolve(null);
+          }
+        };
+        img.onerror = () => {
+          if (!settled) {
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(null);
+          }
+        };
+        img.src = src;
+      } catch {
+        if (!settled) {
+          settled = true;
+          window.clearTimeout(timer);
+          resolve(null);
+        }
+      }
+    });
+
+  if (cleanUrl.startsWith('data:image/')) {
+    return loadViaImageElement(cleanUrl, false);
+  }
+
+  const direct = await loadViaImageElement(cleanUrl, true);
+  if (direct) return direct;
+
+  // Fallback via fetch -> blob -> FileReader if remote server allows CORS fetch
+  try {
+    const controller = new AbortController();
+    const abortTimer = window.setTimeout(() => controller.abort(), 4000);
+    const resp = await fetch(cleanUrl, { mode: 'cors', signal: controller.signal });
+    window.clearTimeout(abortTimer);
+    if (!resp.ok) return null;
+    const blob = await resp.blob();
+    const blobDataUrl = await new Promise<string | null>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () =>
+        resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+    if (!blobDataUrl) return null;
+    return loadViaImageElement(blobDataUrl, false);
+  } catch {
+    return null;
+  }
+}
+
+function drawCanvasRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+): void {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+
+function wrapCanvasTextLines(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxLines: number
+): string[] {
+  const words = (text || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [''];
+  const lines: string[] = [];
+  let current = words[0];
+
+  for (let i = 1; i < words.length; i++) {
+    const test = `${current} ${words[i]}`;
+    if (ctx.measureText(test).width <= maxWidth) {
+      current = test;
+    } else {
+      lines.push(current);
+      current = words[i];
+      if (lines.length >= maxLines) break;
+    }
+  }
+  if (lines.length < maxLines && current) {
+    lines.push(current);
+  }
+  if (lines.length === maxLines) {
+    let last = lines[maxLines - 1];
+    while (ctx.measureText(`${last}...`).width > maxWidth && last.length > 4) {
+      last = last.slice(0, -1).trim();
+    }
+    if (words.join(' ').length > lines.join(' ').length) {
+      lines[maxLines - 1] = `${last}...`;
+    }
+  }
+  return lines;
+}
+
+export function buildCreditQuoteWhatsAppText(payload: CreditQuoteSharePayload): string {
+  const storeName = (payload.storeSettings?.storeName || 'Nuestra Tienda').trim();
+  const freq = getQuoteFrequencyLabels(payload.frequency);
+  const colorList = (
+    payload.product.colors && payload.product.colors.length > 0
+      ? payload.product.colors.join(', ')
+      : payload.product.color || ''
+  ).trim();
+
+  const lines = [
+    `*${storeName.toUpperCase()}*`,
+    `📋 *COTIZACIÓN PLAN LISTO AL CRÉDITO*`,
+    '',
+    `🛍️ *Artículo:* ${payload.product.name}`,
+    `🔖 *Código:* ${payload.product.code}`,
+  ];
+
+  if (payload.product.size) {
+    lines.push(`📏 *Talla / Medida:* ${payload.product.size}`);
+  }
+  if (colorList) {
+    lines.push(`🎨 *Color:* ${colorList}`);
+  }
+
+  lines.push(
+    '',
+    `💳 *Precio al Crédito Total:* ${formatCurrencyL(payload.creditTotal)}`,
+    `💵 *Prima / Enganche:* ${formatCurrencyL(payload.downPayment)}`,
+    `📊 *Saldo a Financiar:* ${formatCurrencyL(payload.financedBalance)}`,
+    `🗓️ *Plan Listo:* ${payload.installments} cuotas ${freq.plural} de *${formatCurrencyL(payload.installmentAmount)}*`,
+    ''
+  );
+
+  if (payload.storeSettings?.phone) {
+    lines.push(`📞 Consultas y pedidos: ${payload.storeSettings.phone}`);
+  }
+  lines.push('_Cotización informativa sujeta a disponibilidad de inventario._');
+
+  return lines.join('\n');
+}
+
+export async function generateCreditQuoteImageBlob(
+  payload: CreditQuoteSharePayload
+): Promise<{ blob: Blob; dataUrl: string; filename: string }> {
+  const settings: StoreSettings = payload.storeSettings || {
+    storeName: 'TIENDA GOSÉN',
+  };
+  const storeName = (settings.storeName || 'TIENDA GOSÉN').trim();
+  const freq = getQuoteFrequencyLabels(payload.frequency);
+  const dateStr = new Date().toLocaleDateString('es-HN', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  const [logoLoaded, productImgLoaded] = await Promise.all([
+    loadImageForCreditQuote(settings.logoUrl || '/store-logo.jpg', 260),
+    loadImageForCreditQuote(payload.product.img || payload.product.img2, 720),
+  ]);
+
+  const width = 960;
+  const height = 1220;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('No se pudo inicializar el lienzo de la cotización.');
+  }
+
+  // Background
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fillRect(0, 0, width, height);
+
+  // Header Banner
+  const headerGrad = ctx.createLinearGradient(0, 0, width, 210);
+  headerGrad.addColorStop(0, '#0F172A');
+  headerGrad.addColorStop(1, '#1E293B');
+  ctx.fillStyle = headerGrad;
+  ctx.fillRect(0, 0, width, 215);
+
+  // Amber Accent Bottom Stripe under Header
+  const accentGrad = ctx.createLinearGradient(0, 215, width, 223);
+  accentGrad.addColorStop(0, '#D97706');
+  accentGrad.addColorStop(0.5, '#F59E0B');
+  accentGrad.addColorStop(1, '#10B981');
+  ctx.fillStyle = accentGrad;
+  ctx.fillRect(0, 215, width, 8);
+
+  // Store Logo Box
+  const logoBoxX = 52;
+  const logoBoxY = 44;
+  const logoBoxSize = 118;
+  drawCanvasRoundedRect(ctx, logoBoxX, logoBoxY, logoBoxSize, logoBoxSize, 22);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fill();
+
+  if (logoLoaded) {
+    const imgEl = new Image();
+    imgEl.src = logoLoaded.dataUrl;
+    await new Promise<void>((res) => {
+      if (imgEl.complete) res();
+      else {
+        imgEl.onload = () => res();
+        imgEl.onerror = () => res();
+      }
+    });
+    ctx.save();
+    drawCanvasRoundedRect(ctx, logoBoxX + 6, logoBoxY + 6, logoBoxSize - 12, logoBoxSize - 12, 16);
+    ctx.clip();
+    const scale = Math.min(
+      (logoBoxSize - 16) / Math.max(1, imgEl.width),
+      (logoBoxSize - 16) / Math.max(1, imgEl.height)
+    );
+    const dw = imgEl.width * scale;
+    const dh = imgEl.height * scale;
+    ctx.drawImage(
+      imgEl,
+      logoBoxX + (logoBoxSize - dw) / 2,
+      logoBoxY + (logoBoxSize - dh) / 2,
+      dw,
+      dh
+    );
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#047857';
+    ctx.font = '900 42px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const initials = storeName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase() || '')
+      .join('');
+    ctx.fillText(initials || 'TG', logoBoxX + logoBoxSize / 2, logoBoxY + logoBoxSize / 2);
+  }
+
+  // Store Text in Header
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#FBBF24';
+  ctx.font = '800 18px system-ui, -apple-system, sans-serif';
+  ctx.fillText('COTIZACIÓN PLAN LISTO AL CRÉDITO', 196, 68);
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = '900 34px system-ui, -apple-system, sans-serif';
+  const storeTitleLines = wrapCanvasTextLines(ctx, storeName.toUpperCase(), 690, 2);
+  let storeY = 112;
+  storeTitleLines.forEach((line) => {
+    ctx.fillText(line, 196, storeY);
+    storeY += 36;
+  });
+
+  ctx.fillStyle = '#CBD5E1';
+  ctx.font = '600 19px system-ui, -apple-system, sans-serif';
+  const contactParts = [
+    settings.phone ? `Tel/WhatsApp: ${settings.phone}` : '',
+    `Fecha: ${dateStr}`,
+  ].filter(Boolean);
+  ctx.fillText(contactParts.join('   •   '), 196, Math.max(168, storeY + 8));
+
+  // Product Showcase Card
+  const cardX = 48;
+  const cardY = 258;
+  const cardW = width - 96;
+  const cardH = 380;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(15, 23, 42, 0.08)';
+  ctx.shadowBlur = 24;
+  ctx.shadowOffsetY = 8;
+  drawCanvasRoundedRect(ctx, cardX, cardY, cardW, cardH, 28);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fill();
+  ctx.restore();
+
+  drawCanvasRoundedRect(ctx, cardX, cardY, cardW, cardH, 28);
+  ctx.strokeStyle = '#E2E8F0';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Product Photo Frame
+  const imgBoxX = cardX + 28;
+  const imgBoxY = cardY + 28;
+  const imgBoxSize = 324;
+  drawCanvasRoundedRect(ctx, imgBoxX, imgBoxY, imgBoxSize, imgBoxSize, 22);
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fill();
+  ctx.strokeStyle = '#E2E8F0';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  if (productImgLoaded) {
+    const pImg = new Image();
+    pImg.src = productImgLoaded.dataUrl;
+    await new Promise<void>((res) => {
+      if (pImg.complete) res();
+      else {
+        pImg.onload = () => res();
+        pImg.onerror = () => res();
+      }
+    });
+    ctx.save();
+    drawCanvasRoundedRect(ctx, imgBoxX + 6, imgBoxY + 6, imgBoxSize - 12, imgBoxSize - 12, 18);
+    ctx.clip();
+    const pad = 16;
+    const scale = Math.min(
+      (imgBoxSize - pad * 2) / Math.max(1, pImg.width),
+      (imgBoxSize - pad * 2) / Math.max(1, pImg.height)
+    );
+    const dw = pImg.width * scale;
+    const dh = pImg.height * scale;
+    ctx.drawImage(
+      pImg,
+      imgBoxX + (imgBoxSize - dw) / 2,
+      imgBoxY + (imgBoxSize - dh) / 2,
+      dw,
+      dh
+    );
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = '700 22px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('SIN FOTOGRAFÍA', imgBoxX + imgBoxSize / 2, imgBoxY + imgBoxSize / 2 - 12);
+    ctx.font = '600 17px system-ui, -apple-system, sans-serif';
+    ctx.fillText(payload.product.code || 'ARTÍCULO', imgBoxX + imgBoxSize / 2, imgBoxY + imgBoxSize / 2 + 18);
+  }
+
+  // Product Details (Right side of Showcase Card)
+  const infoX = imgBoxX + imgBoxSize + 34;
+  const infoW = cardX + cardW - infoX - 30;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+
+  ctx.fillStyle = '#B45309';
+  ctx.font = '800 18px system-ui, -apple-system, sans-serif';
+  ctx.fillText((payload.product.category || 'ARTÍCULO DISPONIBLE').toUpperCase(), infoX, cardY + 66);
+
+  ctx.fillStyle = '#0F172A';
+  ctx.font = '900 34px system-ui, -apple-system, sans-serif';
+  const prodNameLines = wrapCanvasTextLines(ctx, payload.product.name, infoW, 3);
+  let py = cardY + 114;
+  prodNameLines.forEach((line) => {
+    ctx.fillText(line, infoX, py);
+    py += 42;
+  });
+
+  // Clean Info Rows (Code, Size, Colors)
+  py = Math.max(py + 12, cardY + 236);
+  ctx.fillStyle = '#475569';
+  ctx.font = '700 21px system-ui, -apple-system, sans-serif';
+  ctx.fillText(`Código SKU: ${payload.product.code}`, infoX, py);
+
+  const colorList = (
+    payload.product.colors && payload.product.colors.length > 0
+      ? payload.product.colors.join(', ')
+      : payload.product.color || ''
+  ).trim();
+
+  if (payload.product.size) {
+    py += 34;
+    ctx.fillStyle = '#64748B';
+    ctx.font = '600 20px system-ui, -apple-system, sans-serif';
+    ctx.fillText(`Talla / Medida: ${payload.product.size}`, infoX, py);
+  }
+  if (colorList) {
+    py += 34;
+    ctx.fillStyle = '#64748B';
+    ctx.font = '600 20px system-ui, -apple-system, sans-serif';
+    const colorLine = wrapCanvasTextLines(ctx, `Color: ${colorList}`, infoW, 1)[0];
+    ctx.fillText(colorLine, infoX, py);
+  }
+
+  // Credit Plan Card
+  const planX = 48;
+  const planY = 670;
+  const planW = width - 96;
+  const planH = 446;
+
+  drawCanvasRoundedRect(ctx, planX, planY, planW, planH, 28);
+  ctx.fillStyle = '#FFFBEB';
+  ctx.fill();
+  ctx.strokeStyle = '#FCD34D';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  // Credit Total Banner inside Plan Card
+  const heroX = planX + 28;
+  const heroY = planY + 28;
+  const heroW = planW - 56;
+  const heroH = 126;
+  const heroGrad = ctx.createLinearGradient(heroX, heroY, heroX + heroW, heroY + heroH);
+  heroGrad.addColorStop(0, '#78350F');
+  heroGrad.addColorStop(1, '#B45309');
+  drawCanvasRoundedRect(ctx, heroX, heroY, heroW, heroH, 22);
+  ctx.fillStyle = heroGrad;
+  ctx.fill();
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#FDE68A';
+  ctx.font = '800 18px system-ui, -apple-system, sans-serif';
+  ctx.fillText('PRECIO AL CRÉDITO TOTAL', heroX + 28, heroY + 42);
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = '900 52px system-ui, -apple-system, sans-serif';
+  ctx.fillText(formatCurrencyL(payload.creditTotal), heroX + 28, heroY + 100);
+
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#FEF3C7';
+  ctx.font = '700 20px system-ui, -apple-system, sans-serif';
+  ctx.fillText('PLAN LISTO', heroX + heroW - 28, heroY + 46);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = '900 26px system-ui, -apple-system, sans-serif';
+  ctx.fillText(`${payload.installments} cuotas ${freq.plural}`, heroX + heroW - 28, heroY + 86);
+
+  // 3 Breakdown Metric Boxes
+  const boxGap = 18;
+  const boxW = (heroW - boxGap * 2) / 3;
+  const boxY = heroY + heroH + 22;
+  const boxH = 134;
+  const metrics = [
+    {
+      label: 'PRIMA / ENGANCHE',
+      value: formatCurrencyL(payload.downPayment),
+      sub: 'Pago inicial',
+      highlight: false,
+    },
+    {
+      label: 'SALDO A FINANCIAR',
+      value: formatCurrencyL(payload.financedBalance),
+      sub: 'Monto financiado',
+      highlight: false,
+    },
+    {
+      label: `CUOTA ${freq.singular.toUpperCase()}`,
+      value: formatCurrencyL(payload.installmentAmount),
+      sub: `× ${payload.installments} ${freq.plural.toLowerCase()}`,
+      highlight: true,
+    },
+  ];
+
+  metrics.forEach((m, idx) => {
+    const mx = heroX + idx * (boxW + boxGap);
+    drawCanvasRoundedRect(ctx, mx, boxY, boxW, boxH, 20);
+    ctx.fillStyle = m.highlight ? '#FEF3C7' : '#FFFFFF';
+    ctx.fill();
+    ctx.strokeStyle = m.highlight ? '#F59E0B' : '#E2E8F0';
+    ctx.lineWidth = m.highlight ? 2.5 : 2;
+    ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = m.highlight ? '#92400E' : '#64748B';
+    ctx.font = '800 16px system-ui, -apple-system, sans-serif';
+    ctx.fillText(m.label, mx + 20, boxY + 34);
+
+    ctx.fillStyle = m.highlight ? '#78350F' : '#0F172A';
+    ctx.font = '900 30px system-ui, -apple-system, sans-serif';
+    ctx.fillText(m.value, mx + 20, boxY + 78);
+
+    ctx.fillStyle = m.highlight ? '#B45309' : '#64748B';
+    ctx.font = '700 17px system-ui, -apple-system, sans-serif';
+    ctx.fillText(m.sub, mx + 20, boxY + 110);
+  });
+
+  // Plan Listo Summary Line inside Plan Card
+  const summaryY = boxY + boxH + 22;
+  drawCanvasRoundedRect(ctx, heroX, summaryY, heroW, 84, 18);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fill();
+  ctx.strokeStyle = '#FDE68A';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#475569';
+  ctx.font = '700 18px system-ui, -apple-system, sans-serif';
+  ctx.fillText('RESUMEN DE TU PLAN LISTO', width / 2, summaryY + 30);
+
+  ctx.fillStyle = '#0F172A';
+  ctx.font = '900 22px system-ui, -apple-system, sans-serif';
+  ctx.fillText(
+    `Prima ${formatCurrencyL(payload.downPayment)}  +  ${payload.installments} cuotas ${freq.plural.toLowerCase()} de ${formatCurrencyL(payload.installmentAmount)}`,
+    width / 2,
+    summaryY + 64
+  );
+
+  // Footer
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#64748B';
+  ctx.font = '600 18px system-ui, -apple-system, sans-serif';
+  const footerLine = settings.address
+    ? `${storeName} • ${settings.address}`
+    : `${storeName} • Cotización informativa válida sujeta a inventario`;
+  ctx.fillText(wrapCanvasTextLines(ctx, footerLine, width - 96, 1)[0], width / 2, 1156);
+
+  ctx.fillStyle = '#94A3B8';
+  ctx.font = '500 16px system-ui, -apple-system, sans-serif';
+  ctx.fillText(
+    'Cotización informativa al crédito sujeta a evaluación y disponibilidad de tienda.',
+    width / 2,
+    1186
+  );
+
+  const dataUrl = canvas.toDataURL('image/png');
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((b) => {
+      if (b) resolve(b);
+      else reject(new Error('No se pudo generar la imagen de cotización.'));
+    }, 'image/png');
+  });
+
+  const slug = sanitizeQuoteFileSlug(payload.product.name || payload.product.code);
+  return {
+    blob,
+    dataUrl,
+    filename: `Cotizacion_Credito_${slug}.png`,
+  };
+}
+
+export async function downloadCreditQuoteImage(payload: CreditQuoteSharePayload): Promise<void> {
+  const { blob, filename } = await generateCreditQuoteImageBlob(payload);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+export async function downloadCreditQuotePdf(payload: CreditQuoteSharePayload): Promise<void> {
+  const settings: StoreSettings = payload.storeSettings || {
+    storeName: 'TIENDA GOSÉN',
+  };
+  const freq = getQuoteFrequencyLabels(payload.frequency);
+
+  const [, productImgLoaded] = await Promise.all([
+    preloadStoreLogoForPdf(settings.logoUrl),
+    loadImageForCreditQuote(payload.product.img || payload.product.img2, 720),
+  ]);
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'letter',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const dateLabel = new Date().toLocaleString('es-HN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  let y = drawExecutivePdfHeader(doc, {
+    storeSettings: settings,
+    documentTitle: 'COTIZACIÓN AL CRÉDITO',
+    documentNumber: `PLAN-${payload.product.code || 'LISTO'}`,
+    dateLabel,
+    statusBadge: {
+      text: 'PLAN LISTO • CRÉDITO',
+      bgRgb: [254, 243, 199],
+      textRgb: [146, 64, 14],
+    },
+    accentRgb: [180, 83, 9],
+  });
+
+  // Article Showcase Box (Photo + Details)
+  const cardX = 14;
+  const cardW = pageWidth - 28;
+  const cardH = 56;
+  doc.setDrawColor(226, 232, 240);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(cardX, y, cardW, cardH, 3, 3, 'FD');
+
+  // Product Image Box
+  const imgBoxX = cardX + 4;
+  const imgBoxY = y + 4;
+  const imgBoxSize = 48;
+  doc.setDrawColor(203, 213, 225);
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(imgBoxX, imgBoxY, imgBoxSize, imgBoxSize, 2.5, 2.5, 'FD');
+
+  if (productImgLoaded) {
+    try {
+      const innerSize = imgBoxSize - 4;
+      const ratio = Math.min(
+        innerSize / Math.max(1, productImgLoaded.width),
+        innerSize / Math.max(1, productImgLoaded.height)
+      );
+      const dw = productImgLoaded.width * ratio;
+      const dh = productImgLoaded.height * ratio;
+      doc.addImage(
+        productImgLoaded.dataUrl,
+        'PNG',
+        imgBoxX + (imgBoxSize - dw) / 2,
+        imgBoxY + (imgBoxSize - dh) / 2,
+        dw,
+        dh,
+        undefined,
+        'FAST'
+      );
+    } catch {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(148, 163, 184);
+      doc.text('SIN IMAGEN', imgBoxX + imgBoxSize / 2, imgBoxY + imgBoxSize / 2, { align: 'center' });
+    }
+  } else {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(148, 163, 184);
+    doc.text('SIN FOTOGRAFÍA', imgBoxX + imgBoxSize / 2, imgBoxY + imgBoxSize / 2 - 2, {
+      align: 'center',
+    });
+    doc.setFontSize(7.5);
+    doc.text(payload.product.code || '', imgBoxX + imgBoxSize / 2, imgBoxY + imgBoxSize / 2 + 4, {
+      align: 'center',
+    });
+  }
+
+  // Product Metadata on Right of Photo
+  const detailsX = imgBoxX + imgBoxSize + 6;
+  const detailsW = cardX + cardW - detailsX - 5;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(180, 83, 9);
+  doc.text((payload.product.category || 'ARTÍCULO COTIZADO').toUpperCase(), detailsX, y + 10);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13.5);
+  doc.setTextColor(15, 23, 42);
+  const nameLines = doc.splitTextToSize(payload.product.name || '', detailsW) as string[];
+  doc.text(nameLines.slice(0, 3), detailsX, y + 17);
+
+  const colorList = (
+    payload.product.colors && payload.product.colors.length > 0
+      ? payload.product.colors.join(', ')
+      : payload.product.color || ''
+  ).trim();
+
+  let metaY = y + 17 + Math.min(3, nameLines.length) * 5.6 + 4;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(51, 65, 85);
+  doc.text(`Código / SKU: ${payload.product.code}`, detailsX, metaY);
+
+  if (payload.product.size) {
+    metaY += 5.2;
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(`Talla / Medida: ${payload.product.size}`, detailsX, metaY);
+  }
+  if (colorList) {
+    metaY += 5.2;
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(`Color: ${colorList.slice(0, 56)}`, detailsX, metaY);
+  }
+
+  y += cardH + 8;
+
+  // Plan Listo Banner
+  doc.setFillColor(120, 53, 15);
+  doc.roundedRect(cardX, y, cardW, 24, 3, 3, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(253, 230, 138);
+  doc.text('PRECIO AL CRÉDITO TOTAL', cardX + 6, y + 8);
+  doc.setFontSize(18);
+  doc.setTextColor(255, 255, 255);
+  doc.text(formatCurrencyL(payload.creditTotal), cardX + 6, y + 18);
+
+  doc.setFontSize(8.5);
+  doc.setTextColor(254, 243, 199);
+  doc.text('PLAN LISTO', cardX + cardW - 6, y + 8, { align: 'right' });
+  doc.setFontSize(12);
+  doc.setTextColor(255, 255, 255);
+  doc.text(
+    `${payload.installments} cuotas ${freq.plural.toLowerCase()} de ${formatCurrencyL(payload.installmentAmount)}`,
+    cardX + cardW - 6,
+    y + 17.5,
+    { align: 'right' }
+  );
+
+  y += 30;
+
+  // Breakdown Table (Customer-facing ONLY: never cost or profit)
+  autoTable(doc, {
+    startY: y,
+    margin: { left: 14, right: 14 },
+    head: [['DETALLE DEL PLAN DE CRÉDITO', 'VALOR ESTIPULADO']],
+    body: [
+      ['Artículo Cotizado', `${payload.product.name} (${payload.product.code})`],
+      ['Precio Total al Crédito', formatCurrencyL(payload.creditTotal)],
+      ['Prima / Enganche Inicial', formatCurrencyL(payload.downPayment)],
+      ['Saldo a Financiar', formatCurrencyL(payload.financedBalance)],
+      ['Frecuencia de Pago', freq.plural],
+      ['Cantidad de Cuotas', `${payload.installments} cuotas`],
+      [`Valor de Cada Cuota (${freq.singular})`, formatCurrencyL(payload.installmentAmount)],
+      [
+        'Resumen Plan Listo',
+        `Total ${formatCurrencyL(payload.creditTotal)} • Prima ${formatCurrencyL(payload.downPayment)} • ${payload.installments} cuotas ${freq.plural.toLowerCase()} de ${formatCurrencyL(payload.installmentAmount)}`,
+      ],
+    ],
+    theme: 'grid',
+    styles: {
+      fontSize: 9.5,
+      cellPadding: 4,
+      textColor: [30, 41, 59],
+      lineColor: [226, 232, 240],
+      lineWidth: 0.3,
+    },
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 9,
+    },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 74, fillColor: [248, 250, 252] },
+      1: { halign: 'right', fontStyle: 'bold' },
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.row.index === 6) {
+        data.cell.styles.fillColor = [254, 243, 199];
+        data.cell.styles.textColor = [120, 53, 15];
+        data.cell.styles.fontSize = 10.5;
+      }
+    },
+  });
+
+  const finalY = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY || y + 80) + 10;
+
+  // Customer Note Box
+  if (finalY < pageHeight - 36) {
+    doc.setDrawColor(253, 230, 138);
+    doc.setFillColor(255, 251, 235);
+    doc.roundedRect(14, finalY, pageWidth - 28, 20, 2.5, 2.5, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(146, 64, 14);
+    doc.text('CONDICIONES GENERALES DE COTIZACIÓN', 18, finalY + 6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(120, 53, 15);
+    doc.text(
+      'Esta cotización es de carácter informativo y está sujeta a disponibilidad de inventario y aprobación en tienda.',
+      18,
+      finalY + 12.5
+    );
+    if (settings.phone) {
+      doc.text(
+        `Para confirmar tu compra al crédito o realizar consultas, contáctanos al ${settings.phone}.`,
+        18,
+        finalY + 17.2
+      );
+    }
+  }
+
+  // Footer
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `${(settings.storeName || 'TIENDA GOSÉN').toUpperCase()} — Cotización generada el ${dateLabel}`,
+    pageWidth / 2,
+    pageHeight - 10,
+    { align: 'center' }
+  );
+
+  const slug = sanitizeQuoteFileSlug(payload.product.name || payload.product.code);
+  doc.save(`Cotizacion_Credito_${slug}.pdf`);
+}
+
+
 
 
 
