@@ -2452,9 +2452,69 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                           </div>
                         </div>
 
-                        {/* Clean Tabular Breakdown of All Active Warehouses */}
-                        <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-                          <table className="w-full text-left text-xs">
+                        {/* Mobile Clean Warehouse List (< sm) — all stock visible without horizontal clipping */}
+                        <div className="sm:hidden border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white overflow-hidden">
+                          {activeWarehouses.map((wh) => {
+                            const isTarget = wh.id === formData.targetWarehouseId;
+                            const savedQty = editingProduct
+                              ? getProductStockInWarehouse(
+                                  editingProduct,
+                                  wh.id,
+                                  activeWarehouses
+                                )
+                              : isTarget
+                              ? Math.max(0, Number(formData.stock) || 0)
+                              : 0;
+
+                            return (
+                              <button
+                                key={wh.id}
+                                type="button"
+                                onClick={() =>
+                                  setFormData({ ...formData, targetWarehouseId: wh.id })
+                                }
+                                className={`w-full text-left px-3.5 py-3 flex items-center justify-between gap-3 transition-colors cursor-pointer ${
+                                  isTarget ? 'bg-emerald-50/60' : 'hover:bg-slate-50'
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                                    <span className="text-sm font-semibold text-slate-900 truncate">
+                                      {wh.name}
+                                    </span>
+                                    {isTarget && (
+                                      <span className="text-[11px] font-semibold text-emerald-700 whitespace-nowrap">
+                                        · Destino
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-slate-500 mt-0.5">
+                                    <span className="font-mono">{wh.code}</span>
+                                    <span> · </span>
+                                    <span>{wh.isMainSalesFloor ? 'Sala de Ventas' : 'Almacén'}</span>
+                                  </div>
+                                </div>
+
+                                <div className="text-right shrink-0">
+                                  <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                                    Existencia
+                                  </span>
+                                  <span
+                                    className={`text-sm font-bold tabular-nums whitespace-nowrap ${
+                                      savedQty > 0 ? 'text-slate-900' : 'text-slate-400'
+                                    }`}
+                                  >
+                                    {savedQty} uds
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Tablet/Desktop Tabular Breakdown (>= sm) with horizontal scroll safety */}
+                        <div className="hidden sm:block border border-slate-200 rounded-xl overflow-x-auto bg-white">
+                          <table className="w-full min-w-[460px] text-left text-xs whitespace-nowrap">
                             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wider">
                               <tr>
                                 <th className="py-2.5 px-4 font-semibold">Bodega</th>
