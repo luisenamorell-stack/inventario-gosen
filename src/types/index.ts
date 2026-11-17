@@ -439,6 +439,8 @@ export interface SaleItem {
   warrantyCodes?: string[];
   warrantyDuration?: string;
   warrantyNotes?: string;
+  warehouseId?: string;
+  warehouseName?: string;
 }
 
 export interface CreditPaymentAbone {

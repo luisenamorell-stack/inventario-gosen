@@ -98,12 +98,17 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
   }, [sale, isOpen, storeSettings.invoiceTemplate?.defaultIssuerName, userName]);
 
   const subtotal = useMemo(
-    () => items.reduce((acc, it) => acc + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0),
+    () =>
+      Number(
+        items
+          .reduce((acc, it) => acc + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0)
+          .toFixed(2)
+      ),
     [items]
   );
 
-  const numericDiscount = Math.min(subtotal, Math.max(0, Number(discount) || 0));
-  const taxableAmount = Math.max(0, subtotal - numericDiscount);
+  const numericDiscount = Number(Math.min(subtotal, Math.max(0, Number(discount) || 0)).toFixed(2));
+  const taxableAmount = Number(Math.max(0, subtotal - numericDiscount).toFixed(2));
   const tax = applyTax ? Number((taxableAmount * 0.15).toFixed(2)) : 0;
   const newTotal = Number((taxableAmount + tax).toFixed(2));
 
@@ -158,6 +163,27 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
           ...it,
           quantity: nextQty,
           subtotal: Number((it.price * nextQty).toFixed(2)),
+        };
+      })
+    );
+  };
+
+  const handleUpdateUnitPrice = (code: string, rawPrice: number) => {
+    const safePrice = Math.max(0, Number(rawPrice) || 0);
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.code !== code) return it;
+        const baseOrig =
+          it.originalPrice !== undefined && Number(it.originalPrice) >= safePrice
+            ? Number(it.originalPrice)
+            : safePrice;
+        return {
+          ...it,
+          originalPrice: baseOrig,
+          unitDiscount: Math.max(0, Number((baseOrig - safePrice).toFixed(2))),
+          price: safePrice,
+          ...(paymentMethod === 'credit' ? { creditPrice: safePrice } : {}),
+          subtotal: Number((safePrice * it.quantity).toFixed(2)),
         };
       })
     );
@@ -228,12 +254,28 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
       }
     }
 
-    const parsedPaid =
-      paymentMethod === 'credit'
+    const parsedPaid = Number(
+      (paymentMethod === 'credit'
         ? Math.min(newTotal, Math.max(0, Number(amountPaid) || 0))
-        : Math.max(newTotal, Number(amountPaid) || newTotal);
-    const change = paymentMethod === 'cash' ? Math.max(0, parsedPaid - newTotal) : 0;
-    const balanceDue = paymentMethod === 'credit' ? Math.max(0, newTotal - parsedPaid) : 0;
+        : Math.max(newTotal, Number(amountPaid) || newTotal)
+      ).toFixed(2)
+    );
+    const change = paymentMethod === 'cash' ? Number(Math.max(0, parsedPaid - newTotal).toFixed(2)) : 0;
+    const balanceDue = paymentMethod === 'credit' ? Number(Math.max(0, newTotal - parsedPaid).toFixed(2)) : 0;
+
+    const updatedContract =
+      paymentMethod === 'credit' && sale.creditContract
+        ? {
+            ...sale.creditContract,
+            customerName: customerName.trim() || sale.creditContract.customerName,
+            customerIdentity: customerRtn.trim() || sale.creditContract.customerIdentity,
+            customerPhone: customerPhone.trim() || sale.creditContract.customerPhone,
+            creditTotalValue: newTotal,
+            downPaymentValue: parsedPaid,
+            financedBalance: balanceDue,
+            updatedAt: Date.now(),
+          }
+        : sale.creditContract;
 
     const updatedSale: SaleRecord = {
       ...sale,
@@ -253,6 +295,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
       balanceDue,
       creditStatus: paymentMethod === 'credit' ? (balanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
       creditDueDate: paymentMethod === 'credit' ? creditDueDate : '',
+      creditContract: updatedContract,
       notes: notes.trim(),
       lastEditedBy: requiresAdminPin ? `${userName} (Autorizado por Admin)` : userName,
       lastEditedAt: new Date().toLocaleString(),
@@ -487,8 +530,18 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
                       <div className="font-bold text-xs text-slate-900 truncate">
                         {item.name}
                       </div>
-                      <div className="text-[11px] text-slate-400 font-mono">
-                        {item.code} {item.size ? `• Talla: ${item.size}` : ''} • L. {item.price.toFixed(2)} c/u
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 font-mono mt-0.5">
+                        <span>{item.code}{item.size ? ` • Talla: ${item.size}` : ''}</span>
+                        <span className="text-slate-400">• P. Unit. L:</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={item.price}
+                          onChange={(e) => handleUpdateUnitPrice(item.code, parseFloat(e.target.value) || 0)}
+                          className="w-20 px-1.5 py-0.5 bg-slate-50 border border-slate-300 rounded-md text-[11px] font-bold text-slate-900 text-right focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                          title="Editar precio unitario"
+                        />
                       </div>
                     </div>
 

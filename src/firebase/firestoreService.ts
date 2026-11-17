@@ -425,9 +425,10 @@ function safeWriteCache<T>(key: string, data: T): boolean {
   }
 }
 
-// In-memory cache & image map so large catalogs (e.g. 6.2MB of base64 photos in Comercial GYG)
-// never lose images or lag when localStorage hits its 5MB browser quota.
+// In-memory cache & image map so large catalogs (e.g. 15MB in Comercial GYG)
+// never lose images, sales history, or lag when localStorage hits its 5MB browser quota.
 const memoryInventoryCache = new Map<string, Product[]>();
+const memorySalesCache = new Map<string, SaleRecord[]>();
 const memoryImageMap = new Map<string, string>();
 const memoryImage2Map = new Map<string, string>();
 
@@ -471,6 +472,47 @@ export async function saveInventoryToIndexedDB(
       tx.onerror = () => resolve();
     } catch {
       resolve();
+    }
+  });
+}
+
+export async function saveSalesToIndexedDB(
+  items: SaleRecord[],
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const idb = await openInventoryIdb();
+  if (!idb) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = idb.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      store.put(items, `sales_${slug}`);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export async function loadSalesFromIndexedDB(
+  companyId = getActiveCompanyId()
+): Promise<SaleRecord[] | null> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const idb = await openInventoryIdb();
+  if (!idb) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = idb.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.get(`sales_${slug}`);
+      tx.oncomplete = () => {
+        resolve(Array.isArray(req.result) ? (req.result as SaleRecord[]) : null);
+      };
+      tx.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
     }
   });
 }
@@ -836,8 +878,8 @@ function savePendingMutations(mutations: PendingInventoryMutations, companyId = 
   };
   if (!safeWriteCache(tombstoneKey, tombstonePayload)) {
     try {
+      // Inventory is already backed by memoryInventoryCache + IndexedDB; do NOT delete SALES cache
       localStorage.removeItem(getScopedCacheKey(BASE_CACHE_KEYS.INVENTORY, slug));
-      localStorage.removeItem(getScopedCacheKey(BASE_CACHE_KEYS.SALES, slug));
       safeWriteCache(tombstoneKey, tombstonePayload);
     } catch {}
   }
@@ -1414,38 +1456,50 @@ export function getCachedSales(companyId = getActiveCompanyId()): SaleRecord[] |
     : [slug];
 
   const byId = new Map<string, SaleRecord>();
-  for (const k of keysToRead) {
-    const list = safeReadCache<SaleRecord[]>(`${BASE_CACHE_KEYS.SALES}__${k}`);
-    if (Array.isArray(list)) {
-      for (const item of list) {
-        if (!item || !item.id) continue;
-        if (!belongsToCompany(item.companyId, slug, item.id)) continue;
-        const existing = byId.get(item.id);
-        if (!existing) {
-          byId.set(item.id, item);
-        } else {
-          // Prefer record with signed contract, more credit payments, or more recent edit
-          const existingPayments = existing.creditPayments?.length || 0;
-          const itemPayments = item.creditPayments?.length || 0;
-          const existingHasSig = Boolean(
-            existing.creditContract?.customerSignatureDataUrl ||
-              existing.creditContract?.lessorSignatureDataUrl
-          );
-          const itemHasSig = Boolean(
-            item.creditContract?.customerSignatureDataUrl ||
-              item.creditContract?.lessorSignatureDataUrl
-          );
-          if (
-            (itemHasSig && !existingHasSig) ||
-            itemPayments > existingPayments ||
-            (item.lastEditedAt && !existing.lastEditedAt)
-          ) {
-            byId.set(item.id, { ...existing, ...item });
-          }
+  const mergeList = (list: SaleRecord[] | null | undefined) => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      if (!item || !item.id) continue;
+      if (!belongsToCompany(item.companyId, slug, item.id)) continue;
+      const existing = byId.get(item.id);
+      if (!existing) {
+        byId.set(item.id, item);
+      } else {
+        const existingPayments = existing.creditPayments?.length || 0;
+        const itemPayments = item.creditPayments?.length || 0;
+        const existingHasSig = Boolean(
+          existing.creditContract?.customerSignatureDataUrl ||
+            existing.creditContract?.lessorSignatureDataUrl
+        );
+        const itemHasSig = Boolean(
+          item.creditContract?.customerSignatureDataUrl ||
+            item.creditContract?.lessorSignatureDataUrl
+        );
+        if (
+          (itemHasSig && !existingHasSig) ||
+          itemPayments > existingPayments ||
+          (item.lastEditedAt && !existing.lastEditedAt) ||
+          (!existing.creditContract && Boolean(item.creditContract))
+        ) {
+          byId.set(item.id, {
+            ...existing,
+            ...item,
+            creditContract: item.creditContract || existing.creditContract,
+          });
         }
       }
     }
+  };
+
+  for (const k of keysToRead) {
+    mergeList(safeReadCache<SaleRecord[]>(`${BASE_CACHE_KEYS.SALES}__${k}`));
+    mergeList(memorySalesCache.get(k));
   }
+  if (slug === 'gosen') {
+    mergeList(safeReadCache<SaleRecord[]>(BASE_CACHE_KEYS.SALES));
+    mergeList(memorySalesCache.get('gosen'));
+  }
+
   if (byId.size === 0) return null;
   const merged = Array.from(byId.values());
   merged.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
@@ -1454,7 +1508,25 @@ export function getCachedSales(companyId = getActiveCompanyId()): SaleRecord[] |
 
 export function setCachedSales(items: SaleRecord[], companyId = getActiveCompanyId()): void {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
-  safeWriteCache(getScopedCacheKey(BASE_CACHE_KEYS.SALES, slug), items);
+  const sorted = [...items].sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+  memorySalesCache.set(slug, sorted);
+  saveSalesToIndexedDB(sorted, slug).catch(() => {});
+
+  const cacheKey = getScopedCacheKey(BASE_CACHE_KEYS.SALES, slug);
+  if (!safeWriteCache(cacheKey, sorted)) {
+    // Strip large base64 signature URLs only in the compact localStorage mirror (full objects stay in memory + IndexedDB)
+    const compact = sorted.map((s) => {
+      if (!s.creditContract) return s;
+      const { customerSignatureDataUrl, lessorSignatureDataUrl, ...restContract } = s.creditContract;
+      return {
+        ...s,
+        creditContract: restContract,
+      };
+    });
+    if (!safeWriteCache(cacheKey, compact)) {
+      safeWriteCache(cacheKey, compact.slice(0, 120));
+    }
+  }
 }
 
 export function getCachedPurchases(companyId = getActiveCompanyId()): PurchaseInvoice[] | null {
@@ -3768,7 +3840,12 @@ export async function fetchSalesOnce(
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
-  const cached = getCachedSales(slug) || [];
+  const lsCached = getCachedSales(slug) || [];
+  const idbCached = (await loadSalesFromIndexedDB(slug)) || [];
+  const cached =
+    idbCached.length > 0
+      ? mergeSaleRecordsWithCache(lsCached, idbCached, slug).merged
+      : lsCached;
   const hubSync = await syncCollectionsWithBackendHub({ sales: cached }, slug);
   const baseSales =
     hubSync?.sales && hubSync.sales.length > 0
@@ -3850,7 +3927,7 @@ export async function recordSaleInFirestore(
   currentInventory: Product[],
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const saleId = getScopedDocId(`${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, slug);
   const saleRef = doc(db, 'sales', saleId);
 
@@ -3893,6 +3970,8 @@ export async function recordSaleInFirestore(
         ...(cleanCodes.length > 0 ? { warrantyCodes: cleanCodes } : {}),
         ...(it.warrantyDuration ? { warrantyDuration: String(it.warrantyDuration).trim().slice(0, 60) } : {}),
         ...(it.warrantyNotes ? { warrantyNotes: String(it.warrantyNotes).trim().slice(0, 300) } : {}),
+        ...(it.warehouseId ? { warehouseId: String(it.warehouseId).trim().slice(0, 100) } : {}),
+        ...(it.warehouseName ? { warehouseName: String(it.warehouseName).trim().slice(0, 150) } : {}),
       };
     }),
     totalItems: Math.round(Number(saleData.totalItems) || 0),
@@ -3973,49 +4052,74 @@ export async function recordSaleInFirestore(
     }
   }
 
-  // 2. Deduct stock in inventory (and in the chosen warehouse) unless skipped for pre-app historical sales
+  // 2. Deduct stock in inventory (and in the chosen warehouse per item) unless skipped for pre-app historical sales
   if (!saleData.skipInventoryDeduction) {
     try {
       const storeWhData = getCachedStoreWarehouses(slug);
       const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
       const invBatch = writeBatch(db);
-      const qtyByCode = new Map<string, { qty: number; item: SaleRecord['items'][number] }>();
+      const workingByCode = new Map<string, Product>();
+      for (const p of currentInventory) {
+        workingByCode.set(p.code.trim().toLowerCase(), p);
+      }
+
+      const qtyByCodeAndWh = new Map<
+        string,
+        { codeKey: string; warehouseId?: string; qty: number; item: SaleRecord['items'][number] }
+      >();
 
       for (const item of saleData.items || []) {
         const codeKey = item.code.trim().toLowerCase();
         if (!codeKey) continue;
-        const prev = qtyByCode.get(codeKey);
+        const itemWhId = item.warehouseId || saleData.warehouseId;
+        const groupKey = `${codeKey}__${itemWhId || '__default__'}`;
+        const prev = qtyByCodeAndWh.get(groupKey);
         if (prev) {
           prev.qty += Number(item.quantity) || 1;
         } else {
-          qtyByCode.set(codeKey, { qty: Number(item.quantity) || 1, item });
+          qtyByCodeAndWh.set(groupKey, {
+            codeKey,
+            warehouseId: itemWhId,
+            qty: Number(item.quantity) || 1,
+            item,
+          });
         }
       }
 
-      let hasInventoryUpdates = false;
-      for (const [, { qty, item }] of qtyByCode.entries()) {
-        const currentProd = currentInventory.find(
-          (p) =>
-            p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
-            (item.productId && p.id === item.productId)
-        );
+      const finalPayloadsByDocId = new Map<string, { ref: any; altRef?: any; payload: Record<string, any> }>();
+
+      for (const { codeKey, warehouseId: itemWhId, qty, item } of qtyByCodeAndWh.values()) {
+        const currentProd =
+          workingByCode.get(codeKey) ||
+          currentInventory.find((p) => item.productId && p.id === item.productId);
         if (!currentProd && item.code.trim().toUpperCase() === 'CREDITO') {
           continue;
         }
-        hasInventoryUpdates = true;
-        const canonicalDocId = getScopedDocId(currentProd?.code || item.code, slug);
+        const rawCode = currentProd?.code || item.code;
+        const canonicalDocId = getScopedDocId(rawCode, slug);
         const productRef = doc(db, 'inventory', canonicalDocId);
 
         const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
           currentProd,
           -qty,
-          saleData.warehouseId,
+          itemWhId,
           activeWhList
         );
 
+        const updatedProd: Product | undefined = currentProd
+          ? {
+              ...currentProd,
+              stock: newStock,
+              ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            }
+          : undefined;
+        if (updatedProd) {
+          workingByCode.set(codeKey, updatedProd);
+        }
+
         const productPayload: Record<string, any> = {
           companyId: slug,
-          code: (currentProd?.code || item.code).trim().slice(0, 100),
+          code: rawCode.trim().slice(0, 100),
           name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
           category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
           price: Number(currentProd?.price ?? item.originalPrice ?? item.price) || 0,
@@ -4024,20 +4128,23 @@ export async function recordSaleInFirestore(
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
         };
 
-        invBatch.set(productRef, productPayload, { merge: true });
-
-        // If the product was loaded from Firestore under a different non-numeric doc ID, keep it updated too
-        if (
+        const altRef =
           currentProd?.id &&
           currentProd.id !== canonicalDocId &&
           !/^\d+$/.test(currentProd.id)
-        ) {
-          const altRef = doc(db, 'inventory', currentProd.id);
-          invBatch.set(altRef, productPayload, { merge: true });
+            ? doc(db, 'inventory', currentProd.id)
+            : undefined;
+        finalPayloadsByDocId.set(canonicalDocId, { ref: productRef, altRef, payload: productPayload });
+      }
+
+      for (const entry of finalPayloadsByDocId.values()) {
+        invBatch.set(entry.ref, entry.payload, { merge: true });
+        if (entry.altRef) {
+          invBatch.set(entry.altRef, entry.payload, { merge: true });
         }
       }
 
-      if (hasInventoryUpdates) {
+      if (finalPayloadsByDocId.size > 0) {
         await touchInventorySyncStamp(invBatch, slug);
         await invBatch.commit();
       }
@@ -4139,7 +4246,7 @@ export async function updateSaleInFirestore(
   currentInventory: Product[],
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const saleRef = doc(db, 'sales', originalSale.id);
 
   const isCredit = updatedSale.paymentMethod === 'credit';
@@ -4176,6 +4283,8 @@ export async function updateSaleInFirestore(
       ...(cleanCodes.length > 0 ? { warrantyCodes: cleanCodes } : {}),
       ...(it.warrantyDuration ? { warrantyDuration: String(it.warrantyDuration).trim().slice(0, 60) } : {}),
       ...(it.warrantyNotes ? { warrantyNotes: String(it.warrantyNotes).trim().slice(0, 300) } : {}),
+      ...(it.warehouseId ? { warehouseId: String(it.warehouseId).trim().slice(0, 100) } : {}),
+      ...(it.warehouseName ? { warehouseName: String(it.warehouseName).trim().slice(0, 150) } : {}),
     };
   });
 
@@ -4251,72 +4360,77 @@ export async function updateSaleInFirestore(
     }
   }
 
-  // Compute stock difference per product code between originalSale.items and cleanItems
+  // Compute stock difference per (code, warehouseId) between originalSale.items and cleanItems
   try {
     const storeWhData = getCachedStoreWarehouses(slug);
     const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
-    const targetWhId = updatedSale.warehouseId || originalSale.warehouseId;
+    const fallbackWhId = updatedSale.warehouseId || originalSale.warehouseId;
 
-    const oldQtyByCode = new Map<string, number>();
-    if (originalSale.status !== 'cancelled') {
+    const deltaMap = new Map<
+      string,
+      { codeKey: string; warehouseId?: string; delta: number; item?: any }
+    >();
+    const addDelta = (codeKey: string, whId: string | undefined, qtyDelta: number, item?: any) => {
+      const mk = `${codeKey}__${whId || '__default__'}`;
+      const existing = deltaMap.get(mk);
+      if (existing) {
+        existing.delta += qtyDelta;
+        if (!existing.item && item) existing.item = item;
+      } else {
+        deltaMap.set(mk, { codeKey, warehouseId: whId, delta: qtyDelta, item });
+      }
+    };
+
+    if (originalSale.status !== 'cancelled' && !originalSale.skipInventoryDeduction) {
       for (const it of originalSale.items || []) {
         const k = it.code.trim().toLowerCase();
-        if (!k) continue;
-        oldQtyByCode.set(k, (oldQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+        if (k) addDelta(k, it.warehouseId || originalSale.warehouseId, Number(it.quantity) || 0, it);
       }
     }
 
-    const newQtyByCode = new Map<string, { qty: number; item: typeof cleanItems[number] }>();
-    if (payload.status !== 'cancelled') {
+    if (payload.status !== 'cancelled' && !updatedSale.skipInventoryDeduction && !originalSale.skipInventoryDeduction) {
       for (const it of cleanItems) {
         const k = it.code.trim().toLowerCase();
-        if (!k) continue;
-        const existing = newQtyByCode.get(k);
-        if (existing) {
-          existing.qty += it.quantity;
-        } else {
-          newQtyByCode.set(k, { qty: it.quantity, item: it });
-        }
+        if (k) addDelta(k, it.warehouseId || fallbackWhId, -(Number(it.quantity) || 0), it);
       }
     }
 
-    const allCodes = new Set<string>([
-      ...Array.from(oldQtyByCode.keys()),
-      ...Array.from(newQtyByCode.keys()),
-    ]);
+    const workingByCode = new Map<string, Product>();
+    for (const p of currentInventory) {
+      workingByCode.set(p.code.trim().toLowerCase(), p);
+    }
 
     const batch = writeBatch(db);
-    let hasStockDelta = false;
+    const finalPayloadsByDocId = new Map<string, { ref: any; payload: Record<string, any> }>();
 
-    for (const codeKey of allCodes) {
-      const oldQty = oldQtyByCode.get(codeKey) || 0;
-      const newEntry = newQtyByCode.get(codeKey);
-      const newQty = newEntry?.qty || 0;
-      const stockDelta = oldQty - newQty; // positive = return to stock, negative = deduct more stock
-      if (stockDelta === 0) continue;
+    for (const entry of deltaMap.values()) {
+      if (entry.delta === 0) continue;
+      const currentProd = workingByCode.get(entry.codeKey);
+      const fallbackItem = entry.item;
+      if (!currentProd && (fallbackItem?.code || '').trim().toUpperCase() === 'CREDITO') continue;
 
-      hasStockDelta = true;
-      const currentProd = currentInventory.find(
-        (p) => p.code.trim().toLowerCase() === codeKey
-      );
-      const fallbackItem =
-        newEntry?.item ||
-        (originalSale.items || []).find((i) => i.code.trim().toLowerCase() === codeKey);
-
-      const rawCode = currentProd?.code || fallbackItem?.code || codeKey;
+      const rawCode = currentProd?.code || fallbackItem?.code || entry.codeKey;
       const productDocId = getScopedDocId(rawCode, slug);
       const productRef = doc(db, 'inventory', productDocId);
 
       const { newStock: adjustedStock, newWarehouseStocks } = applyWarehouseStockDelta(
         currentProd,
-        stockDelta,
-        targetWhId,
+        entry.delta,
+        entry.warehouseId,
         activeWhList
       );
 
-      batch.set(
-        productRef,
-        {
+      if (currentProd) {
+        workingByCode.set(entry.codeKey, {
+          ...currentProd,
+          stock: adjustedStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+        });
+      }
+
+      finalPayloadsByDocId.set(productDocId, {
+        ref: productRef,
+        payload: {
           companyId: slug,
           code: rawCode.trim().slice(0, 100),
           name: (currentProd?.name || fallbackItem?.name || 'Producto').trim().slice(0, 200),
@@ -4326,11 +4440,14 @@ export async function updateSaleInFirestore(
           stock: adjustedStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
         },
-        { merge: true }
-      );
+      });
     }
 
-    if (hasStockDelta) {
+    for (const e of finalPayloadsByDocId.values()) {
+      batch.set(e.ref, e.payload, { merge: true });
+    }
+
+    if (finalPayloadsByDocId.size > 0) {
       await touchInventorySyncStamp(batch, slug);
       await batch.commit();
     }
@@ -4346,7 +4463,7 @@ export async function cancelSaleInFirestore(
   currentInventory: Product[],
   companyId = getActiveCompanyId()
 ): Promise<void> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const saleRef = doc(db, 'sales', sale.id);
 
   const cancelledRecord: SaleRecord = { ...sale, status: 'cancelled' };
@@ -4383,32 +4500,44 @@ export async function cancelSaleInFirestore(
       const storeWhData = getCachedStoreWarehouses(slug);
       const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
       const batch = writeBatch(db);
-      let hasRestoredItems = false;
+      const workingByCode = new Map<string, Product>();
+      for (const p of currentInventory) {
+        workingByCode.set(p.code.trim().toLowerCase(), p);
+      }
+      const finalPayloadsByDocId = new Map<string, { ref: any; payload: Record<string, any> }>();
+
       for (const item of sale.items || []) {
-        const currentProd = currentInventory.find(
-          (p) =>
-            p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
-            p.id === item.productId
-        );
+        const codeKey = item.code.trim().toLowerCase();
+        const currentProd =
+          workingByCode.get(codeKey) ||
+          currentInventory.find((p) => p.id === item.productId);
         if (!currentProd && item.code.trim().toUpperCase() === 'CREDITO') {
           continue;
         }
-        hasRestoredItems = true;
-        const productDocId = getScopedDocId(currentProd?.code || item.code, slug);
+        const rawCode = currentProd?.code || item.code;
+        const productDocId = getScopedDocId(rawCode, slug);
         const productRef = doc(db, 'inventory', productDocId);
 
         const { newStock: restoredStock, newWarehouseStocks } = applyWarehouseStockDelta(
           currentProd,
           Number(item.quantity) || 1,
-          sale.warehouseId,
+          item.warehouseId || sale.warehouseId,
           activeWhList
         );
 
-        batch.set(
-          productRef,
-          {
+        if (currentProd) {
+          workingByCode.set(codeKey, {
+            ...currentProd,
+            stock: restoredStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          });
+        }
+
+        finalPayloadsByDocId.set(productDocId, {
+          ref: productRef,
+          payload: {
             companyId: slug,
-            code: (currentProd?.code || item.code).trim().slice(0, 100),
+            code: rawCode.trim().slice(0, 100),
             name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
             category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
             price: Number(currentProd?.price ?? item.price) || 0,
@@ -4416,11 +4545,14 @@ export async function cancelSaleInFirestore(
             stock: restoredStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           },
-          { merge: true }
-        );
+        });
       }
 
-      if (hasRestoredItems) {
+      for (const e of finalPayloadsByDocId.values()) {
+        batch.set(e.ref, e.payload, { merge: true });
+      }
+
+      if (finalPayloadsByDocId.size > 0) {
         await touchInventorySyncStamp(batch, slug);
         await batch.commit();
       }
@@ -4435,7 +4567,7 @@ export async function restoreCancelledSaleInFirestore(
   currentInventory: Product[],
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const saleRef = doc(db, 'sales', sale.id);
 
   const restoredRecord: SaleRecord = { ...sale, status: 'completed' };
@@ -4467,46 +4599,70 @@ export async function restoreCancelledSaleInFirestore(
     }
   }
 
-  try {
-    const storeWhData = getCachedStoreWarehouses(slug);
-    const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
-    const batch = writeBatch(db);
-    for (const item of sale.items || []) {
-      const currentProd = currentInventory.find(
-        (p) =>
-          p.code.trim().toLowerCase() === item.code.trim().toLowerCase() ||
-          p.id === item.productId
-      );
-      const productDocId = getScopedDocId(currentProd?.code || item.code, slug);
-      const productRef = doc(db, 'inventory', productDocId);
+  if (!sale.skipInventoryDeduction) {
+    try {
+      const storeWhData = getCachedStoreWarehouses(slug);
+      const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
+      const batch = writeBatch(db);
+      const workingByCode = new Map<string, Product>();
+      for (const p of currentInventory) {
+        workingByCode.set(p.code.trim().toLowerCase(), p);
+      }
+      const finalPayloadsByDocId = new Map<string, { ref: any; payload: Record<string, any> }>();
 
-      const { newStock: deductedStock, newWarehouseStocks } = applyWarehouseStockDelta(
-        currentProd,
-        -(Number(item.quantity) || 1),
-        sale.warehouseId,
-        activeWhList
-      );
+      for (const item of sale.items || []) {
+        const codeKey = item.code.trim().toLowerCase();
+        const currentProd =
+          workingByCode.get(codeKey) ||
+          currentInventory.find((p) => p.id === item.productId);
+        if (!currentProd && item.code.trim().toUpperCase() === 'CREDITO') {
+          continue;
+        }
+        const rawCode = currentProd?.code || item.code;
+        const productDocId = getScopedDocId(rawCode, slug);
+        const productRef = doc(db, 'inventory', productDocId);
 
-      batch.set(
-        productRef,
-        {
-          companyId: slug,
-          code: (currentProd?.code || item.code).trim().slice(0, 100),
-          name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
-          category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
-          price: Number(currentProd?.price ?? item.price) || 0,
-          cost: Number(currentProd?.cost ?? item.cost) || 0,
-          stock: deductedStock,
-          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
-        },
-        { merge: true }
-      );
+        const { newStock: deductedStock, newWarehouseStocks } = applyWarehouseStockDelta(
+          currentProd,
+          -(Number(item.quantity) || 1),
+          item.warehouseId || sale.warehouseId,
+          activeWhList
+        );
+
+        if (currentProd) {
+          workingByCode.set(codeKey, {
+            ...currentProd,
+            stock: deductedStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          });
+        }
+
+        finalPayloadsByDocId.set(productDocId, {
+          ref: productRef,
+          payload: {
+            companyId: slug,
+            code: rawCode.trim().slice(0, 100),
+            name: (currentProd?.name || item.name || 'Producto').trim().slice(0, 200),
+            category: (currentProd?.category || item.category || 'General').trim().slice(0, 100),
+            price: Number(currentProd?.price ?? item.price) || 0,
+            cost: Number(currentProd?.cost ?? item.cost) || 0,
+            stock: deductedStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          },
+        });
+      }
+
+      for (const e of finalPayloadsByDocId.values()) {
+        batch.set(e.ref, e.payload, { merge: true });
+      }
+
+      if (finalPayloadsByDocId.size > 0) {
+        await touchInventorySyncStamp(batch, slug);
+        await batch.commit();
+      }
+    } catch (invError) {
+      console.warn('Warning deducting stock on sale restore:', invError);
     }
-
-    await touchInventorySyncStamp(batch, slug);
-    await batch.commit();
-  } catch (invError) {
-    console.warn('Warning deducting stock on sale restore:', invError);
   }
 
   return restoredRecord;

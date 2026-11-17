@@ -733,7 +733,7 @@ function triggerSystemPrintNow(
   }
   portalContainer.innerHTML = `<div class="print-wrapper">${htmlBody}</div>`;
 
-  // 2. Also mount an isolated synchronous print iframe so Chrome/Edge/Safari print ONLY the clean document
+  // 2. Also mount an isolated print iframe with full layout dimensions off-screen so flex/table rules compute accurately
   let printIframe = document.getElementById('gosen-isolated-print-frame') as HTMLIFrameElement | null;
   if (printIframe && printIframe.parentNode) {
     printIframe.parentNode.removeChild(printIframe);
@@ -741,17 +741,29 @@ function triggerSystemPrintNow(
   printIframe = document.createElement('iframe');
   printIframe.id = 'gosen-isolated-print-frame';
   printIframe.style.position = 'fixed';
-  printIframe.style.right = '0';
-  printIframe.style.bottom = '0';
-  printIframe.style.width = '1px';
-  printIframe.style.height = '1px';
+  printIframe.style.left = '-9999px';
+  printIframe.style.top = '0';
+  printIframe.style.width = isThermal58 ? '58mm' : isThermal80 ? '80mm' : '794px';
+  printIframe.style.height = '1123px';
   printIframe.style.border = '0';
-  printIframe.style.opacity = '0.01';
+  printIframe.style.opacity = '0';
   printIframe.style.pointerEvents = 'none';
   document.body.appendChild(printIframe);
 
   const prevTitle = document.title;
   document.title = title;
+
+  // Swap remote logo URLs with pre-cached base64 data URI if already loaded so logos render instantly in print
+  const printSafeHtmlBody = htmlBody.replace(
+    /<img\s+([^>]*?)src="(https?:\/\/[^"]+|\/store-logo\.jpg)"/gi,
+    (full, attrs, srcUrl) => {
+      const cached = logoBase64Cache.get(srcUrl);
+      return cached && cached.startsWith('data:') ? `<img ${attrs}src="${cached}"` : full;
+    }
+  );
+  if (portalContainer) {
+    portalContainer.innerHTML = `<div class="print-wrapper">${printSafeHtmlBody}</div>`;
+  }
 
   let printedViaIframe = false;
   try {
@@ -767,12 +779,40 @@ function triggerSystemPrintNow(
   <style>${sharedCss}</style>
 </head>
 <body>
-  <div class="print-wrapper">${htmlBody}</div>
+  <div class="print-wrapper">${printSafeHtmlBody}</div>
 </body>
 </html>`);
       frameDoc.close();
-      frameWin.focus();
-      frameWin.print();
+      const pendingImgs = Array.from(frameDoc.images || []).filter((img) => !img.complete);
+      if (pendingImgs.length > 0) {
+        let settled = false;
+        const doPrint = () => {
+          if (settled) return;
+          settled = true;
+          try {
+            frameWin.focus();
+            frameWin.print();
+          } catch {
+            try {
+              window.focus();
+              window.print();
+            } catch {}
+          }
+        };
+        Promise.all(
+          pendingImgs.map(
+            (img) =>
+              new Promise<void>((res) => {
+                img.onload = () => res();
+                img.onerror = () => res();
+              })
+          )
+        ).finally(doPrint);
+        setTimeout(doPrint, 350);
+      } else {
+        frameWin.focus();
+        frameWin.print();
+      }
       printedViaIframe = true;
     }
   } catch (iframeErr) {
@@ -1395,7 +1435,9 @@ export function buildSaleDocumentHtml(
           ${(sale.items || [])
             .map((it, i) => {
               const disc = Number(it.unitDiscount) || 0;
-              const orig = it.originalPrice !== undefined ? Number(it.originalPrice) : it.price + disc;
+              const rawOrig =
+                it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) + disc;
+              const orig = rawOrig >= Number(it.price) ? rawOrig : Number(it.price) + disc;
               const wCodeStr =
                 it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
                   ? it.warrantyCodes.filter(Boolean).join(', ')
@@ -1899,8 +1941,9 @@ export async function downloadSalePdf(
     ],
     body: (sale.items || []).map((it, idx) => {
       const unitDisc = Number(it.unitDiscount) || 0;
-      const origPrice =
+      const rawOrig =
         it.originalPrice !== undefined ? Number(it.originalPrice) : Number(it.price) + unitDisc;
+      const origPrice = rawOrig >= Number(it.price) ? rawOrig : Number(it.price) + unitDisc;
       const wCodeStr =
         it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
           ? it.warrantyCodes.filter(Boolean).join(', ')

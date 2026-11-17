@@ -32,6 +32,7 @@ import {
   getDefaultWarehousesForStore,
   saveStoreSettingsToFirestore,
   setCachedStoreSettings,
+  belongsToCompany,
 } from '../firebase/firestoreService';
 import {
   PRINTER_FORMAT_OPTIONS,
@@ -562,12 +563,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
       localStorage.setItem(`stockmaster_pos_warehouse_${companyKey}`, newWhId);
     } catch {}
 
-    // If cart has items, validate their quantities against the newly selected warehouse stock
+    // Preserve cart items that are already assigned to another warehouse; only validate legacy untagged items
     if (cart.length > 0) {
       let adjustedCount = 0;
       setCart((prevCart) => {
         const nextCart: SaleItem[] = [];
         for (const item of prevCart) {
+          if (item.warehouseId && item.warehouseId !== newWhId) {
+            nextCart.push(item);
+            continue;
+          }
           const prod = inventory.find((p) => p.code === item.code);
           const availInNewWh = getPosWarehouseStock(prod, newWhId);
           if (availInNewWh <= 0) {
@@ -578,11 +583,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
             adjustedCount++;
             nextCart.push({
               ...item,
+              warehouseId: newWhId,
+              warehouseName: targetWh.name,
               quantity: availInNewWh,
-              subtotal: availInNewWh * item.price,
+              subtotal: Number((availInNewWh * item.price).toFixed(2)),
             });
           } else {
-            nextCart.push(item);
+            nextCart.push({
+              ...item,
+              warehouseId: item.warehouseId || newWhId,
+              warehouseName: item.warehouseName || targetWh.name,
+            });
           }
         }
         return nextCart;
@@ -590,7 +601,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
       if (adjustedCount > 0) {
         showToast(
-          `Bodega cambiada a "${targetWh.name}". Se ajustaron ${adjustedCount} artículo(s) del ticket según la existencia en esta bodega.`,
+          `Catálogo cambiado a "${targetWh.name}". Se ajustaron ${adjustedCount} artículo(s) sin existencia en esa bodega.`,
           'warning'
         );
       } else {
@@ -609,6 +620,47 @@ export const SalesView: React.FC<SalesViewProps> = ({
     getPreferredPrinterFormat(storeSettings)
   );
   const [showSalesReportPrintModal, setShowSalesReportPrintModal] = useState<boolean>(false);
+
+  // Debounced persistence for inline Receipt Modal edits (prevents overlapping Firestore writes on every keystroke)
+  const pendingReceiptEditRef = useRef<{
+    original: SaleRecord;
+    updated: SaleRecord;
+  } | null>(null);
+  const pendingReceiptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushReceiptSaleUpdate = async () => {
+    if (pendingReceiptTimerRef.current) {
+      clearTimeout(pendingReceiptTimerRef.current);
+      pendingReceiptTimerRef.current = null;
+    }
+    const pending = pendingReceiptEditRef.current;
+    pendingReceiptEditRef.current = null;
+    if (pending && onUpdateSale) {
+      await onUpdateSale(pending.original, pending.updated).catch(() => {});
+    }
+  };
+
+  const queueReceiptSaleUpdate = (original: SaleRecord, updated: SaleRecord) => {
+    if (pendingReceiptEditRef.current) {
+      pendingReceiptEditRef.current.updated = updated;
+    } else {
+      pendingReceiptEditRef.current = { original, updated };
+    }
+    if (pendingReceiptTimerRef.current) {
+      clearTimeout(pendingReceiptTimerRef.current);
+    }
+    pendingReceiptTimerRef.current = setTimeout(() => {
+      flushReceiptSaleUpdate();
+    }, 550);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (pendingReceiptTimerRef.current) {
+        clearTimeout(pendingReceiptTimerRef.current);
+      }
+    };
+  }, []);
 
   // Sync WhatsApp phone whenever completedSale changes
   useEffect(() => {
@@ -800,6 +852,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
       const cleanQuery = query.toLowerCase();
       const cleanRaw = cleanQuery.replace(/[-_\s]/g, '');
 
+      const canFulfillMatch = (prod: Product | undefined) => {
+        if (!prod) return false;
+        if (getPosWarehouseStock(prod) > 0) return true;
+        return getOtherWarehousesWithStock(prod).some((loc) =>
+          allowedPosWarehouses.some((w) => w.id === loc.warehouse.id)
+        );
+      };
+
       // 1. Exact match by code or barcode
       const exactCodeMatch = inventory.find(
         (p) =>
@@ -809,7 +869,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
       if (exactCodeMatch) {
         addToCart(exactCodeMatch);
-        if (getPosWarehouseStock(exactCodeMatch) > 0) {
+        if (canFulfillMatch(exactCodeMatch)) {
           setSearchQuery('');
         }
         return;
@@ -822,7 +882,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
       if (exactNameMatch) {
         addToCart(exactNameMatch);
-        if (getPosWarehouseStock(exactNameMatch) > 0) {
+        if (canFulfillMatch(exactNameMatch)) {
           setSearchQuery('');
         }
         return;
@@ -831,7 +891,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
       // 3. If filtered results has exactly 1 matching product
       if (filteredCatalog.length === 1) {
         addToCart(filteredCatalog[0]);
-        if (getPosWarehouseStock(filteredCatalog[0]) > 0) {
+        if (canFulfillMatch(filteredCatalog[0])) {
           setSearchQuery('');
         }
         return;
@@ -840,7 +900,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
       // 4. If filtered results has multiple matches, add the top match and inform cashier
       if (filteredCatalog.length > 1) {
         addToCart(filteredCatalog[0]);
-        if (getPosWarehouseStock(filteredCatalog[0]) > 0) {
+        if (canFulfillMatch(filteredCatalog[0])) {
           showToast(
             `Agregado: "${filteredCatalog[0].name}" (${filteredCatalog.length} artículos encontrados para "${query}")`,
             'info'
@@ -858,9 +918,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
     }
   };
 
-  // Add product to cart with stock validation in the selected warehouse & automatic per-article discount
+  // Add product to cart with stock validation in the resolved warehouse & automatic per-article discount
   const addToCart = (product: Product) => {
-    let availableStock = getPosWarehouseStock(product);
+    let targetWh = selectedWarehouse;
+    let availableStock = getPosWarehouseStock(product, targetWh.id);
     const otherLocations = getOtherWarehousesWithStock(product);
     const allowedOtherLocations = otherLocations.filter((loc) =>
       allowedPosWarehouses.some((w) => w.id === loc.warehouse.id)
@@ -868,10 +929,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
     if (availableStock <= 0) {
       if (allowedOtherLocations.length > 0) {
         const bestAlt = allowedOtherLocations[0];
+        targetWh = bestAlt.warehouse;
         availableStock = bestAlt.stock;
-        setSelectedWarehouseId(bestAlt.warehouse.id);
+        if (cart.length === 0) {
+          setSelectedWarehouseId(bestAlt.warehouse.id);
+          try {
+            localStorage.setItem(`stockmaster_pos_warehouse_${companyKey}`, bestAlt.warehouse.id);
+          } catch {}
+        }
         showToast(
-          `Bodega cambiada automáticamente a "${bestAlt.warehouse.name}" (${bestAlt.stock} uds disponibles) para facturar "${product.name}".`,
+          `Agregado "${product.name}" desde "${bestAlt.warehouse.name}" (${bestAlt.stock} uds disponibles).`,
           'info'
         );
       } else if (otherLocations.length > 0) {
@@ -898,15 +965,22 @@ export const SalesView: React.FC<SalesViewProps> = ({
       basePrice,
       Math.max(0, Number(product.discount) || 0)
     );
-    const effectiveUnitPrice = Math.max(0, basePrice - assignedUnitDiscount);
+    const effectiveUnitPrice = Math.max(0, Number((basePrice - assignedUnitDiscount).toFixed(2)));
 
     setCart((prevCart) => {
       const existingIndex = prevCart.findIndex((it) => it.code === product.code);
       if (existingIndex >= 0) {
-        const currentQty = prevCart[existingIndex].quantity;
-        if (currentQty + 1 > availableStock) {
+        const existingItem = prevCart[existingIndex];
+        const existingWhId = existingItem.warehouseId || targetWh.id;
+        const existingWhName =
+          existingItem.warehouseName ||
+          activeWarehouses.find((w) => w.id === existingWhId)?.name ||
+          targetWh.name;
+        const existingWhStock = getPosWarehouseStock(product, existingWhId);
+        const currentQty = existingItem.quantity;
+        if (currentQty + 1 > existingWhStock) {
           showToast(
-            `Stock máximo alcanzado en ${selectedWarehouse.name} para "${product.name}". Disponible: ${availableStock}`,
+            `Stock máximo alcanzado en ${existingWhName} para "${product.name}". Disponible: ${existingWhStock}`,
             'warning'
           );
           return prevCart;
@@ -914,9 +988,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
         const updated = [...prevCart];
         const newQty = currentQty + 1;
         updated[existingIndex] = {
-          ...updated[existingIndex],
+          ...existingItem,
+          warehouseId: existingWhId,
+          warehouseName: existingWhName,
           quantity: newQty,
-          subtotal: newQty * updated[existingIndex].price,
+          subtotal: Number((newQty * existingItem.price).toFixed(2)),
         };
         return updated;
       } else {
@@ -939,40 +1015,73 @@ export const SalesView: React.FC<SalesViewProps> = ({
             cost: Number(product.cost) || 0,
             quantity: 1,
             subtotal: effectiveUnitPrice,
+            warehouseId: targetWh.id,
+            warehouseName: targetWh.name,
           },
         ];
       }
     });
   };
 
-  // Update item quantity in cart
+  // Update item quantity in cart (checks the item's own warehouse stock)
   const updateCartQuantity = (code: string, newQty: number) => {
     const product = inventory.find((p) => p.code === code);
-    const availableStock = product ? getPosWarehouseStock(product) : 9999;
 
     if (newQty <= 0) {
       removeFromCart(code);
       return;
     }
 
-    if (newQty > availableStock) {
-      showToast(
-        `No puedes agregar más de ${availableStock} unidades disponibles en ${selectedWarehouse.name}.`,
-        'warning'
-      );
-      newQty = availableStock;
-    }
-
     setCart((prev) =>
       prev.map((item) => {
         if (item.code === code) {
+          const itemWhId = item.warehouseId || selectedWarehouse.id;
+          const itemWhName =
+            item.warehouseName ||
+            activeWarehouses.find((w) => w.id === itemWhId)?.name ||
+            selectedWarehouse.name;
+          const availableStock = product ? getPosWarehouseStock(product, itemWhId) : 9999;
+          let finalQty = newQty;
+          if (finalQty > availableStock) {
+            showToast(
+              `No puedes agregar más de ${availableStock} unidades disponibles en ${itemWhName}.`,
+              'warning'
+            );
+            finalQty = Math.max(1, availableStock);
+          }
           return {
             ...item,
-            quantity: newQty,
-            subtotal: newQty * item.price,
+            quantity: finalQty,
+            subtotal: Number((finalQty * item.price).toFixed(2)),
           };
         }
         return item;
+      })
+    );
+  };
+
+  // Update per-unit price directly in the POS cart (essential when product base price is 0 or negotiated)
+  const updateCartItemPrice = (code: string, rawPrice: number) => {
+    const cleanPrice = Math.max(0, Number(rawPrice) || 0);
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.code !== code) return item;
+        const nextOrig =
+          item.originalPrice !== undefined && Number(item.originalPrice) >= cleanPrice
+            ? Number(item.originalPrice)
+            : cleanPrice;
+        const nextUnitDiscount =
+          item.originalPrice !== undefined && Number(item.originalPrice) > cleanPrice
+            ? Number((Number(item.originalPrice) - cleanPrice).toFixed(2))
+            : 0;
+        return {
+          ...item,
+          originalPrice: nextOrig,
+          cashPrice: cleanPrice,
+          unitDiscount: nextUnitDiscount,
+          price: cleanPrice,
+          subtotal: Number((cleanPrice * item.quantity).toFixed(2)),
+        };
       })
     );
   };
@@ -988,13 +1097,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
             basePrice,
             Math.max(0, Number(rawDiscount) || 0)
           );
-          const effectivePrice = Math.max(0, basePrice - clampedDiscount);
+          const effectivePrice = Math.max(0, Number((basePrice - clampedDiscount).toFixed(2)));
           return {
             ...item,
             originalPrice: basePrice,
+            cashPrice: effectivePrice,
             unitDiscount: clampedDiscount,
             price: effectivePrice,
-            subtotal: effectivePrice * item.quantity,
+            subtotal: Number((effectivePrice * item.quantity).toFixed(2)),
           };
         }
         return item;
@@ -1242,37 +1352,45 @@ export const SalesView: React.FC<SalesViewProps> = ({
   ]);
 
   const discountAmount = useMemo(() => {
-    return Math.min(cartSubtotal, manualDiscountAmount + loyaltyRedemptionCalc.discountLps);
+    return Number(Math.min(cartSubtotal, manualDiscountAmount + loyaltyRedemptionCalc.discountLps).toFixed(2));
   }, [cartSubtotal, manualDiscountAmount, loyaltyRedemptionCalc.discountLps]);
 
   const subtotalAfterDiscount = useMemo(() => {
-    return Math.max(0, cartSubtotal - discountAmount);
+    return Number(Math.max(0, cartSubtotal - discountAmount).toFixed(2));
   }, [cartSubtotal, discountAmount]);
 
   const taxAmount = useMemo(() => {
-    return applyTax ? subtotalAfterDiscount * 0.15 : 0;
+    return applyTax ? Number((subtotalAfterDiscount * 0.15).toFixed(2)) : 0;
   }, [applyTax, subtotalAfterDiscount]);
 
   const cartTotal = useMemo(() => {
-    return subtotalAfterDiscount + taxAmount;
+    return Number((subtotalAfterDiscount + taxAmount).toFixed(2));
   }, [subtotalAfterDiscount, taxAmount]);
 
-  // Default Credit Subtotal from per-item creditPrice (if defined in inventory or edited in cart)
-  const defaultCartCreditTotal = useMemo(() => {
-    const rawCreditSub = cart.reduce((sum, it) => {
-      const liveProd = inventory.find((p) => p.code === it.code);
-      const itemCreditUnit =
-        it.creditPrice !== undefined && Number(it.creditPrice) > 0
-          ? Number(it.creditPrice)
-          : liveProd?.creditPrice !== undefined && Number(liveProd.creditPrice) > 0
-          ? Number(liveProd.creditPrice)
-          : it.price;
-      return sum + itemCreditUnit * it.quantity;
-    }, 0);
-    const afterDisc = Math.max(0, rawCreditSub - discountAmount);
-    const withTax = applyTax ? afterDisc * 1.15 : afterDisc;
-    return Number(Math.max(cartTotal, withTax).toFixed(2));
-  }, [cart, inventory, discountAmount, applyTax, cartTotal]);
+  // Default Credit Total from per-item creditPrice (if defined in inventory or edited in cart), discount, and 15% ISV
+  const defaultCartCreditCalc = useMemo(() => {
+    const rawCreditSub = Number(
+      cart
+        .reduce((sum, it) => {
+          const liveProd = inventory.find((p) => p.code === it.code);
+          const itemCreditUnit =
+            it.creditPrice !== undefined && Number(it.creditPrice) > 0
+              ? Number(it.creditPrice)
+              : liveProd?.creditPrice !== undefined && Number(liveProd.creditPrice) > 0
+              ? Number(liveProd.creditPrice)
+              : it.price;
+          return sum + itemCreditUnit * it.quantity;
+        }, 0)
+        .toFixed(2)
+    );
+    const appliedDisc = Number(Math.min(rawCreditSub, discountAmount).toFixed(2));
+    const afterDisc = Number(Math.max(0, rawCreditSub - appliedDisc).toFixed(2));
+    const creditTax = applyTax ? Number((afterDisc * 0.15).toFixed(2)) : 0;
+    const total = Number((afterDisc + creditTax).toFixed(2));
+    return { rawCreditSub, appliedDisc, creditTax, total };
+  }, [cart, inventory, discountAmount, applyTax]);
+
+  const defaultCartCreditTotal = defaultCartCreditCalc.total;
 
   // Effective total when selling on credit (uses custom financed price if entered, or defaultCartCreditTotal)
   const effectiveCreditTotal = useMemo(() => {
@@ -1317,30 +1435,71 @@ export const SalesView: React.FC<SalesViewProps> = ({
       return;
     }
 
-    // Verify stock availability in the selected warehouse right before saving (with automatic fallback to another authorized warehouse if stock is located there)
-    let checkoutWarehouse = selectedWarehouse;
+    const isCreditCheckout = paymentMethod === 'credit';
+    const hasManualCreditOverride = !Number.isNaN(parseFloat(creditTotalPriceInput)) && parseFloat(creditTotalPriceInput) > 0;
+
+    // Guard against accidentally invoicing items at L. 0.00 (common when a catalog SKU has price: 0)
     for (const item of cart) {
       const liveProduct = inventory.find((p) => p.code === item.code);
+      const effectiveItemCredit =
+        item.creditPrice !== undefined && Number(item.creditPrice) > 0
+          ? Number(item.creditPrice)
+          : liveProduct?.creditPrice !== undefined && Number(liveProduct.creditPrice) > 0
+          ? Number(liveProduct.creditPrice)
+          : Number(item.price) || 0;
+      const effectiveUnitCheck = isCreditCheckout ? effectiveItemCredit : Number(item.price) || 0;
+      if (effectiveUnitCheck <= 0 && (Number(item.unitDiscount) || 0) <= 0 && !(isCreditCheckout && hasManualCreditOverride)) {
+        playSound('error');
+        showToast(
+          `El artículo "${item.name}" tiene precio L. 0.00. Ingresa el precio unitario en el ticket antes de facturar.`,
+          'warning'
+        );
+        return;
+      }
+    }
+
+    // Verify stock availability per item against its resolved allowed warehouse right before saving
+    const resolvedCartItems: SaleItem[] = [];
+    for (const item of cart) {
+      const liveProduct = inventory.find((p) => p.code === item.code);
+      const preferredWhId = item.warehouseId || selectedWarehouse.id;
+      const preferredWh =
+        allowedPosWarehouses.find((w) => w.id === preferredWhId) || selectedWarehouse;
       const currentStock = liveProduct
-        ? getProductStockInWarehouse(liveProduct, checkoutWarehouse.id, activeWarehouses)
+        ? getProductStockInWarehouse(liveProduct, preferredWh.id, activeWarehouses)
         : 0;
-      if (item.quantity > currentStock) {
+      if (item.quantity <= currentStock) {
+        resolvedCartItems.push({
+          ...item,
+          warehouseId: preferredWh.id,
+          warehouseName: preferredWh.name,
+        });
+      } else {
         const altWithStock = liveProduct
-          ? getOtherWarehousesWithStock(liveProduct).find(
-              (loc) =>
-                loc.stock >= item.quantity &&
-                allowedPosWarehouses.some((w) => w.id === loc.warehouse.id)
-            )
+          ? activeWarehouses
+              .filter((w) => allowedPosWarehouses.some((aw) => aw.id === w.id))
+              .map((w) => ({
+                warehouse: w,
+                stock: getProductStockInWarehouse(liveProduct, w.id, activeWarehouses),
+              }))
+              .find((loc) => loc.stock >= item.quantity)
           : undefined;
         if (altWithStock) {
-          checkoutWarehouse = altWithStock.warehouse;
-          setSelectedWarehouseId(altWithStock.warehouse.id);
+          resolvedCartItems.push({
+            ...item,
+            warehouseId: altWithStock.warehouse.id,
+            warehouseName: altWithStock.warehouse.name,
+          });
         } else if (!isWarehousesModuleEnabled && (Number(liveProduct?.stock) || 0) >= item.quantity) {
-          // Total stock is sufficient when warehouses module is disabled
+          resolvedCartItems.push({
+            ...item,
+            warehouseId: preferredWh.id,
+            warehouseName: preferredWh.name,
+          });
         } else {
           playSound('error');
           showToast(
-            `Stock insuficiente en "${checkoutWarehouse.name}" para "${item.name}". Solo hay ${currentStock} unidades disponibles en tu bodega autorizada.`,
+            `Stock insuficiente en "${preferredWh.name}" para "${item.name}". Solo hay ${currentStock} unidades disponibles en tu bodega autorizada.`,
             'error'
           );
           return;
@@ -1348,7 +1507,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
       }
     }
 
-    if (paymentMethod === 'cash' && numericCashGiven < cartTotal) {
+    const distinctSaleWhNames = Array.from(
+      new Set(resolvedCartItems.map((it) => it.warehouseName).filter(Boolean))
+    ) as string[];
+    const primarySaleWhId = resolvedCartItems[0]?.warehouseId || selectedWarehouse.id;
+    const saleWarehouseDisplayName =
+      distinctSaleWhNames.length > 1
+        ? distinctSaleWhNames.join(' + ')
+        : distinctSaleWhNames[0] || selectedWarehouse.name;
+
+    if (paymentMethod === 'cash' && numericCashGiven + 0.001 < cartTotal) {
       playSound('error');
       showToast(
         `El efectivo recibido (L. ${numericCashGiven.toFixed(2)}) es menor que el total a pagar (L. ${cartTotal.toFixed(2)})`,
@@ -1387,7 +1555,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
       const isCredit = paymentMethod === 'credit';
       const finalSaleTotal = isCredit ? effectiveCreditTotal : cartTotal;
       const initialDeposit = isCredit
-        ? Math.min(finalSaleTotal, Math.max(0, parseFloat(creditInitialDeposit) || 0))
+        ? Number(Math.min(finalSaleTotal, Math.max(0, parseFloat(creditInitialDeposit) || 0)).toFixed(2))
         : 0;
       const computedBalanceDue = isCredit
         ? Math.max(0, Number((finalSaleTotal - initialDeposit).toFixed(2)))
@@ -1443,12 +1611,13 @@ export const SalesView: React.FC<SalesViewProps> = ({
       const effectiveQuota =
         parseFloat(creditCustomQuota) > 0 ? Number(parseFloat(creditCustomQuota).toFixed(2)) : defaultQuota;
 
-      // When selling on credit with a different financed price (effectiveCreditTotal !== cartTotal),
-      // adjust the recorded items' unit price & subtotal to reflect the financed credit price while preserving cashPrice
+      // Resolve line items & exact reconciled totals (avoiding cent-level rounding drift and preserving discount/ISV)
+      const parsedManualCredit = parseFloat(creditTotalPriceInput);
+      const usesManualCreditTotal = isCredit && !Number.isNaN(parsedManualCredit) && parsedManualCredit > 0;
+
       const finalItemsForSale: SaleItem[] = isCredit
         ? (() => {
-            const ratio = cartSubtotal > 0 ? finalSaleTotal / cartSubtotal : 1;
-            return cart.map((it) => {
+            const baseCreditItems = resolvedCartItems.map((it) => {
               const liveProd = inventory.find((p) => p.code === it.code);
               const explicitCreditUnit =
                 it.creditPrice !== undefined && Number(it.creditPrice) > 0
@@ -1456,28 +1625,84 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   : liveProd?.creditPrice !== undefined && Number(liveProd.creditPrice) > 0
                   ? Number(liveProd.creditPrice)
                   : undefined;
+              const baseUnit = explicitCreditUnit !== undefined ? explicitCreditUnit : it.price;
+              return { it, baseUnit };
+            });
 
-              const creditUnitPrice =
-                parseFloat(creditTotalPriceInput) > 0
-                  ? Number((it.price * ratio).toFixed(2))
-                  : explicitCreditUnit !== undefined
-                  ? explicitCreditUnit
-                  : Number((it.price * ratio).toFixed(2));
+            if (!usesManualCreditTotal) {
+              return baseCreditItems.map(({ it, baseUnit }) => {
+                const creditUnitPrice = Number(baseUnit.toFixed(2));
+                const lineSub = Number((creditUnitPrice * it.quantity).toFixed(2));
+                return {
+                  ...it,
+                  cashPrice: it.price,
+                  creditPrice: creditUnitPrice,
+                  price: creditUnitPrice,
+                  subtotal: lineSub,
+                };
+              });
+            }
 
+            // Proportional scaling from base credit subtotals to manual credit total
+            const baseSum = baseCreditItems.reduce(
+              (acc, entry) => acc + entry.baseUnit * entry.it.quantity,
+              0
+            );
+            const scaled = baseCreditItems.map(({ it, baseUnit }) => {
+              const ratio = baseSum > 0 ? finalSaleTotal / baseSum : 1;
+              const scaledUnit =
+                baseSum > 0
+                  ? Number((baseUnit * ratio).toFixed(2))
+                  : Number((finalSaleTotal / Math.max(1, totalCartItemsCount)).toFixed(2));
+              const lineSub = Number((scaledUnit * it.quantity).toFixed(2));
               return {
                 ...it,
                 cashPrice: it.price,
-                creditPrice: creditUnitPrice,
-                price: creditUnitPrice,
-                subtotal: Number((creditUnitPrice * it.quantity).toFixed(2)),
+                creditPrice: scaledUnit,
+                price: scaledUnit,
+                subtotal: lineSub,
               };
             });
-          })()
-        : cart;
 
-      const finalSubtotalForSale = isCredit
-        ? Number(finalItemsForSale.reduce((sum, it) => sum + it.subtotal, 0).toFixed(2))
-        : cartSubtotal;
+            const sumScaled = Number(scaled.reduce((s, x) => s + x.subtotal, 0).toFixed(2));
+            const centDiff = Number((finalSaleTotal - sumScaled).toFixed(2));
+            if (Math.abs(centDiff) > 0 && scaled.length > 0) {
+              const lastIdx = scaled.length - 1;
+              const target = scaled[lastIdx];
+              const nextLineSub = Math.max(0, Number((target.subtotal + centDiff).toFixed(2)));
+              const nextUnit =
+                target.quantity === 1
+                  ? nextLineSub
+                  : Number((nextLineSub / target.quantity).toFixed(2));
+              scaled[lastIdx] = {
+                ...target,
+                creditPrice: nextUnit,
+                price: nextUnit,
+                subtotal: nextLineSub,
+              };
+            }
+            return scaled;
+          })()
+        : resolvedCartItems;
+
+      const finalDiscountForSale = isCredit
+        ? usesManualCreditTotal
+          ? 0
+          : defaultCartCreditCalc.appliedDisc
+        : Number(discountAmount.toFixed(2));
+
+      const finalTaxForSale = isCredit
+        ? usesManualCreditTotal
+          ? 0
+          : defaultCartCreditCalc.creditTax
+        : Number(taxAmount.toFixed(2));
+
+      const rawItemsSubtotal = Number(
+        finalItemsForSale.reduce((sum, it) => sum + (Number(it.subtotal) || 0), 0).toFixed(2)
+      );
+      const reconciledTotal = isCredit
+        ? finalSaleTotal
+        : Number(Math.max(0, rawItemsSubtotal - finalDiscountForSale + finalTaxForSale).toFixed(2));
 
       // Build temporary sale snapshot to resolve initial CreditContractData when paymentMethod === 'credit'
       const baseSaleData: Omit<SaleRecord, 'id'> = {
@@ -1486,19 +1711,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
         date: dateFormatted,
         items: finalItemsForSale,
         totalItems: totalCartItemsCount,
-        subtotal: finalSubtotalForSale,
-        discount: isCredit ? 0 : discountAmount,
-        tax: isCredit ? 0 : taxAmount,
-        total: finalSaleTotal,
+        subtotal: rawItemsSubtotal,
+        discount: finalDiscountForSale,
+        tax: finalTaxForSale,
+        total: reconciledTotal,
         cashPriceTotal: isCredit ? cartTotal : undefined,
         paymentMethod,
         amountPaid:
           paymentMethod === 'cash'
-            ? numericCashGiven
+            ? Number(numericCashGiven.toFixed(2))
             : paymentMethod === 'credit'
             ? initialDeposit
-            : finalSaleTotal,
-        change: paymentMethod === 'cash' ? cashChange : 0,
+            : reconciledTotal,
+        change: paymentMethod === 'cash' ? Number(Math.max(0, numericCashGiven - reconciledTotal).toFixed(2)) : 0,
         balanceDue: computedBalanceDue,
         creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
         creditDueDate: isCredit && creditDueDate ? creditDueDate : undefined,
@@ -1509,8 +1734,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
         customerAddress: cleanCustAddress || undefined,
         notes: saleNotes.trim() || undefined,
         status: 'completed',
-        warehouseId: checkoutWarehouse.id,
-        warehouseName: checkoutWarehouse.name,
+        warehouseId: primarySaleWhId,
+        warehouseName: saleWarehouseDisplayName,
         cashier: resolveInvoiceIssuerName(
           hasCustomIssuerTyped ? invoiceIssuerName : invoiceIssuerName || userSession?.userName,
           effectiveInvoiceTemplate.defaultIssuerName,
@@ -1642,7 +1867,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
               points: -ptsRedeemed,
               balanceAfter: runningBal,
               saleNumber,
-              saleTotal: cartTotal,
+              saleTotal: reconciledTotal,
               discountApplied: ptsDiscountLps,
               notes: `Canje de ${ptsRedeemed} pts (-L. ${ptsDiscountLps.toFixed(2)}) en ${saleNumber}`,
               registeredBy: userSession?.userName || 'Administrador',
@@ -1659,8 +1884,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
               points: ptsEarned,
               balanceAfter: runningBal,
               saleNumber,
-              saleTotal: cartTotal,
-              notes: `Puntos ganados en compra ${saleNumber} (L. ${cartTotal.toFixed(2)})`,
+              saleTotal: reconciledTotal,
+              notes: `Puntos ganados en compra ${saleNumber} (L. ${reconciledTotal.toFixed(2)})`,
               registeredBy: userSession?.userName || 'Administrador',
             });
           }
@@ -1676,7 +1901,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     currentPoints: runningBal,
                     totalPointsEarned: (c.totalPointsEarned || 0) + ptsEarned,
                     totalPointsRedeemed: (c.totalPointsRedeemed || 0) + ptsRedeemed,
-                    totalPurchasesAmount: (c.totalPurchasesAmount || 0) + cartTotal,
+                    totalPurchasesAmount: (c.totalPurchasesAmount || 0) + reconciledTotal,
                     purchasesCount: (c.purchasesCount || 0) + 1,
                     history: [...newLogs.reverse(), ...(c.history || [])].slice(0, 80),
                     updatedAt: nowMs,
@@ -1695,7 +1920,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
               totalPointsEarned:
                 (loyaltyConfig.welcomeBonusPoints || 0) + ptsEarned,
               totalPointsRedeemed: ptsRedeemed,
-              totalPurchasesAmount: cartTotal,
+              totalPurchasesAmount: reconciledTotal,
               purchasesCount: 1,
               history: newLogs.reverse(),
               createdAt: nowMs,
@@ -1795,12 +2020,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
       clearCart();
       showToast(
         isCredit
-          ? `¡Venta al Crédito ${saleNumber} registrada desde ${selectedWarehouse.name}! Saldo pendiente: L. ${computedBalanceDue.toFixed(2)}`
+          ? `¡Venta al Crédito ${saleNumber} registrada desde ${saleWarehouseDisplayName}! Saldo pendiente: L. ${computedBalanceDue.toFixed(2)}`
           : ptsEarned > 0 || ptsRedeemed > 0
           ? `¡Venta ${saleNumber} completada! ${
               ptsRedeemed > 0 ? `Canjeó ${ptsRedeemed} pts (-L. ${ptsDiscountLps.toFixed(2)}) • ` : ''
             }Cliente sumó +${ptsEarned} pts (Saldo: ${nextPtsBalance ?? 0} pts)`
-          : `¡Venta ${saleNumber} registrada con éxito desde ${selectedWarehouse.name}!`,
+          : `¡Venta ${saleNumber} registrada con éxito desde ${saleWarehouseDisplayName}!`,
         'success'
       );
     } catch (err: any) {
@@ -3342,6 +3567,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                     L. {finalPrice.toFixed(2)}
                                   </span>
                                 </div>
+                              ) : basePrice <= 0 ? (
+                                <span className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-extrabold text-[11px] border border-amber-300">
+                                  Fijar precio
+                                </span>
                               ) : (
                                 <span className="font-bold text-sm sm:text-base text-emerald-700">
                                   L. {basePrice.toFixed(2)}
@@ -3488,7 +3717,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
               ) : (
                 cart.map((item) => {
                   const productInStore = inventory.find((p) => p.code === item.code);
-                  const maxStock = getPosWarehouseStock(productInStore);
+                  const itemWhId = item.warehouseId || selectedWarehouse.id;
+                  const itemWhName =
+                    item.warehouseName ||
+                    activeWarehouses.find((w) => w.id === itemWhId)?.name ||
+                    selectedWarehouse.name;
+                  const maxStock = getPosWarehouseStock(productInStore, itemWhId);
                   const basePrice =
                     item.originalPrice !== undefined
                       ? Number(item.originalPrice)
@@ -3498,7 +3732,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   return (
                     <div
                       key={item.code}
-                      className="p-2.5 bg-white border border-slate-200/90 rounded-xl shadow-2xs space-y-1.5 hover:border-emerald-400/70 transition-all"
+                      className={`p-2.5 bg-white border rounded-xl shadow-2xs space-y-1.5 transition-all ${
+                        item.price <= 0 && paymentMethod !== 'credit'
+                          ? 'border-amber-400 bg-amber-50/30'
+                          : 'border-slate-200/90 hover:border-emerald-400/70'
+                      }`}
                     >
                       {/* Row 1: Product Name, SKU & Subtotal */}
                       <div className="flex items-start justify-between gap-2">
@@ -3510,7 +3748,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             <span className="font-mono bg-slate-100 px-1.5 py-0.2 rounded text-[10px] text-slate-700">
                               {item.code}
                             </span>
-                            <span>L. {item.price.toFixed(2)} c/u</span>
+                            {isWarehousesModuleEnabled && itemWhId !== selectedWarehouse.id && (
+                              <span className="bg-teal-50 border border-teal-200 text-teal-800 px-1.5 py-0.2 rounded text-[9.5px] font-bold">
+                                {itemWhName}
+                              </span>
+                            )}
                             {item.size && (
                               <span className="bg-slate-100 px-1.5 py-0.2 rounded text-[10px] font-semibold text-slate-700">
                                 {item.size}
@@ -3538,9 +3780,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
                         </div>
                       </div>
 
-                      {/* Row 2: Compact Unit Discount (or Credit Unit Price) + Well-Spaced Quantity Buttons & Remove */}
-                      <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
-                        <div className="flex items-center gap-1 text-[11px]">
+                      {/* Row 2: Editable Unit Price + Unit Discount (or Credit Unit Price) + Quantity Controls */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
                           {paymentMethod === 'credit' ? (
                             <>
                               <DollarSign className="w-3 h-3 text-amber-600 shrink-0" />
@@ -3567,8 +3809,26 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             </>
                           ) : (
                             <>
-                              <Tag className="w-3 h-3 text-rose-500 shrink-0" />
-                              <span className="text-slate-500 font-medium">Desc. L:</span>
+                              <span className="text-slate-600 font-semibold">Precio L:</span>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min="0"
+                                step="any"
+                                value={item.price > 0 ? item.price : ''}
+                                placeholder="0.00"
+                                onChange={(e) =>
+                                  updateCartItemPrice(item.code, parseFloat(e.target.value) || 0)
+                                }
+                                className={`w-20 px-2 py-0.5 rounded-md text-xs font-black text-right tabular-nums focus:outline-none focus:ring-1 ${
+                                  item.price <= 0
+                                    ? 'bg-amber-50 border-2 border-amber-400 text-amber-900 focus:ring-amber-500'
+                                    : 'bg-emerald-50/70 border border-emerald-300 text-emerald-900 focus:ring-emerald-500'
+                                }`}
+                                title="Precio unitario de venta en Lempiras"
+                              />
+                              <Tag className="w-3 h-3 text-rose-500 shrink-0 ml-1" />
+                              <span className="text-slate-500 font-medium">Desc:</span>
                               <input
                                 type="number"
                                 inputMode="decimal"
@@ -3580,7 +3840,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 onChange={(e) =>
                                   updateCartItemDiscount(item.code, parseFloat(e.target.value) || 0)
                                 }
-                                className="w-20 px-2 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-xs font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right tabular-nums"
+                                className="w-16 px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-xs font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-400 text-right tabular-nums"
                                 title="Descuento por unidad en Lempiras"
                               />
                             </>
@@ -4229,7 +4489,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           .filter(
                             (u) =>
                               u.role === 'collaborator' &&
-                              (u.companyId || 'gosen') === (storeSettings.companyId || 'gosen')
+                              belongsToCompany(u.companyId, storeSettings.companyId || 'gosen', u.id)
                           )
                           .map((col) => (
                             <option key={col.id} value={col.username}>
@@ -6511,9 +6771,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
                             cashier: nextCashier,
                           };
                           setCompletedSale(updated);
-                          if (onUpdateSale) {
-                            onUpdateSale(completedSale, updated).catch(() => {});
-                          }
+                          queueReceiptSaleUpdate(completedSale, updated);
+                        }}
+                        onBlur={() => {
+                          flushReceiptSaleUpdate();
                         }}
                         title="Haz clic para editar el nombre de quien genera esta factura"
                         className="font-bold text-right text-slate-900 bg-emerald-50/70 hover:bg-emerald-50 focus:bg-white border border-dashed border-emerald-300 focus:border-emerald-500 rounded px-1.5 py-0.5 text-[11px] focus:outline-none max-w-[190px]"
@@ -6886,9 +7147,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                       items: nextItems,
                                     };
                                     setCompletedSale(updatedSale);
-                                    if (onUpdateSale) {
-                                      onUpdateSale(completedSale, updatedSale).catch(() => {});
-                                    }
+                                    queueReceiptSaleUpdate(completedSale, updatedSale);
+                                  }}
+                                  onBlur={() => {
+                                    flushReceiptSaleUpdate();
                                   }}
                                   placeholder="Código de garantía de este artículo..."
                                   className="flex-1 px-2 py-1 bg-white border border-teal-300 rounded-md text-[11px] font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
@@ -6957,9 +7219,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           },
                         };
                         setCompletedSale(updatedSale);
-                        if (onUpdateSale) {
-                          onUpdateSale(completedSale, updatedSale).catch(() => {});
-                        }
+                        queueReceiptSaleUpdate(completedSale, updatedSale);
+                      }}
+                      onBlur={() => {
+                        flushReceiptSaleUpdate();
                       }}
                       className="w-full px-2.5 py-1.5 bg-white border border-teal-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                     />
@@ -6983,9 +7246,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           },
                         };
                         setCompletedSale(updatedSale);
-                        if (onUpdateSale) {
-                          onUpdateSale(completedSale, updatedSale).catch(() => {});
-                        }
+                        queueReceiptSaleUpdate(completedSale, updatedSale);
+                      }}
+                      onBlur={() => {
+                        flushReceiptSaleUpdate();
                       }}
                       className="w-full px-2.5 py-1.5 bg-white border border-teal-200 rounded-lg text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 resize-none"
                     />
@@ -7237,7 +7501,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => handleDownloadSalePdf(receiptPrinterFormat)}
+                onClick={async () => {
+                  await flushReceiptSaleUpdate();
+                  handleDownloadSalePdf(receiptPrinterFormat);
+                }}
                 className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs shrink-0"
                 title="Descargar factura o ticket como archivo .PDF directo"
               >
@@ -7247,7 +7514,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => handlePrintReceipt(receiptPrinterFormat)}
+                onClick={async () => {
+                  await flushReceiptSaleUpdate();
+                  handlePrintReceipt(receiptPrinterFormat);
+                }}
                 className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs shrink-0"
                 title="Imprimir en la impresora seleccionada"
               >
@@ -7259,7 +7529,10 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowReceiptModal(false)}
+                onClick={async () => {
+                  await flushReceiptSaleUpdate();
+                  setShowReceiptModal(false);
+                }}
                 className="py-2.5 px-3 rounded-xl bg-slate-200 hover:bg-slate-300 active:scale-95 text-slate-800 font-bold text-xs flex items-center justify-center cursor-pointer shrink-0"
               >
                 Listo / Cerrar

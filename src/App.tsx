@@ -2103,10 +2103,11 @@ export const App: React.FC = () => {
             baseInventory.find((p) => p.id && soldItem.productId && p.id === soldItem.productId);
           if (!currentProd) continue;
 
+          const itemTargetWhId = soldItem.warehouseId || saleData.warehouseId;
           const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
             currentProd,
             -(Number(soldItem.quantity) || 1),
-            saleData.warehouseId,
+            itemTargetWhId,
             warehousesData.warehouses
           );
           const updatedProd: Product = {
@@ -2179,10 +2180,11 @@ export const App: React.FC = () => {
             baseInventory.find((p) => p.id && soldItem.productId && p.id === soldItem.productId);
           if (!currentProd) continue;
 
+          const itemTargetWhId = soldItem.warehouseId || sale.warehouseId;
           const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
             currentProd,
             Number(soldItem.quantity) || 1,
-            sale.warehouseId,
+            itemTargetWhId,
             warehousesData.warehouses
           );
           const updatedProd: Product = {
@@ -2240,36 +2242,44 @@ export const App: React.FC = () => {
       const baseInventory = inventory;
       const savedSale = await updateSaleInFirestore(originalSale, updatedSale, baseInventory, activeCompanyId);
 
-      // Update local inventory stock if item quantities or status changed (computed from baseInventory)
-      const oldQtyByCode = new Map<string, number>();
-      if (originalSale.status !== 'cancelled') {
+      // Update local inventory stock per (code, warehouseId) if item quantities or status changed
+      const deltaByCodeAndWh = new Map<string, { codeKey: string; warehouseId?: string; delta: number }>();
+      const addWhDelta = (codeKey: string, whId: string | undefined, qtyDelta: number) => {
+        const mapKey = `${codeKey}__${whId || '__default__'}`;
+        const prev = deltaByCodeAndWh.get(mapKey);
+        if (prev) {
+          prev.delta += qtyDelta;
+        } else {
+          deltaByCodeAndWh.set(mapKey, { codeKey, warehouseId: whId, delta: qtyDelta });
+        }
+      };
+
+      if (originalSale.status !== 'cancelled' && !originalSale.skipInventoryDeduction) {
         for (const it of originalSale.items || []) {
           const k = it.code.trim().toLowerCase();
-          if (k) oldQtyByCode.set(k, (oldQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+          if (k) addWhDelta(k, it.warehouseId || originalSale.warehouseId, Number(it.quantity) || 0);
         }
       }
 
-      const newQtyByCode = new Map<string, number>();
-      if (savedSale.status !== 'cancelled') {
+      if (savedSale.status !== 'cancelled' && !savedSale.skipInventoryDeduction) {
         for (const it of savedSale.items || []) {
           const k = it.code.trim().toLowerCase();
-          if (k) newQtyByCode.set(k, (newQtyByCode.get(k) || 0) + (Number(it.quantity) || 0));
+          if (k) addWhDelta(k, it.warehouseId || updatedSale.warehouseId || originalSale.warehouseId, -(Number(it.quantity) || 0));
         }
       }
 
-      const targetWhId = updatedSale.warehouseId || originalSale.warehouseId;
+      const workingByCode = new Map<string, Product>();
+      baseInventory.forEach((p) => workingByCode.set(p.code.trim().toLowerCase(), p));
       const updatedByCode = new Map<string, Product>();
 
-      for (const prod of baseInventory) {
-        const k = prod.code.trim().toLowerCase();
-        const oldQ = oldQtyByCode.get(k) || 0;
-        const newQ = newQtyByCode.get(k) || 0;
-        const delta = oldQ - newQ;
-        if (delta === 0) continue;
+      for (const entry of deltaByCodeAndWh.values()) {
+        if (entry.delta === 0) continue;
+        const prod = workingByCode.get(entry.codeKey);
+        if (!prod) continue;
         const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
           prod,
-          delta,
-          targetWhId,
+          entry.delta,
+          entry.warehouseId,
           warehousesData.warehouses
         );
         const updatedProd: Product = {
@@ -2277,10 +2287,14 @@ export const App: React.FC = () => {
           stock: newStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
         };
-        updatedByCode.set(k, updatedProd);
-        recordLocalProductSave(updatedProd, prod.code, activeCompanyId);
-        pushProductSaveToBackendHub(updatedProd, prod.code, activeCompanyId).catch(() => {});
+        workingByCode.set(entry.codeKey, updatedProd);
+        updatedByCode.set(entry.codeKey, updatedProd);
       }
+
+      updatedByCode.forEach((updatedProd) => {
+        recordLocalProductSave(updatedProd, updatedProd.code, activeCompanyId);
+        pushProductSaveToBackendHub(updatedProd, updatedProd.code, activeCompanyId).catch(() => {});
+      });
 
       setInventory((prev) => {
         const nextInv = prev.map((prod) => {
