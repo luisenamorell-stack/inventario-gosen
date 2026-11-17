@@ -24,6 +24,8 @@ import {
   isCollaboratorRouteCollector,
   normalizeCollectorIdentifier,
   doesCreditAccountBelongToCollector,
+  isStoreCreditCalculatorEnabled,
+  PriceCheckerCreditHandoff,
 } from './types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS, INITIAL_AUDIT_HISTORY } from './data/mockData';
 import { Sidebar } from './components/Sidebar';
@@ -313,6 +315,8 @@ export const App: React.FC = () => {
     getCachedRestaurantData(getActiveCompanyId())
   );
   const [salesSubTab, setSalesSubTab] = useState<SalesSubTab>('pos');
+  const [pendingPriceCheckerCreditHandoff, setPendingPriceCheckerCreditHandoff] =
+    useState<PriceCheckerCreditHandoff | null>(null);
 
   // Track which secondary collections have been synced during this browser session
   const loadedModulesRef = useRef<Record<string, boolean>>({});
@@ -546,6 +550,7 @@ export const App: React.FC = () => {
               enableDigitalSignature:
                 compObj?.enableDigitalSignature ?? compObj?.enableCreditContract ?? false,
               enableWarrantyModule: compObj?.enableWarrantyModule ?? false,
+              enableCreditCalculator: compObj?.enableCreditCalculator ?? false,
             }
       );
     }
@@ -925,6 +930,10 @@ export const App: React.FC = () => {
                 matchedTenant.enableWarrantyModule !== undefined
                   ? matchedTenant.enableWarrantyModule
                   : settings.enableWarrantyModule,
+              enableCreditCalculator:
+                matchedTenant.enableCreditCalculator !== undefined
+                  ? matchedTenant.enableCreditCalculator
+                  : settings.enableCreditCalculator,
               maxProducts: matchedTenant.maxProducts ?? settings.maxProducts ?? 0,
               maxUsers: matchedTenant.maxUsers ?? settings.maxUsers ?? 0,
             }
@@ -1011,6 +1020,10 @@ export const App: React.FC = () => {
               myTenant.enableWarrantyModule !== undefined
                 ? myTenant.enableWarrantyModule
                 : prev.enableWarrantyModule,
+            enableCreditCalculator:
+              myTenant.enableCreditCalculator !== undefined
+                ? myTenant.enableCreditCalculator
+                : prev.enableCreditCalculator,
             maxProducts: myTenant.maxProducts ?? prev.maxProducts ?? 0,
             maxUsers: myTenant.maxUsers ?? prev.maxUsers ?? 0,
           };
@@ -1382,6 +1395,10 @@ export const App: React.FC = () => {
         matchedUser?.salesPermissions?.canViewCostsAndProfits ??
           userSession.salesPermissions?.canViewCostsAndProfits
       ),
+      canUseCreditCalculator: Boolean(
+        matchedUser?.salesPermissions?.canUseCreditCalculator ??
+          userSession.salesPermissions?.canUseCreditCalculator
+      ),
       allowedWarehouseIds:
         matchedUser?.salesPermissions?.allowedWarehouseIds ||
         matchedUser?.allowedWarehouseIds ||
@@ -1398,7 +1415,13 @@ export const App: React.FC = () => {
       JSON.stringify(nextAllowedTabs) !== JSON.stringify(userSession.allowedTabs || []);
     const permsChanged =
       Boolean(userSession.salesPermissions?.isRouteCollector) !== isCollectorNow ||
-      userSession.salesPermissions?.routeCollectorScope !== nextSalesPerms.routeCollectorScope;
+      userSession.salesPermissions?.routeCollectorScope !== nextSalesPerms.routeCollectorScope ||
+      Boolean(userSession.salesPermissions?.canUseCreditCalculator) !==
+        nextSalesPerms.canUseCreditCalculator ||
+      Boolean(userSession.salesPermissions?.canViewCostsAndProfits) !==
+        nextSalesPerms.canViewCostsAndProfits ||
+      Boolean(userSession.salesPermissions?.canCancelSales) !== nextSalesPerms.canCancelSales ||
+      (userSession.salesPermissions?.canEditSales ?? true) !== nextSalesPerms.canEditSales;
 
     if (tabsChanged || permsChanged) {
       const updatedSession: UserSession = {
@@ -1586,6 +1609,10 @@ export const App: React.FC = () => {
             saved.enableWarrantyModule !== undefined
               ? saved.enableWarrantyModule
               : prev.enableWarrantyModule,
+          enableCreditCalculator:
+            saved.enableCreditCalculator !== undefined
+              ? saved.enableCreditCalculator
+              : prev.enableCreditCalculator,
           maxProducts: saved.maxProducts ?? prev.maxProducts ?? 0,
           maxUsers: saved.maxUsers ?? prev.maxUsers ?? 0,
         }));
@@ -3136,6 +3163,24 @@ export const App: React.FC = () => {
     ? companyAllowedModules
     : baseRoleTabs.filter((tab) => companyAllowedModules.includes(tab));
 
+  const storeHasCreditCalculator = isStoreCreditCalculatorEnabled(storeSettings, activeCompanyTenant);
+  const matchedCollabForCreditCalc =
+    userSession.role === 'admin'
+      ? undefined
+      : users.find(
+          (u) =>
+            (userSession.userId && u.id === userSession.userId) ||
+            (userSession.username &&
+              u.username.trim().toLowerCase() === userSession.username.trim().toLowerCase())
+        );
+  const canUsePriceCheckerCreditCalc = Boolean(
+    storeHasCreditCalculator &&
+      (isSuperAdminSession ||
+        userSession.role === 'admin' ||
+        matchedCollabForCreditCalc?.salesPermissions?.canUseCreditCalculator ||
+        userSession.salesPermissions?.canUseCreditCalculator)
+  );
+
   // If the current activeTab was disabled by the SaaS Administrator, switch to the first allowed module
   const activeTabToRender: ActiveTab =
     activeTab === 'companies' && isSuperAdminSession
@@ -3576,6 +3621,8 @@ export const App: React.FC = () => {
                           ? () => handleTabChange('restaurant')
                           : undefined
                       }
+                      pendingCreditHandoff={pendingPriceCheckerCreditHandoff}
+                      onConsumeCreditHandoff={() => setPendingPriceCheckerCreditHandoff(null)}
                       showToast={showToast}
                     />
                   )}
@@ -3665,6 +3712,13 @@ export const App: React.FC = () => {
                 inventory={inventory}
                 warehousesData={warehousesData}
                 hasWarehousesModule={companyAllowedModules.includes('warehouses')}
+                canUseCreditCalculator={canUsePriceCheckerCreditCalc}
+                canSendToPos={isSuperAdminSession || allowedTabsList.includes('sales')}
+                onSendToPosCredit={(handoff) => {
+                  setPendingPriceCheckerCreditHandoff(handoff);
+                  setSalesSubTab('pos');
+                  handleTabChange('sales');
+                }}
                 showToast={showToast}
               />
             )}
@@ -3722,6 +3776,7 @@ export const App: React.FC = () => {
                 storeSettings={storeSettings}
                 warehousesData={warehousesData}
                 companyAllowedModules={companyAllowedModules}
+                storeHasCreditCalculator={storeHasCreditCalculator}
                 maxUsers={companyMaxUsers}
                 onSaveUser={handleSaveUser}
                 onDeleteUser={handleDeleteUser}

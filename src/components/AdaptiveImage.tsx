@@ -172,27 +172,49 @@ export const AdaptiveImage: React.FC<AdaptiveImageProps> = ({
         {/* Dual-Image Controls on Card / Thumbnail */}
         {hasMultipleImages && !compactGalleryControls && (
           <>
-            {/* Left / Right Subtle Switcher Buttons */}
-            <button
-              type="button"
+            {/* Left / Right Subtle Switcher Controls */}
+            <span
+              role="button"
+              tabIndex={0}
               onClick={(e) => handleToggleImage(e, (safeIndex - 1 + validImages.length) % validImages.length)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleToggleImage(e as unknown as React.MouseEvent, (safeIndex - 1 + validImages.length) % validImages.length);
+                }
+              }}
               title="Ver foto anterior"
               className="absolute left-1.5 top-1/2 -translate-y-1/2 z-20 w-6 h-6 rounded-full bg-slate-900/65 hover:bg-slate-900/85 text-white flex items-center justify-center shadow-xs backdrop-blur-xs transition-all cursor-pointer active:scale-90"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
+            </span>
+            <span
+              role="button"
+              tabIndex={0}
               onClick={(e) => handleToggleImage(e, (safeIndex + 1) % validImages.length)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleToggleImage(e as unknown as React.MouseEvent, (safeIndex + 1) % validImages.length);
+                }
+              }}
               title="Ver siguiente foto"
               className="absolute right-1.5 top-1/2 -translate-y-1/2 z-20 w-6 h-6 rounded-full bg-slate-900/65 hover:bg-slate-900/85 text-white flex items-center justify-center shadow-xs backdrop-blur-xs transition-all cursor-pointer active:scale-90"
             >
               <ChevronRight className="w-3.5 h-3.5" />
-            </button>
+            </span>
 
             {/* Bottom Center Photo Dots + Counter Pill */}
-            <div
+            <span
+              role="button"
+              tabIndex={0}
               onClick={(e) => handleToggleImage(e)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleToggleImage(e as unknown as React.MouseEvent);
+                }
+              }}
               title="Cambiar entre Foto 1 y Foto 2"
               className="absolute bottom-1.5 left-1.5 z-20 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900/70 hover:bg-slate-900/90 text-white text-[10px] font-extrabold backdrop-blur-xs shadow-xs cursor-pointer"
             >
@@ -200,20 +222,27 @@ export const AdaptiveImage: React.FC<AdaptiveImageProps> = ({
               <span>
                 {safeIndex + 1}/{validImages.length}
               </span>
-            </div>
+            </span>
           </>
         )}
 
         {/* Compact Badge for Small Thumbnails (Table / Mobile rows) */}
         {hasMultipleImages && compactGalleryControls && (
-          <button
-            type="button"
+          <span
+            role="button"
+            tabIndex={0}
             onClick={(e) => handleToggleImage(e)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleToggleImage(e as unknown as React.MouseEvent);
+              }
+            }}
             title="Tiene 2 fotos (clic para alternar)"
             className="absolute bottom-0.5 right-0.5 z-20 px-1 py-0.2 rounded bg-slate-900/75 text-white text-[9px] font-black leading-none shadow-2xs cursor-pointer"
           >
             {safeIndex + 1}/2
-          </button>
+          </span>
         )}
 
         {enableZoom && !compactGalleryControls && (

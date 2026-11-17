@@ -2923,6 +2923,7 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   enableCreditContract: true,
   enableDigitalSignature: true,
   enableWarrantyModule: true,
+  enableCreditCalculator: false,
   maxProducts: 0,
   maxUsers: 0,
 };
@@ -2966,6 +2967,7 @@ export function getDefaultStoreSettingsForCompany(companyId = getActiveCompanyId
     enableCreditContract: defaultCreditContract,
     enableDigitalSignature: defaultDigitalSignature,
     enableWarrantyModule: defaultWarrantyModule,
+    enableCreditCalculator: Boolean(comp?.enableCreditCalculator === true),
     maxProducts: Math.max(0, Number(comp?.maxProducts) || 0),
     maxUsers: Math.max(0, Number(comp?.maxUsers) || 0),
   };
@@ -3196,6 +3198,10 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
           data.enableWarrantyModule !== undefined
             ? Boolean(data.enableWarrantyModule)
             : slug === 'gosen' || isGyGAlias(slug),
+        enableCreditCalculator:
+          data.enableCreditCalculator !== undefined
+            ? Boolean(data.enableCreditCalculator)
+            : false,
         maxProducts: Math.max(0, Number(data.maxProducts) || 0),
         maxUsers: Math.max(0, Number(data.maxUsers) || 0),
         updatedAt: snapTs || Date.now(),
@@ -3267,6 +3273,7 @@ export async function fetchStoreSettingsOnce(companyId = getActiveCompanyId()): 
             cData.enableWarrantyModule !== undefined
               ? Boolean(cData.enableWarrantyModule)
               : isGyGAlias(slug),
+          enableCreditCalculator: Boolean(cData.enableCreditCalculator === true),
           maxProducts: Math.max(0, Number(cData.maxProducts) || 0),
           maxUsers: Math.max(0, Number(cData.maxUsers) || 0),
           updatedAt: Date.now(),
@@ -3388,6 +3395,10 @@ export function subscribeToStoreSettings(
             data.enableWarrantyModule !== undefined
               ? Boolean(data.enableWarrantyModule)
               : slug === 'gosen' || isGyGAlias(slug),
+          enableCreditCalculator:
+            data.enableCreditCalculator !== undefined
+              ? Boolean(data.enableCreditCalculator)
+              : false,
           maxProducts: Math.max(0, Number(data.maxProducts) || 0),
           maxUsers: Math.max(0, Number(data.maxUsers) || 0),
           updatedAt: snapTs || Date.now(),
@@ -3462,6 +3473,9 @@ export async function saveStoreSettingsToFirestore(
   }
   if (settings.enableWarrantyModule !== undefined) {
     payload.enableWarrantyModule = Boolean(settings.enableWarrantyModule);
+  }
+  if (settings.enableCreditCalculator !== undefined) {
+    payload.enableCreditCalculator = Boolean(settings.enableCreditCalculator);
   }
   if (settings.maxProducts !== undefined) {
     payload.maxProducts = Math.max(0, Number(settings.maxProducts) || 0);
@@ -5155,6 +5169,7 @@ function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: s
               : true,
           canCancelSales: Boolean(raw.salesPermissions.canCancelSales),
           canViewCostsAndProfits: Boolean(raw.salesPermissions.canViewCostsAndProfits),
+          canUseCreditCalculator: Boolean(raw.salesPermissions.canUseCreditCalculator),
           isRouteCollector: Boolean(raw.salesPermissions.isRouteCollector),
           routeCollectorScope:
             raw.salesPermissions.routeCollectorScope === 'assigned' ? 'assigned' : 'all',
@@ -5164,6 +5179,7 @@ function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: s
           canEditSales: true,
           canCancelSales: false,
           canViewCostsAndProfits: false,
+          canUseCreditCalculator: false,
           isRouteCollector: false,
           routeCollectorScope: 'all',
           ...(cleanWhIds ? { allowedWarehouseIds: cleanWhIds } : {}),
@@ -5365,6 +5381,7 @@ export async function saveUserToFirestore(
           : true,
       canCancelSales: Boolean(user.salesPermissions?.canCancelSales),
       canViewCostsAndProfits: Boolean(user.salesPermissions?.canViewCostsAndProfits),
+      canUseCreditCalculator: Boolean(user.salesPermissions?.canUseCreditCalculator),
       isRouteCollector: Boolean(user.salesPermissions?.isRouteCollector),
       routeCollectorScope:
         user.salesPermissions?.routeCollectorScope === 'assigned' ? 'assigned' : 'all',
@@ -5611,6 +5628,7 @@ export const DEFAULT_GOSEN_COMPANY: CompanyTenant = {
   enableCreditContract: true,
   enableDigitalSignature: true,
   enableWarrantyModule: true,
+  enableCreditCalculator: false,
   maxProducts: 0,
   maxUsers: 0,
   paymentHistory: [],
@@ -5700,6 +5718,7 @@ function sanitizeCompanyDoc(slug: string, data: Record<string, any>): CompanyTen
       data.enableWarrantyModule !== undefined
         ? Boolean(data.enableWarrantyModule)
         : slug === 'gosen' || isGyGAlias(slug),
+    enableCreditCalculator: Boolean(data.enableCreditCalculator === true),
     maxProducts: Math.max(0, Number(data.maxProducts) || 0),
     maxUsers: Math.max(0, Number(data.maxUsers) || 0),
     paymentHistory: parsedHistory,
@@ -5852,6 +5871,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     company.enableWarrantyModule !== undefined
       ? Boolean(company.enableWarrantyModule)
       : slug === 'gosen' || isGyGAlias(slug);
+  const safeEnableCreditCalculator = Boolean(company.enableCreditCalculator === true);
   const safeMaxProducts = Math.max(0, Number(company.maxProducts) || 0);
   const safeMaxUsers = Math.max(0, Number(company.maxUsers) || 0);
   const safePaymentHistory: SubscriptionPaymentRecord[] = Array.isArray(company.paymentHistory)
@@ -5884,6 +5904,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     enableCreditContract: safeEnableCreditContract,
     enableDigitalSignature: safeEnableDigitalSignature,
     enableWarrantyModule: safeEnableWarrantyModule,
+    enableCreditCalculator: safeEnableCreditCalculator,
     maxProducts: safeMaxProducts,
     maxUsers: safeMaxUsers,
     paymentHistory: safePaymentHistory,
@@ -5920,6 +5941,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     enableCreditContract: normalized.enableCreditContract,
     enableDigitalSignature: normalized.enableDigitalSignature,
     enableWarrantyModule: normalized.enableWarrantyModule,
+    enableCreditCalculator: normalized.enableCreditCalculator,
     maxProducts: normalized.maxProducts,
     maxUsers: normalized.maxUsers,
     updatedAt: Date.now(),
@@ -5959,6 +5981,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
         enableCreditContract: normalized.enableCreditContract,
         enableDigitalSignature: normalized.enableDigitalSignature,
         enableWarrantyModule: normalized.enableWarrantyModule,
+        enableCreditCalculator: normalized.enableCreditCalculator,
         maxProducts: normalized.maxProducts,
         maxUsers: normalized.maxUsers,
         paymentHistory: normalized.paymentHistory,
@@ -7590,6 +7613,7 @@ export async function resolveClientLoginAcrossAllTenants(params: {
           canEditSales: true,
           canCancelSales: false,
           canViewCostsAndProfits: false,
+          canUseCreditCalculator: false,
         },
         createdAt: Date.now(),
       };

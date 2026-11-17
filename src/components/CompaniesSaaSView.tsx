@@ -15,6 +15,7 @@ import {
   isStoreCreditContractEnabled,
   isStoreDigitalSignatureEnabled,
   isStoreWarrantyModuleEnabled,
+  isStoreCreditCalculatorEnabled,
 } from '../types';
 import {
   normalizeCompanySlug,
@@ -82,6 +83,7 @@ import {
   PenTool,
   ScrollText,
   UtensilsCrossed,
+  Calculator,
 } from 'lucide-react';
 import { WhatsAppIcon } from './SalesView';
 import { printHtmlDocument, downloadSaaSReceiptPdf } from '../utils/printPdfService';
@@ -125,6 +127,7 @@ export const SAAS_PLAN_PRESETS: {
   enableCreditContract: boolean;
   enableDigitalSignature: boolean;
   enableWarrantyModule: boolean;
+  enableCreditCalculator: boolean;
   desc: string;
 }[] = [
   {
@@ -140,6 +143,7 @@ export const SAAS_PLAN_PRESETS: {
     enableCreditContract: false,
     enableDigitalSignature: false,
     enableWarrantyModule: false,
+    enableCreditCalculator: false,
     desc: 'Ideal para negocios pequeños: Inventario + Caja POS (Hasta 250 prod. y 2 colab.)',
   },
   {
@@ -167,6 +171,7 @@ export const SAAS_PLAN_PRESETS: {
     enableCreditContract: false,
     enableDigitalSignature: false,
     enableWarrantyModule: true,
+    enableCreditCalculator: false,
     desc: 'Incluye Garantías por Código, Ventas Online/Live, Bodegas, Catálogo QR, Compras y Proveedores (Hasta 1,500 prod. y 5 colab.)',
   },
   {
@@ -182,7 +187,8 @@ export const SAAS_PLAN_PRESETS: {
     enableCreditContract: true,
     enableDigitalSignature: true,
     enableWarrantyModule: true,
-    desc: 'Todos los módulos + Garantías por Código + Contrato de Crédito + Firma Digital + Ventas Online/Live + D’Volada + Ilimitado',
+    enableCreditCalculator: true,
+    desc: 'Todos los módulos + Calculadora de Crédito y Ganancias + Garantías + Contrato de Crédito + Firma Digital + Ventas Online/Live + D’Volada',
   },
   {
     id: 'prueba15',
@@ -197,6 +203,7 @@ export const SAAS_PLAN_PRESETS: {
     enableCreditContract: false,
     enableDigitalSignature: false,
     enableWarrantyModule: true,
+    enableCreditCalculator: false,
     desc: 'Acceso de demostración por 7 días con corte automático al vencer',
   },
 ];
@@ -679,6 +686,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [enableCreditContract, setEnableCreditContract] = useState<boolean>(false);
   const [enableDigitalSignature, setEnableDigitalSignature] = useState<boolean>(false);
   const [enableWarrantyModule, setEnableWarrantyModule] = useState<boolean>(false);
+  const [enableCreditCalculator, setEnableCreditCalculator] = useState<boolean>(false);
   const [maxProducts, setMaxProducts] = useState<string>('0'); // 0 = Ilimitado
   const [maxUsers, setMaxUsers] = useState<string>('0'); // 0 = Ilimitado
   const [initialStarterTemplate, setInitialStarterTemplate] = useState<string>('none');
@@ -690,6 +698,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
   const [permCreditContract, setPermCreditContract] = useState<boolean>(false);
   const [permDigitalSignature, setPermDigitalSignature] = useState<boolean>(false);
   const [permWarrantyModule, setPermWarrantyModule] = useState<boolean>(false);
+  const [permCreditCalculator, setPermCreditCalculator] = useState<boolean>(false);
   const [permMaxProducts, setPermMaxProducts] = useState<string>('0');
   const [permMaxUsers, setPermMaxUsers] = useState<string>('0');
   const [isSavingPerms, setIsSavingPerms] = useState<boolean>(false);
@@ -791,6 +800,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setEnableCreditContract(preset.enableCreditContract);
     setEnableDigitalSignature(preset.enableDigitalSignature);
     setEnableWarrantyModule(preset.enableWarrantyModule);
+    setEnableCreditCalculator(preset.enableCreditCalculator);
     if (preset.plan === 'prueba') {
       const in7Days = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
       setNextBillingDate(in7Days);
@@ -821,6 +831,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setEnableCreditContract(false);
     setEnableDigitalSignature(false);
     setEnableWarrantyModule(true);
+    setEnableCreditCalculator(false);
     setMaxProducts('0');
     setMaxUsers('0');
     setInitialStarterTemplate('none');
@@ -857,6 +868,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setEnableCreditContract(hasCreditContract);
     setEnableDigitalSignature(hasDigitalSignature);
     setEnableWarrantyModule(isStoreWarrantyModuleEnabled(undefined, comp));
+    setEnableCreditCalculator(isStoreCreditCalculatorEnabled(undefined, comp));
     setMaxProducts(String(comp.maxProducts || 0));
     setMaxUsers(String(comp.maxUsers || 0));
     setInitialStarterTemplate('none');
@@ -876,6 +888,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setPermCreditContract(isStoreCreditContractEnabled(undefined, comp));
     setPermDigitalSignature(isStoreDigitalSignatureEnabled(undefined, comp));
     setPermWarrantyModule(isStoreWarrantyModuleEnabled(undefined, comp));
+    setPermCreditCalculator(isStoreCreditCalculatorEnabled(undefined, comp));
     setPermMaxProducts(String(comp.maxProducts || 0));
     setPermMaxUsers(String(comp.maxUsers || 0));
   };
@@ -925,6 +938,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         enableCreditContract: permCreditContract,
         enableDigitalSignature: permCreditContract ? permDigitalSignature : false,
         enableWarrantyModule: permWarrantyModule,
+        enableCreditCalculator: permCreditCalculator,
         maxProducts: Math.max(0, Number(permMaxProducts) || 0),
         maxUsers: Math.max(0, Number(permMaxUsers) || 0),
       });
@@ -1027,6 +1041,25 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       );
     } catch (err: any) {
       showToast('Error al actualizar Garantías: ' + (err?.message || 'desconocido'), 'error');
+    }
+  };
+
+  const handleQuickToggleCreditCalculatorForClient = async (comp: CompanyTenant) => {
+    const currentlyActive = isStoreCreditCalculatorEnabled(undefined, comp);
+    const nextState = !currentlyActive;
+    try {
+      await onSaveCompany({
+        ...comp,
+        enableCreditCalculator: nextState,
+      });
+      showToast(
+        nextState
+          ? `Calculadora de Crédito, Ganancias y Pase a POS ACTIVADA para "${comp.name}"`
+          : `Calculadora de Crédito DESACTIVADA para "${comp.name}"`,
+        nextState ? 'success' : 'info'
+      );
+    } catch (err: any) {
+      showToast('Error al actualizar Calculadora de Crédito: ' + (err?.message || 'desconocido'), 'error');
     }
   };
 
@@ -1470,6 +1503,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
         enableCreditContract,
         enableDigitalSignature: enableCreditContract ? enableDigitalSignature : false,
         enableWarrantyModule,
+        enableCreditCalculator,
         maxProducts: Math.max(0, Number(maxProducts) || 0),
         maxUsers: Math.max(0, Number(maxUsers) || 0),
         paymentHistory: editingCompany?.paymentHistory || [],
@@ -2648,6 +2682,24 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                           : 'Garantías / Códigos: OFF'}
                       </span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleQuickToggleCreditCalculatorForClient(comp)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 border transition-colors cursor-pointer ${
+                        isStoreCreditCalculatorEnabled(undefined, comp)
+                          ? 'bg-amber-100 text-amber-950 border-amber-300 hover:bg-amber-200'
+                          : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                      }`}
+                      title="Activar o desactivar la Calculadora de Crédito, Ganancias y Pase a POS en Verificador de Precios (artículos >= L. 4,000)"
+                    >
+                      <Calculator className="w-3 h-3" />
+                      <span>
+                        {isStoreCreditCalculatorEnabled(undefined, comp)
+                          ? 'Calc. Crédito ≥4k: ON'
+                          : 'Calc. Crédito ≥4k: OFF'}
+                      </span>
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
@@ -3458,6 +3510,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                           setPermCreditContract(preset.enableCreditContract);
                           setPermDigitalSignature(preset.enableDigitalSignature);
                           setPermWarrantyModule(preset.enableWarrantyModule);
+                          setPermCreditCalculator(preset.enableCreditCalculator);
                         }}
                         className="px-2.5 py-1 rounded-lg bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-extrabold cursor-pointer"
                       >
@@ -3752,6 +3805,40 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                     checked={permWarrantyModule}
                     onChange={(e) => setPermWarrantyModule(e.target.checked)}
                     className="rounded text-teal-600 focus:ring-teal-500 w-5 h-5 cursor-pointer shrink-0"
+                  />
+                </label>
+
+                <label
+                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
+                    permCreditCalculator
+                      ? 'bg-amber-50/90 border-amber-300 text-slate-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-500'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                        permCreditCalculator
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <Calculator className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="font-black text-xs text-slate-900">
+                        Calculadora de Crédito, Ganancias y Pase Directo a POS (Verificador ≥ L. 4,000)
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Autoriza a esta tienda para usar la calculadora de precios al crédito y cuotas en artículos desde L. 4,000, calcular ganancia vs costo y enviar la cotización directo a POS. El Administrador de la tienda elegirá qué colaboradores pueden usarla.
+                      </p>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={permCreditCalculator}
+                    onChange={(e) => setPermCreditCalculator(e.target.checked)}
+                    className="rounded text-amber-600 focus:ring-amber-500 w-5 h-5 cursor-pointer shrink-0"
                   />
                 </label>
               </div>
@@ -4850,6 +4937,31 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                   </div>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
                     {enableWarrantyModule ? 'Activado' : 'Oculto'}
+                  </span>
+                </label>
+
+                {/* Calculadora de Crédito, Ganancias y Pase a POS toggle */}
+                <label
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 select-none text-xs ${
+                    enableCreditCalculator
+                      ? 'bg-amber-50 border-amber-300 text-amber-950'
+                      : 'bg-white border-slate-200 text-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={enableCreditCalculator}
+                      onChange={(e) => setEnableCreditCalculator(e.target.checked)}
+                      className="rounded text-amber-600 focus:ring-amber-500 w-3.5 h-3.5 cursor-pointer shrink-0"
+                    />
+                    <Calculator className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span className="font-bold">
+                      Habilitar Calculadora de Crédito, Ganancias y Pase a POS (Verificador ≥ L. 4,000)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
+                    {enableCreditCalculator ? 'Activado' : 'Oculto'}
                   </span>
                 </label>
               </div>

@@ -312,6 +312,7 @@ export interface CompanyTenant {
   enableCreditContract?: boolean;
   enableDigitalSignature?: boolean;
   enableWarrantyModule?: boolean;
+  enableCreditCalculator?: boolean;
   maxProducts?: number; // 0 or undefined = Ilimitado
   maxUsers?: number; // 0 or undefined = Ilimitado
   paymentHistory?: SubscriptionPaymentRecord[];
@@ -324,6 +325,7 @@ export interface CollaboratorSalesPermissions {
   canEditSales?: boolean;
   canCancelSales?: boolean;
   canViewCostsAndProfits?: boolean;
+  canUseCreditCalculator?: boolean;
   allowedWarehouseIds?: string[];
   isRouteCollector?: boolean;
   routeCollectorScope?: 'all' | 'assigned';
@@ -905,9 +907,33 @@ export interface StoreSettings {
   enableCreditContract?: boolean;
   enableDigitalSignature?: boolean;
   enableWarrantyModule?: boolean;
+  enableCreditCalculator?: boolean;
   maxProducts?: number;
   maxUsers?: number;
   updatedAt?: number;
+}
+
+export interface PriceCheckerCreditHandoff {
+  id: string;
+  product: Product;
+  creditTotal: number;
+  downPayment: number;
+  frequency: 'weekly' | 'biweekly' | 'monthly';
+  installments: number;
+  installmentAmount: number;
+}
+
+export function isStoreCreditCalculatorEnabled(
+  settings?: StoreSettings | null,
+  company?: CompanyTenant | null
+): boolean {
+  if (company?.enableCreditCalculator !== undefined) {
+    return Boolean(company.enableCreditCalculator);
+  }
+  if (settings?.enableCreditCalculator !== undefined) {
+    return Boolean(settings.enableCreditCalculator);
+  }
+  return false;
 }
 
 export function isStoreWarrantyModuleEnabled(

@@ -26,6 +26,7 @@ import {
   doesSaleBelongToCollaborator,
   isCollaboratorRouteCollector,
   normalizeCollectorIdentifier,
+  PriceCheckerCreditHandoff,
 } from '../types';
 import {
   getProductStockInWarehouse,
@@ -165,6 +166,8 @@ interface SalesViewProps {
   onSaveStoreSettings?: (settings: StoreSettings) => Promise<void>;
   onSaveUser?: (user: UserAccount) => Promise<void>;
   onOpenRestaurant?: () => void;
+  pendingCreditHandoff?: PriceCheckerCreditHandoff | null;
+  onConsumeCreditHandoff?: () => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
@@ -188,6 +191,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
   onSaveStoreSettings,
   onSaveUser,
   onOpenRestaurant,
+  pendingCreditHandoff,
+  onConsumeCreditHandoff,
   showToast,
 }) => {
   // Resolve granular Collaborator POS permissions (real-time from users list or session)
@@ -418,6 +423,106 @@ export const SalesView: React.FC<SalesViewProps> = ({
     'daily' | 'weekly' | 'biweekly' | 'monthly'
   >('weekly');
   const [creditAssignedCollectorPos, setCreditAssignedCollectorPos] = useState<string>('');
+  const lastConsumedCreditHandoffRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!pendingCreditHandoff) return;
+    if (lastConsumedCreditHandoffRef.current === pendingCreditHandoff.id) return;
+    lastConsumedCreditHandoffRef.current = pendingCreditHandoff.id;
+
+    const prod = pendingCreditHandoff.product;
+    let targetWh = selectedWarehouse;
+    let availableStock = getPosWarehouseStock(prod, targetWh.id);
+    if (availableStock <= 0) {
+      const allowedOther = getOtherWarehousesWithStock(prod).find((loc) =>
+        allowedPosWarehouses.some((w) => w.id === loc.warehouse.id)
+      );
+      if (allowedOther) {
+        targetWh = allowedOther.warehouse;
+        availableStock = allowedOther.stock;
+        setSelectedWarehouseId(allowedOther.warehouse.id);
+        try {
+          localStorage.setItem(`stockmaster_pos_warehouse_${companyKey}`, allowedOther.warehouse.id);
+        } catch {}
+      } else if (!isWarehousesModuleEnabled) {
+        availableStock = Math.max(0, Number(prod.stock) || 0);
+      }
+    }
+
+    const basePrice = Number(prod.price) || 0;
+    const assignedUnitDiscount = Math.min(basePrice, Math.max(0, Number(prod.discount) || 0));
+    const effectiveCashUnitPrice = Math.max(
+      0,
+      Number((basePrice - assignedUnitDiscount).toFixed(2))
+    );
+
+    const stipulatedItem: SaleItem = {
+      productId: prod.id,
+      code: prod.code,
+      name: prod.name,
+      category: prod.category,
+      size: prod.size,
+      originalPrice: basePrice,
+      cashPrice: effectiveCashUnitPrice,
+      creditPrice: pendingCreditHandoff.creditTotal,
+      unitDiscount: assignedUnitDiscount,
+      price: effectiveCashUnitPrice,
+      cost: Number(prod.cost) || 0,
+      quantity: 1,
+      subtotal: effectiveCashUnitPrice,
+      warehouseId: targetWh.id,
+      warehouseName: targetWh.name,
+    };
+
+    const daysOffset =
+      pendingCreditHandoff.frequency === 'weekly'
+        ? 7
+        : pendingCreditHandoff.frequency === 'biweekly'
+        ? 15
+        : 30;
+    const defaultNextDate = new Date(Date.now() + daysOffset * 86400000)
+      .toISOString()
+      .split('T')[0];
+
+    setActiveSubTabState('pos');
+    onSubTabChange?.('pos');
+    setCart([stipulatedItem]);
+    setDiscountType('amount');
+    setDiscountValue('');
+    setApplyTax(false);
+    setPaymentMethod('credit');
+    setCreditTotalPriceInput(pendingCreditHandoff.creditTotal.toFixed(2));
+    setCreditInitialDeposit(pendingCreditHandoff.downPayment.toFixed(2));
+    setCreditInstallmentsCount(String(pendingCreditHandoff.installments));
+    setCreditPaymentFrequencyPos(pendingCreditHandoff.frequency);
+    setCreditCustomQuota(pendingCreditHandoff.installmentAmount.toFixed(2));
+    setCreditDueDate(defaultNextDate);
+    if (mobilePosTab === 'catalog') {
+      setMobilePosTab('cart');
+    }
+
+    const freqLabel =
+      pendingCreditHandoff.frequency === 'weekly'
+        ? 'semanales'
+        : pendingCreditHandoff.frequency === 'biweekly'
+        ? 'quincenales'
+        : 'mensuales';
+
+    if (availableStock <= 0) {
+      showToast(
+        `"${prod.name}" cargado en POS al crédito (Total L. ${pendingCreditHandoff.creditTotal.toFixed(2)}), pero aparece con stock 0 en bodega.`,
+        'warning'
+      );
+    } else {
+      showToast(
+        `Plan al crédito cargado en POS: L. ${pendingCreditHandoff.creditTotal.toFixed(2)} · Prima L. ${pendingCreditHandoff.downPayment.toFixed(2)} · ${pendingCreditHandoff.installments} cuotas ${freqLabel} de L. ${pendingCreditHandoff.installmentAmount.toFixed(2)}.`,
+        'success'
+      );
+    }
+
+    onConsumeCreditHandoff?.();
+  }, [pendingCreditHandoff]);
+
   const [receiptModalTab, setReceiptModalTab] = useState<'both' | 'ticket' | 'contract'>('both');
   const [showInvoiceTemplateModal, setShowInvoiceTemplateModal] = useState<boolean>(false);
   const [draftInvoiceTemplate, setDraftInvoiceTemplate] = useState<InvoiceTemplateConfig>(() =>
@@ -4396,7 +4501,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-amber-900 mb-0.5">
-                        (D) N° Cuotas (Meses)
+                        (D) N° Cuotas (
+                        {creditPaymentFrequencyPos === 'weekly'
+                          ? 'Semanas'
+                          : creditPaymentFrequencyPos === 'biweekly'
+                          ? 'Quincenas'
+                          : creditPaymentFrequencyPos === 'daily'
+                          ? 'Días'
+                          : 'Meses'}
+                        )
                       </label>
                       <input
                         type="number"
