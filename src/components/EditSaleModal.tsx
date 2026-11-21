@@ -6,7 +6,6 @@ import {
   StoreSettings,
   resolveInvoiceIssuerName,
 } from '../types';
-import { isMaskedOrHashedPassword } from '../firebase/firestoreService';
 import {
   X,
   Save,
@@ -245,30 +244,11 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
     }
 
     if (requiresAdminPin) {
-      const candidatePin = adminPasswordInput.trim();
-      if (!candidatePin) {
-        showToast('Ingresa la contraseña de Administrador para autorizar reducción de venta.', 'error');
-        return;
-      }
-      let authorized = false;
-      try {
-        const res = await fetch('/api/auth/verify-admin-pin', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            companyId: storeSettings.companyId || 'gosen',
-            pin: candidatePin,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        authorized = Boolean(res.ok && data?.authorized);
-      } catch {
-        if (storeSettings.accessPassword && !isMaskedOrHashedPassword(storeSettings.accessPassword)) {
-          authorized = candidatePin.toUpperCase() === storeSettings.accessPassword.trim().toUpperCase();
-        }
-      }
-      if (!authorized) {
+      const expectedPass = (
+        storeSettings.accessPassword ||
+        ((storeSettings.companyId || 'gosen') === 'gosen' ? 'GOSEN2026' : 'ADMIN2026')
+      ).trim();
+      if (adminPasswordInput.trim().toUpperCase() !== expectedPass.toUpperCase()) {
         showToast('Contraseña de Administrador incorrecta para autorizar reducción de venta.', 'error');
         return;
       }
@@ -715,45 +695,21 @@ export const AdminCancelAuthModal: React.FC<AdminCancelAuthModalProps> = ({
   showToast,
 }) => {
   const [adminPin, setAdminPin] = useState('');
-  const [isVerifyingPin, setIsVerifyingPin] = useState(false);
 
   useEffect(() => {
-    if (isOpen) {
-      setAdminPin('');
-      setIsVerifyingPin(false);
-    }
+    if (isOpen) setAdminPin('');
   }, [isOpen]);
 
   if (!isOpen || !sale) return null;
 
-  const handleVerify = async (e: React.FormEvent) => {
+  const handleVerify = (e: React.FormEvent) => {
     e.preventDefault();
-    const candidatePin = adminPin.trim();
-    if (!candidatePin || isVerifyingPin) return;
+    const expectedPass = (
+      storeSettings.accessPassword ||
+      ((storeSettings.companyId || 'gosen') === 'gosen' ? 'GOSEN2026' : 'ADMIN2026')
+    ).trim();
 
-    setIsVerifyingPin(true);
-    let authorized = false;
-    try {
-      const res = await fetch('/api/auth/verify-admin-pin', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          companyId: storeSettings.companyId || 'gosen',
-          pin: candidatePin,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      authorized = Boolean(res.ok && data?.authorized);
-    } catch {
-      if (storeSettings.accessPassword && !isMaskedOrHashedPassword(storeSettings.accessPassword)) {
-        authorized = candidatePin.toUpperCase() === storeSettings.accessPassword.trim().toUpperCase();
-      }
-    } finally {
-      setIsVerifyingPin(false);
-    }
-
-    if (!authorized) {
+    if (adminPin.trim().toUpperCase() !== expectedPass.toUpperCase()) {
       showToast('Contraseña de Administrador incorrecta. No se anuló la venta.', 'error');
       return;
     }
@@ -808,7 +764,6 @@ export const AdminCancelAuthModal: React.FC<AdminCancelAuthModalProps> = ({
               type="password"
               required
               autoFocus
-              disabled={isVerifyingPin}
               value={adminPin}
               onChange={(e) => setAdminPin(e.target.value)}
               placeholder="Ingresa la clave del Administrador..."
@@ -826,11 +781,10 @@ export const AdminCancelAuthModal: React.FC<AdminCancelAuthModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={isVerifyingPin}
-              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md flex items-center gap-1.5 cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>{isVerifyingPin ? 'Verificando...' : 'Autorizar y Continuar'}</span>
+              <span>Autorizar y Continuar</span>
             </button>
           </div>
         </form>

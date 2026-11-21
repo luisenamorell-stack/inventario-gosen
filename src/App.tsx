@@ -168,11 +168,7 @@ import {
   seedInitialDataIfEmpty,
   pingFirestore,
   fetchBackendSyncStatus,
-  pushProductSaveToBackendHub,
-  setBackendSessionAuthenticated,
-  fetchPublicCatalogFromHub,
-  HASHED_PASSWORD_MASK,
-  isMaskedOrHashedPassword,
+  pushProductSaveToBackendHub
 } from './firebase/firestoreService';
 import {
   Database,
@@ -346,7 +342,7 @@ export const App: React.FC = () => {
         };
   });
 
-  // User Session & Authentication State (Verified against server-side HttpOnly session cookie)
+  // User Session & Authentication State (Strictly isolated per URL link)
   const [userSession, setUserSession] = useState<UserSession | null>(() => {
     try {
       const localSess = localStorage.getItem('stockmaster_user_session');
@@ -355,8 +351,11 @@ export const App: React.FC = () => {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (!parsed.companyId) parsed.companyId = 'gosen';
-        // SuperAdmin privilege is verified strictly by the server cookie via /api/auth/session
-        parsed.isSuperAdmin = Boolean(parsed.role === 'admin' && parsed.isSuperAdmin === true);
+        const isOwnerUnlocked =
+          localStorage.getItem('stockmaster_saas_owner_unlocked') === 'true';
+        parsed.isSuperAdmin = Boolean(
+          parsed.role === 'admin' && parsed.isSuperAdmin === true && isOwnerUnlocked
+        );
 
         if (typeof window !== 'undefined') {
           const params = new URLSearchParams(window.location.search);
@@ -391,121 +390,6 @@ export const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     return userSession !== null;
   });
-  const [sessionVerified, setSessionVerified] = useState<boolean>(false);
-
-  // Verify HttpOnly session cookie against backend on mount (prevents localStorage tampering / stale sessions)
-  useEffect(() => {
-    let active = true;
-    const verifyCookieSession = async () => {
-      try {
-        const res = await fetch('/api/auth/session', { credentials: 'include' });
-        const data = await res.json().catch(() => null);
-        if (!active || !data) return;
-
-        if (data.authenticated && data.session) {
-          setBackendSessionAuthenticated(true);
-          const serverSess = data.session;
-          setUserSession((prev) => {
-            const params =
-              typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-            const urlSaaS = Boolean(
-              params &&
-                (params.get('saas') === '1' ||
-                  params.get('saas') === 'true' ||
-                  params.get('panel') === 'saas')
-            );
-            const urlCompany =
-              params?.get('empresa') || params?.get('tienda') || params?.get('cliente');
-
-            if (urlSaaS && !serverSess.isSuperAdmin) {
-              return null;
-            }
-            if (urlCompany && !serverSess.isSuperAdmin) {
-              const targetSlug = normalizeCompanySlug(urlCompany);
-              if (normalizeCompanySlug(serverSess.companyId) !== targetSlug) {
-                return null;
-              }
-            }
-
-            if (!prev) {
-              const restored: UserSession = {
-                userId: serverSess.userId,
-                companyId: serverSess.companyId,
-                companyName: serverSess.isSuperAdmin
-                  ? 'Panel Central SaaS'
-                  : serverSess.companyId.toUpperCase(),
-                isSuperAdmin: Boolean(serverSess.isSuperAdmin),
-                isStandaloneSaaS: Boolean(serverSess.isSuperAdmin),
-                userName: serverSess.userName || 'Usuario',
-                username: serverSess.username || 'user',
-                role: serverSess.role === 'admin' ? 'admin' : 'collaborator',
-                allowedTabs: serverSess.isSuperAdmin
-                  ? [
-                      'companies',
-                      'dashboard',
-                      'inventory',
-                      'warehouses',
-                      'sales',
-                      'purchases',
-                      'audit',
-                      'price-checker',
-                      'suppliers',
-                      'settings',
-                      'catalog',
-                      'users',
-                      'activity',
-                    ]
-                  : serverSess.role === 'admin'
-                  ? [
-                      'dashboard',
-                      'inventory',
-                      'warehouses',
-                      'sales',
-                      'purchases',
-                      'audit',
-                      'price-checker',
-                      'suppliers',
-                      'settings',
-                      'catalog',
-                      'users',
-                      'activity',
-                    ]
-                  : ['sales', 'inventory', 'price-checker', 'catalog'],
-              };
-              setIsAuthenticated(true);
-              return restored;
-            }
-
-            const reconciled: UserSession = {
-              ...prev,
-              companyId: serverSess.isSuperAdmin ? prev.companyId : serverSess.companyId,
-              isSuperAdmin: Boolean(serverSess.isSuperAdmin),
-              role: serverSess.role === 'admin' ? 'admin' : 'collaborator',
-            };
-            setIsAuthenticated(true);
-            return reconciled;
-          });
-        } else {
-          setBackendSessionAuthenticated(false);
-          setUserSession(null);
-          setIsAuthenticated(false);
-          try {
-            localStorage.removeItem('stockmaster_user_session');
-            sessionStorage.removeItem('stockmaster_user_session');
-            localStorage.removeItem('stockmaster_saas_owner_unlocked');
-          } catch {}
-        }
-      } catch {
-        // Keep cached UI state only if server unreachable
-      } finally {
-        if (active) setSessionVerified(true);
-      }
-    };
-    verifyCookieSession();
-    return () => {
-      active = false;
-    };
-  }, []);
 
   // Connection & Sync State
   const [isFirebaseConnected, setIsFirebaseConnected] = useState<boolean>(false);
@@ -750,21 +634,18 @@ export const App: React.FC = () => {
     showToast(`¡Bienvenido ${session.userName}!`, 'success');
   };
 
-  const handleUnlockSuperAdmin = async (masterKeyInput: string): Promise<boolean> => {
-    try {
-      const res = await fetch('/api/auth/unlock-saas', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ masterKey: masterKeyInput.trim() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.ok) {
-        return false;
-      }
-    } catch {
+  const handleUnlockSuperAdmin = (masterKeyInput: string): boolean => {
+    const expectedMasterKey = (
+      localStorage.getItem('stockmaster_saas_master_key') || 'SAASMASTER2026'
+    ).trim();
+
+    if (masterKeyInput.trim().toUpperCase() !== expectedMasterKey.toUpperCase()) {
       return false;
     }
+
+    try {
+      localStorage.setItem('stockmaster_saas_owner_unlocked', 'true');
+    } catch {}
 
     setUserSession((prev) => {
       if (!prev) return prev;
@@ -790,13 +671,7 @@ export const App: React.FC = () => {
     return true;
   };
 
-  const handleLockSuperAdmin = async () => {
-    try {
-      await fetch('/api/auth/lock-saas', {
-        method: 'POST',
-        credentials: 'include',
-      });
-    } catch {}
+  const handleLockSuperAdmin = () => {
     try {
       localStorage.removeItem('stockmaster_saas_owner_unlocked');
     } catch {}
@@ -831,7 +706,7 @@ export const App: React.FC = () => {
     showToast('Panel SaaS cerrado. Has vuelto a Tienda Gosén.', 'info');
   };
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
     const wasSuperAdmin = Boolean(userSession?.isSuperAdmin);
     if (userSession && !wasSuperAdmin) {
       logActivityInFirestore(
@@ -845,14 +720,6 @@ export const App: React.FC = () => {
         activeCompanyId
       );
     }
-
-    try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-      });
-    } catch {}
-    setBackendSessionAuthenticated(false);
 
     setUserSession(null);
     setIsAuthenticated(false);
@@ -973,7 +840,8 @@ export const App: React.FC = () => {
     };
   }, [isAuthenticated, activeTab]);
 
-  // 1. Smart Initial Load: Authenticated Store Settings + Inventory Sync + Companies Directory (or Safe Public Catalog)
+  // 1. Smart Initial Load: Store Settings + 1-Read Inventory Sync Check + Companies Directory
+  // Deferred when on the public commercial landing page (isSalesLandingMode) to keep TBT near 0ms
   useEffect(() => {
     let isMounted = true;
 
@@ -993,58 +861,9 @@ export const App: React.FC = () => {
       };
     }
 
-    if (!sessionVerified && !isPublicCatalogMode) {
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    // Unauthenticated Login screen: only load SaaS global branding config without calling protected /api/cloud-sync/* endpoints
-    if (!isAuthenticated && !isPublicCatalogMode) {
-      fetchSaaSGlobalConfigOnce()
-        .then((cfg) => {
-          if (isMounted) {
-            setSaasGlobalConfig(cfg);
-            setIsConnecting(false);
-          }
-        })
-        .catch(() => {
-          if (isMounted) setIsConnecting(false);
-        });
-      return () => {
-        isMounted = false;
-      };
-    }
-
     const initCoreData = async () => {
       setIsSyncing(true);
       try {
-        if (isPublicCatalogMode && !isAuthenticated) {
-          const [hubCatalog, settings, invResult, globalCfg] = await Promise.all([
-            fetchPublicCatalogFromHub(activeCompanyId),
-            fetchStoreSettingsOnce(activeCompanyId),
-            fetchInventorySmart(false, activeCompanyId),
-            fetchSaaSGlobalConfigOnce(),
-          ]);
-          if (!isMounted) return;
-          const mergedPublicSettings: StoreSettings = {
-            ...settings,
-            ...(hubCatalog?.storeSettings || {}),
-          };
-          setStoreSettings(mergedPublicSettings);
-          setCachedStoreSettings(mergedPublicSettings, activeCompanyId);
-          if (hubCatalog?.items && hubCatalog.items.length > 0 && invResult.items.length === 0) {
-            setInventory(hubCatalog.items);
-          } else if (invResult.items.length > 0) {
-            setInventory(invResult.items);
-          }
-          setSaasGlobalConfig(globalCfg);
-          setIsFirebaseConnected(true);
-          setIsConnecting(false);
-          setLastSyncTime(new Date());
-          return;
-        }
-
         // Hydrate full inventory (including large base64 images and tombstones) from IndexedDB immediately
         loadInventoryFromIndexedDB(activeCompanyId)
           .then((idbItems) => {
@@ -1147,12 +966,12 @@ export const App: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [isPublicCatalogMode, isSalesLandingMode, activeCompanyId, isAuthenticated, sessionVerified]);
+  }, [isPublicCatalogMode, isSalesLandingMode, activeCompanyId]);
 
   // 1b. Real-Time Subscription to Companies Directory & SaaS Global Config
-  // Only subscribe to store-specific POS collections when authenticated or in public catalog mode
+  // Only subscribe to heavy store-specific POS collections when not on the public Sales Landing Page
   useEffect(() => {
-    if ((isSalesLandingMode && !isPublicCatalogMode) || (!isAuthenticated && !isPublicCatalogMode)) {
+    if (isSalesLandingMode && !isPublicCatalogMode) {
       return;
     }
 
@@ -1315,7 +1134,18 @@ export const App: React.FC = () => {
     };
   }, [activeCompanyId, isPublicCatalogMode, isSalesLandingMode, isAuthenticated]);
 
-  // 2. Lazy-Load Secondary Collections Based on Active Tab & Active Company
+  // 2. Load Users on Login Screen (only if not in Public Catalog Mode or Sales Landing Mode)
+  useEffect(() => {
+    if (isPublicCatalogMode || isSalesLandingMode) return;
+    if (!isAuthenticated && !loadedModulesRef.current[`users_${activeCompanyId}`]) {
+      loadedModulesRef.current[`users_${activeCompanyId}`] = true;
+      fetchUsersOnce(false, activeCompanyId)
+        .then((list) => setUsers(list))
+        .catch((err) => console.warn('Users load warning:', err));
+    }
+  }, [isPublicCatalogMode, isSalesLandingMode, isAuthenticated, activeCompanyId]);
+
+  // 3. Lazy-Load Secondary Collections Based on Active Tab & Active Company
   useEffect(() => {
     if (isPublicCatalogMode || !isAuthenticated) return;
 
@@ -1681,12 +1511,8 @@ export const App: React.FC = () => {
   const handleSaveStoreSettings = async (newSettings: StoreSettings) => {
     setIsSyncing(true);
     const enrichedSettings: StoreSettings = { ...newSettings, companyId: activeCompanyId };
-    const maskedSettings: StoreSettings = {
-      ...enrichedSettings,
-      accessPassword: enrichedSettings.accessPassword ? HASHED_PASSWORD_MASK : '',
-    };
-    setStoreSettings(maskedSettings);
-    setCachedStoreSettings(maskedSettings, activeCompanyId);
+    setStoreSettings(enrichedSettings);
+    setCachedStoreSettings(enrichedSettings, activeCompanyId);
 
     try {
       await saveStoreSettingsToFirestore(enrichedSettings, activeCompanyId);
@@ -1696,7 +1522,7 @@ export const App: React.FC = () => {
             ? {
                 ...c,
                 name: enrichedSettings.storeName || c.name,
-                adminPassword: HASHED_PASSWORD_MASK,
+                adminPassword: enrichedSettings.accessPassword || c.adminPassword,
                 logoUrl: enrichedSettings.logoUrl,
                 phone: enrichedSettings.phone || c.phone,
                 tagline: enrichedSettings.tagline || c.tagline,
@@ -1729,30 +1555,23 @@ export const App: React.FC = () => {
     setIsSyncing(true);
     try {
       const saved = await saveCompanyToFirestore(companyPayload);
-      const maskedSaved: CompanyTenant = {
-        ...saved,
-        adminPassword: HASHED_PASSWORD_MASK,
-      };
       setCompanies((prev) => {
-        const idx = prev.findIndex((c) => c.slug === maskedSaved.slug);
-        const next =
-          idx >= 0 ? prev.map((c, i) => (i === idx ? maskedSaved : c)) : [maskedSaved, ...prev];
+        const idx = prev.findIndex((c) => c.slug === saved.slug);
+        const next = idx >= 0 ? prev.map((c, i) => (i === idx ? saved : c)) : [saved, ...prev];
         setCachedCompanies(next);
         return next;
       });
 
-      if (maskedSaved.slug === activeCompanyId) {
+      if (saved.slug === activeCompanyId) {
         setStoreSettings((prev) => ({
           ...prev,
-          companyId: maskedSaved.slug,
-          storeName: maskedSaved.name,
-          tagline: maskedSaved.tagline || prev.tagline,
-          logoUrl: maskedSaved.logoUrl ?? prev.logoUrl,
-          phone: maskedSaved.phone || prev.phone,
-          address: maskedSaved.address || prev.address,
-          accessPassword: isMaskedOrHashedPassword(prev.accessPassword)
-            ? prev.accessPassword
-            : HASHED_PASSWORD_MASK,
+          companyId: saved.slug,
+          storeName: saved.name,
+          tagline: saved.tagline || prev.tagline,
+          logoUrl: saved.logoUrl ?? prev.logoUrl,
+          phone: saved.phone || prev.phone,
+          address: saved.address || prev.address,
+          accessPassword: saved.adminPassword || prev.accessPassword,
           allowedModules: resolveCompanyAllowedModules(
             saved.allowedModules || prev.allowedModules,
             {
@@ -1845,24 +1664,8 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleSwitchCompanyWorkspace = async (targetSlug: string) => {
+  const handleSwitchCompanyWorkspace = (targetSlug: string) => {
     const clean = normalizeCompanySlug(targetSlug);
-    try {
-      const res = await fetch('/api/auth/switch-company', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: clean }),
-      });
-      if (!res.ok) {
-        showToast('Solo el SuperAdmin autenticado puede cambiar de empresa.', 'error');
-        return;
-      }
-    } catch {
-      showToast('Error al sincronizar el cambio de empresa con el servidor.', 'error');
-      return;
-    }
-
     handleSelectCompanyContext(clean);
     const targetObj = companies.find((c) => c.slug === clean);
     setUserSession((prev) => {

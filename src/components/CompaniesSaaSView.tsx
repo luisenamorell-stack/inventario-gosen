@@ -29,8 +29,6 @@ import {
   subscribeToSaaSDemoRequests,
   updateSaaSDemoRequestInFirestore,
   deleteSaaSDemoRequestFromFirestore,
-  HASHED_PASSWORD_MASK,
-  isMaskedOrHashedPassword,
 } from '../firebase/firestoreService';
 import {
   Building2,
@@ -338,10 +336,16 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     loadUsageMetrics();
   }, [loadUsageMetrics]);
 
-  // SaaS Master Key rotation state (stored hashed on backend, never in localStorage)
+  // SaaS Master Key state (only for the SaaS Creator/Owner)
+  const [saasMasterKey, setSaasMasterKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem('stockmaster_saas_master_key') || 'SAASMASTER2026';
+    } catch {
+      return 'SAASMASTER2026';
+    }
+  });
   const [isEditingMasterKey, setIsEditingMasterKey] = useState(false);
-  const [tempMasterKey, setTempMasterKey] = useState('');
-  const [isUpdatingMasterKey, setIsUpdatingMasterKey] = useState(false);
+  const [tempMasterKey, setTempMasterKey] = useState(saasMasterKey);
 
   // SaaS Admin WhatsApp, Official Domain, Warning Days & Auto-Suspend Grace Days Config
   const [isEditingSaaSContact, setIsEditingSaaSContact] = useState(false);
@@ -570,36 +574,19 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     }
   };
 
-  const handleSaveMasterKey = async () => {
-    const clean = tempMasterKey.trim();
+  const handleSaveMasterKey = () => {
+    const clean = tempMasterKey.trim().toUpperCase();
     if (clean.length < 6) {
       showToast('La Clave Maestra debe tener al menos 6 caracteres.', 'warning');
       return;
     }
-    setIsUpdatingMasterKey(true);
     try {
-      const res = await fetch('/api/auth/change-master-key', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ newKey: clean }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.ok) {
-        showToast(data?.error || 'No se pudo actualizar la Clave Maestra en el servidor.', 'error');
-        return;
-      }
-      try {
-        localStorage.removeItem('stockmaster_saas_master_key');
-      } catch {}
-      setTempMasterKey('');
-      setIsEditingMasterKey(false);
-      showToast('Clave Maestra SaaS actualizada y protegida con hash scrypt en el servidor.', 'success');
-    } catch {
-      showToast('Error de conexión al actualizar la Clave Maestra.', 'error');
-    } finally {
-      setIsUpdatingMasterKey(false);
-    }
+      localStorage.setItem('stockmaster_saas_master_key', clean);
+    } catch {}
+    setSaasMasterKey(clean);
+    setTempMasterKey(clean);
+    setIsEditingMasterKey(false);
+    showToast(`Tu Clave Maestra de Administrador SaaS ahora es: ${clean}`, 'success');
   };
 
   const handleSaveSaaSContactConfig = async () => {
@@ -861,9 +848,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
     setPlan(comp.plan || 'mensual');
     setPrice(String(comp.price || 0));
     setNextBillingDate(comp.nextBillingDate || '');
-    setAdminPassword(
-      isMaskedOrHashedPassword(comp.adminPassword) ? '' : comp.adminPassword || ''
-    );
+    setAdminPassword(comp.adminPassword || '');
     setTagline(comp.tagline || 'Control de Inventario y Ventas');
     setAddress(comp.address || '');
     setNotes(comp.notes || '');
@@ -1466,10 +1451,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       showToast('Ingresa un código único para la empresa.', 'warning');
       return;
     }
-    const hasExistingPass = Boolean(
-      editingCompany && isMaskedOrHashedPassword(editingCompany.adminPassword)
-    );
-    if (!cleanPass && !hasExistingPass) {
+    if (!cleanPass) {
       showToast('Asigna una contraseña de Administrador para este cliente.', 'warning');
       return;
     }
@@ -1509,7 +1491,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
             : '',
         suspendedAt: status === 'suspended' ? Date.now() : undefined,
         autoSuspend: autoSuspendClient,
-        adminPassword: cleanPass || HASHED_PASSWORD_MASK,
+        adminPassword: cleanPass,
         logoUrl: safeLogo,
         tagline: tagline.trim() || 'Control de Inventario y Ventas',
         address: address.trim(),
@@ -1608,11 +1590,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       `🔗 *Enlace directo a tu sistema:*\n${loginUrl}\n\n` +
       `🔑 *Tus datos de ingreso (Administrador):*\n` +
       `• *Código de Empresa:* \`${comp.slug}\`\n` +
-      `• *Contraseña Admin:* \`${
-        isMaskedOrHashedPassword(comp.adminPassword)
-          ? 'Protegida (solicita actualización si fue olvidada)'
-          : comp.adminPassword
-      }\`\n\n` +
+      `• *Contraseña Admin:* \`${comp.adminPassword}\`\n\n` +
       `🛍️ *Tu Catálogo Digital para Clientes:*\n${catalogUrl}\n\n` +
       `Desde el módulo *Ajustes Tienda* puedes subir tu logo, cambiar tu contraseña y crear cuentas para tus colaboradores.`;
 
@@ -2193,14 +2171,13 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
               </div>
               {!isEditingMasterKey ? (
                 <div className="flex items-center gap-2 mt-0.5">
-                  <span className="inline-flex items-center gap-1 font-mono font-black text-xs text-emerald-400 tracking-wide">
-                    <Lock className="w-3 h-3" />
-                    Cifrada (scrypt)
+                  <span className="font-mono font-black text-xs text-amber-400 tracking-wider">
+                    {saasMasterKey}
                   </span>
                   <button
                     type="button"
                     onClick={() => {
-                      setTempMasterKey('');
+                      setTempMasterKey(saasMasterKey);
                       setIsEditingMasterKey(true);
                     }}
                     className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-300 cursor-pointer"
@@ -2211,24 +2188,20 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
               ) : (
                 <div className="flex items-center gap-1.5 mt-1">
                   <input
-                    type="password"
+                    type="text"
                     value={tempMasterKey}
-                    disabled={isUpdatingMasterKey}
-                    onChange={(e) => setTempMasterKey(e.target.value)}
-                    placeholder="Nueva clave"
+                    onChange={(e) => setTempMasterKey(e.target.value.toUpperCase())}
                     className="w-28 px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs font-mono font-bold text-white"
                   />
                   <button
                     type="button"
-                    disabled={isUpdatingMasterKey}
                     onClick={handleSaveMasterKey}
-                    className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-[10px] font-bold text-white cursor-pointer disabled:opacity-60"
+                    className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-[10px] font-bold text-white cursor-pointer"
                   >
-                    {isUpdatingMasterKey ? '...' : 'Guardar'}
+                    Guardar
                   </button>
                   <button
                     type="button"
-                    disabled={isUpdatingMasterKey}
                     onClick={() => setIsEditingMasterKey(false)}
                     className="px-2 py-1 rounded bg-slate-800 text-[10px] text-slate-400 cursor-pointer"
                   >
@@ -2578,22 +2551,16 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
                     </span>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <span className="font-mono font-extrabold text-slate-800">
-                        {isMaskedOrHashedPassword(comp.adminPassword)
-                          ? '🔒 Cifrada'
-                          : isPassVisible
-                          ? comp.adminPassword
-                          : '••••••••'}
+                        {isPassVisible ? comp.adminPassword : '••••••••'}
                       </span>
-                      {!isMaskedOrHashedPassword(comp.adminPassword) && (
-                        <button
-                          type="button"
-                          onClick={() => togglePasswordVisibility(comp.slug)}
-                          className="text-slate-400 hover:text-slate-700 cursor-pointer"
-                          title={isPassVisible ? 'Ocultar clave' : 'Ver clave'}
-                        >
-                          {isPassVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => togglePasswordVisibility(comp.slug)}
+                        className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                        title={isPassVisible ? 'Ocultar clave' : 'Ver clave'}
+                      >
+                        {isPassVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
                     </div>
                   </div>
 
@@ -4614,20 +4581,14 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-xl bg-amber-50/60 border border-amber-200/80">
                 <div>
                   <label className="block text-[11px] font-extrabold uppercase text-amber-900 mb-1">
-                    {editingCompany && isMaskedOrHashedPassword(editingCompany.adminPassword)
-                      ? 'Nueva Clave Admin (Opcional)'
-                      : 'Contraseña Administrador Cliente *'}
+                    Contraseña Administrador Cliente *
                   </label>
                   <input
                     type="text"
-                    required={!editingCompany || !isMaskedOrHashedPassword(editingCompany.adminPassword)}
+                    required
                     value={adminPassword}
                     onChange={(e) => setAdminPassword(e.target.value)}
-                    placeholder={
-                      editingCompany && isMaskedOrHashedPassword(editingCompany.adminPassword)
-                        ? 'Dejar vacío para mantener la clave actual'
-                        : 'Ej. RIVERA2026'
-                    }
+                    placeholder="Ej. RIVERA2026"
                     className="w-full px-3 py-2 rounded-xl border border-amber-300 bg-white font-mono text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                 </div>
@@ -5048,7 +5009,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
               <SecurityAuditPanel
                 storeName={saasGlobalConfig?.saasBrandName || 'Plataforma Central SaaS'}
                 companyId={activeCompanyId}
-                accessPassword={HASHED_PASSWORD_MASK}
+                accessPassword={saasMasterKey}
                 inventoryCount={companies.length * 100}
                 salesCount={allPaymentsList.length}
                 auditHistoryCount={companies.length}

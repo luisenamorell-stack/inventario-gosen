@@ -8,7 +8,6 @@ import {
   printTestPage,
   shareHtmlDocumentAsPdfToPrinterApp,
 } from '../utils/printPdfService';
-import { sanitizePrintHtml } from '../utils/htmlSanitizer';
 import {
   ConnectedPrinterDevice,
   PRINTER_BRAND_PRESETS,
@@ -786,7 +785,7 @@ export const PrintFormatModal: React.FC<PrintFormatModalProps> = ({
 
   if (!isOpen) return null;
 
-  const previewHtml = sanitizePrintHtml(buildHtml(selectedFormat));
+  const previewHtml = buildHtml(selectedFormat);
   const isThermal = selectedFormat === '80mm' || selectedFormat === '58mm';
 
   const handleSelectFormat = (fmt: PrinterPaperFormat) => {

@@ -1,5 +1,4 @@
 import { StoreSettings, SaleRecord, PrinterPaperFormat } from '../types';
-import { extractPlainTextFromHtml } from './htmlSanitizer';
 
 export type PrinterConnectionType =
   | 'system'
@@ -774,7 +773,17 @@ export function buildEscPosFromHtml(
   pushText(divider);
   pushBytes(0x1b, 0x61, 0x00); // Left
 
-  const rawText = extractPlainTextFromHtml(htmlString);
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = htmlString
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/h[1-6]>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/td>/gi, '  ')
+    .replace(/<\/th>/gi, '  ');
+
+  const rawText = tempDiv.textContent || tempDiv.innerText || '';
   const lines = rawText
     .split('\n')
     .map((l) => l.replace(/\s+/g, ' ').trim())

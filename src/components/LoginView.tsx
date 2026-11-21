@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { StoreSettings, UserAccount, UserSession, CompanyTenant } from '../types';
 import {
   normalizeCompanySlug,
-  setBackendSessionAuthenticated,
+  resolveClientLoginAcrossAllTenants,
 } from '../firebase/firestoreService';
 import {
   Lock,
@@ -216,106 +216,234 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
+    const saasOwnerMasterKey = (
+      localStorage.getItem('stockmaster_saas_master_key') || 'SAASMASTER2026'
+    ).trim();
+
+    const isSaaSOwnerMasterLogin =
+      cleanInput.toUpperCase() === saasOwnerMasterKey.toUpperCase();
+
+    // 1. SAAS MASTER LOGIN
+    if (loginMode === 'saas_owner' || isSaaSOwnerMasterLogin) {
+      if (!isSaaSOwnerMasterLogin) {
+        registerFailedAttempt('Clave de acceso incorrecta.');
+        return;
+      }
+
+      setFailedAttempts(0);
+      try {
+        localStorage.setItem('stockmaster_saas_owner_unlocked', 'true');
+      } catch {}
+
+      const saasAdminSession: UserSession = {
+        userId: 'saas_super_admin',
+        companyId: 'gosen',
+        companyName: 'Panel Central SaaS',
+        isSuperAdmin: true,
+        isStandaloneSaaS: true,
+        userName: 'Administrador SaaS',
+        username: 'saas_admin',
+        role: 'admin',
+        allowedTabs: [
+          'companies',
+          'dashboard',
+          'inventory',
+          'warehouses',
+          'sales',
+          'purchases',
+          'audit',
+          'price-checker',
+          'suppliers',
+          'settings',
+          'catalog',
+          'users',
+          'activity',
+        ],
+      };
+
+      executeAnimatedLoaderAndEnter(
+        saasAdminSession,
+        'MIAPPHN Panel Central',
+        undefined
+      );
+      return;
+    }
+
     if (loginMode === 'collaborator' && !usernameInput.trim()) {
       setError('Ingresa tu nombre de usuario de colaborador.');
       return;
     }
 
-    let hasUrlEmpresa = false;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      hasUrlEmpresa = Boolean(
-        params.get('empresa') || params.get('tienda') || params.get('cliente')
-      );
-    } catch {}
-
     setIsVerifying(true);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 9000);
-      let res: Response;
-      try {
-        res = await fetch('/api/auth/login', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            mode: loginMode,
-            password: cleanInput,
-            username: loginMode === 'collaborator' ? usernameInput.trim() : undefined,
-            companyId: hasUrlEmpresa ? normalizedSlug : undefined,
-            remember: rememberMe,
-          }),
-        });
-      } finally {
-        clearTimeout(timeoutId);
-      }
+      const resolution = await Promise.race([
+        resolveClientLoginAcrossAllTenants({
+          passwordInput: cleanInput,
+          usernameInput: loginMode === 'collaborator' ? usernameInput.trim() : undefined,
+          mode: loginMode === 'collaborator' ? 'collaborator' : 'store_pass',
+          preferredSlug: normalizedSlug,
+          companiesInMemory: companies,
+          usersInMemory: users,
+          activeStoreSettings: storeSettings,
+        }),
+        new Promise<{ matched: false }>((resolve) =>
+          setTimeout(() => resolve({ matched: false }), 4500)
+        ),
+      ]);
 
-      const data = await res.json().catch(() => ({}));
-
-      if (res.status === 429 || (data && Number(data.lockedSeconds) > 0)) {
-        const waitSec = Math.max(5, Number(data?.lockedSeconds) || LOCKOUT_SECONDS);
-        setLockoutUntil(Date.now() + waitSec * 1000);
-        setRemainingLockSeconds(waitSec);
-        setError(
-          data?.error ||
-            `Demasiados intentos fallidos. Por seguridad, espera ${waitSec} segundos para volver a intentar.`
-        );
-        return;
-      }
-
-      if (res.status === 403 && data?.suspended) {
-        setError(
-          data.error ||
-            'El acceso para esta tienda se encuentra suspendido. Comunícate con soporte.'
-        );
-        return;
-      }
-
-      if (!res.ok || !data?.ok || !data?.session) {
+      if (!resolution.matched || !resolution.companySlug) {
         registerFailedAttempt(
-          data?.error ||
-            (loginMode === 'collaborator'
-              ? 'Usuario o contraseña incorrectos. Verifica tus datos e intenta nuevamente.'
-              : 'Contraseña de acceso incorrecta. Verifica tu clave e intenta nuevamente.')
+          loginMode === 'collaborator'
+            ? 'Usuario o contraseña incorrectos. Verifica tus datos e intenta nuevamente.'
+            : 'Contraseña de acceso incorrecta. Verifica tu clave e intenta nuevamente.'
         );
         return;
       }
 
-      const serverSession = data.session as UserSession;
-      const matchedSlug = normalizeCompanySlug(serverSession.companyId || 'gosen');
+      const matchedSlug = normalizeCompanySlug(resolution.companySlug);
+      const matchedCompanyObj =
+        resolution.companyObj ||
+        companies.find((c) => normalizeCompanySlug(c.slug) === matchedSlug);
+      const resolvedStoreName =
+        resolution.companyName ||
+        matchedCompanyObj?.name ||
+        (matchedSlug === 'tiendagyg'
+          ? 'COMERCIAL GYG'
+          : matchedSlug === 'gosen'
+          ? 'Tienda Gosén'
+          : matchedSlug.toUpperCase());
 
-      setBackendSessionAuthenticated(true);
+      // Check if the matched company is suspended
+      if (matchedCompanyObj && matchedCompanyObj.status === 'suspended') {
+        const moraDetail = matchedCompanyObj.moraReason
+          ? ` Motivo: ${matchedCompanyObj.moraReason}.`
+          : '';
+        setError(
+          `El acceso para "${resolvedStoreName}" se encuentra suspendido por pago o renovación pendiente.${moraDetail} Comunícate con soporte.`
+        );
+        return;
+      }
+
       setFailedAttempts(0);
       setSelectedSlug(matchedSlug);
-      if (!serverSession.isSuperAdmin) {
-        onSelectCompany?.(matchedSlug);
-      }
+      onSelectCompany?.(matchedSlug);
 
       try {
         localStorage.removeItem('stockmaster_saas_owner_unlocked');
-        localStorage.removeItem('stockmaster_saas_master_key');
         const url = new URL(window.location.href);
         url.searchParams.delete('ventas');
         url.searchParams.delete('landing');
         url.searchParams.delete('demo');
-        if (!serverSession.isStandaloneSaaS) {
-          url.searchParams.delete('saas');
-          url.searchParams.set('empresa', matchedSlug);
-        }
+        url.searchParams.delete('saas');
+        url.searchParams.set('empresa', matchedSlug);
         window.history.replaceState({}, '', url.toString());
       } catch {}
 
+      if (resolution.type === 'collaborator' && resolution.collaborator) {
+        const collabUser = resolution.collaborator;
+        const effectiveRole = collabUser.role === 'admin' ? 'admin' : 'collaborator';
+        const assignedWarehouseIds = Array.isArray(collabUser.allowedWarehouseIds)
+          ? collabUser.allowedWarehouseIds
+          : Array.isArray(collabUser.salesPermissions?.allowedWarehouseIds)
+          ? collabUser.salesPermissions.allowedWarehouseIds
+          : [];
+        const collabSession: UserSession = {
+          userId: collabUser.id,
+          companyId: matchedSlug,
+          companyName: resolvedStoreName,
+          isSuperAdmin: false,
+          isStandaloneSaaS: false,
+          userName: collabUser.name || collabUser.username,
+          username: collabUser.username,
+          role: effectiveRole,
+          allowedTabs:
+            collabUser.allowedTabs && collabUser.allowedTabs.length > 0
+              ? collabUser.allowedTabs
+              : effectiveRole === 'admin'
+              ? [
+                  'dashboard',
+                  'inventory',
+                  'warehouses',
+                  'sales',
+                  'purchases',
+                  'audit',
+                  'price-checker',
+                  'suppliers',
+                  'settings',
+                  'catalog',
+                  'users',
+                  'activity',
+                ]
+              : ['sales', 'inventory', 'price-checker', 'catalog'],
+          allowedWarehouseIds:
+            effectiveRole === 'admin' || assignedWarehouseIds.length === 0
+              ? undefined
+              : assignedWarehouseIds,
+          salesPermissions: {
+            canEditSales:
+              collabUser.salesPermissions?.canEditSales !== undefined
+                ? collabUser.salesPermissions.canEditSales
+                : true,
+            canCancelSales:
+              collabUser.salesPermissions?.canCancelSales !== undefined
+                ? collabUser.salesPermissions.canCancelSales
+                : effectiveRole === 'admin',
+            canViewCostsAndProfits:
+              collabUser.salesPermissions?.canViewCostsAndProfits !== undefined
+                ? collabUser.salesPermissions.canViewCostsAndProfits
+                : effectiveRole === 'admin',
+            isRouteCollector: Boolean(collabUser.salesPermissions?.isRouteCollector),
+            routeCollectorScope:
+              collabUser.salesPermissions?.routeCollectorScope === 'assigned'
+                ? 'assigned'
+                : 'all',
+            ...(effectiveRole !== 'admin' && assignedWarehouseIds.length > 0
+              ? { allowedWarehouseIds: assignedWarehouseIds }
+              : {}),
+          },
+        };
+
+        executeAnimatedLoaderAndEnter(
+          collabSession,
+          resolvedStoreName,
+          resolution.logoUrl
+        );
+        return;
+      }
+
+      const adminSession: UserSession = {
+        userId: `admin_${matchedSlug}`,
+        companyId: matchedSlug,
+        companyName: resolvedStoreName,
+        isSuperAdmin: false,
+        isStandaloneSaaS: false,
+        userName:
+          matchedSlug === 'gosen'
+            ? 'Administrador Gosén'
+            : `Admin ${resolvedStoreName}`,
+        username: 'admin',
+        role: 'admin',
+        allowedTabs: [
+          'dashboard',
+          'inventory',
+          'warehouses',
+          'sales',
+          'purchases',
+          'audit',
+          'price-checker',
+          'suppliers',
+          'settings',
+          'catalog',
+          'users',
+          'activity',
+        ],
+      };
+
       executeAnimatedLoaderAndEnter(
-        serverSession,
-        serverSession.isSuperAdmin
-          ? 'MIAPPHN Panel Central'
-          : serverSession.companyName || matchedSlug.toUpperCase(),
-        data.logoUrl
+        adminSession,
+        resolvedStoreName,
+        resolution.logoUrl
       );
-    } catch {
-      setError('No se pudo conectar con el servidor de autenticación. Verifica tu conexión e intenta de nuevo.');
     } finally {
       setIsVerifying(false);
     }
