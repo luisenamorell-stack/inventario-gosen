@@ -895,8 +895,10 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                               </span>
                               <input
                                 type="number"
+                                inputMode="decimal"
+                                enterKeyHint="done"
                                 min={finalPrice}
-                                step="1"
+                                step="any"
                                 value={creditTotalInput}
                                 onFocus={(e) => e.target.select()}
                                 onChange={(e) => handleCreditTotalDirectChange(e.target.value)}
@@ -1000,9 +1002,11 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                                 </span>
                                 <input
                                   type="number"
+                                  inputMode="decimal"
+                                  enterKeyHint="done"
                                   min="0"
                                   max={effectiveCreditTotal}
-                                  step="1"
+                                  step="any"
                                   value={creditDownPaymentInput}
                                   onFocus={(e) => e.target.select()}
                                   onChange={(e) => {
@@ -1056,6 +1060,9 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                                 </button>
                                 <input
                                   type="number"
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  enterKeyHint="done"
                                   min="1"
                                   max="120"
                                   value={creditInstallments}

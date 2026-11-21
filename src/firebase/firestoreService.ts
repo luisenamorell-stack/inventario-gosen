@@ -30,6 +30,7 @@ import {
   CashRegisterShift,
   StoreExpenseRecord,
   POSFinanceStoreData,
+  PosQuotationRecord,
   ExpenseCategory,
   PurchaseInvoice,
   UserAccount,
@@ -3532,9 +3533,14 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
               ? it.warrantyCodes.map((c: any) => String(c || '').trim()).filter(Boolean)
               : [];
             const singleCode = it.warrantyCode ? String(it.warrantyCode).trim() : rawCodes.join(', ');
-            const hasWarrantyFlag = Boolean(
-              it.hasWarranty || singleCode || rawCodes.length > 0 || it.warrantyDuration
-            );
+            const hasExplicitNoWarranty =
+              it.hasWarranty === false &&
+              !singleCode &&
+              rawCodes.length === 0 &&
+              !it.warrantyDuration;
+            const hasWarrantyFlag =
+              !hasExplicitNoWarranty &&
+              Boolean(it.hasWarranty || singleCode || rawCodes.length > 0 || it.warrantyDuration);
             return {
               productId: it.productId || '',
               code: it.code || '',
@@ -3550,7 +3556,21 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
               cost: Number(it.cost) || 0,
               quantity: Number(it.quantity) || 1,
               subtotal: Number(it.subtotal) || 0,
-              ...(hasWarrantyFlag ? { hasWarranty: true } : {}),
+              ...(hasExplicitNoWarranty
+                ? { hasWarranty: false }
+                : hasWarrantyFlag
+                ? { hasWarranty: true }
+                : {}),
+              ...(it.warrantyDisabled ? { warrantyDisabled: true } : {}),
+              ...(it.warrantyDisabledAt
+                ? { warrantyDisabledAt: Number(it.warrantyDisabledAt) }
+                : {}),
+              ...(it.warrantyDisabledBy
+                ? { warrantyDisabledBy: String(it.warrantyDisabledBy).trim() }
+                : {}),
+              ...(it.warrantyDisabledReason
+                ? { warrantyDisabledReason: String(it.warrantyDisabledReason).trim() }
+                : {}),
               ...(singleCode ? { warrantyCode: singleCode } : {}),
               ...(rawCodes.length > 0 ? { warrantyCodes: rawCodes } : {}),
               ...(it.warrantyDuration ? { warrantyDuration: String(it.warrantyDuration).trim() } : {}),
@@ -3704,8 +3724,9 @@ function mergeSaleRecordsWithCache(
         missingOnServer.push(loc);
       } else {
         // Preserve signed creditContract, warrantyInfo, and item-level warranty codes if present in local cache
+        // Respect explicit warranty deletion (hasWarranty: false) or disabled state (warrantyInfo.enabled === false)
         const mergedContract = srv.creditContract || loc.creditContract;
-        const mergedWarranty = srv.warrantyInfo || loc.warrantyInfo;
+        const mergedWarranty = srv.warrantyInfo !== undefined ? srv.warrantyInfo : loc.warrantyInfo;
         const mergedItems = Array.isArray(srv.items)
           ? srv.items.map((srvItem, idx) => {
               const locItem =
@@ -3716,6 +3737,23 @@ function mergeSaleRecordsWithCache(
                       (li) => li.code === srvItem.code && li.name === srvItem.name
                     );
               if (!locItem) return srvItem;
+              const srvExplicitRemoved =
+                srvItem.hasWarranty === false || srv.warrantyInfo?.enabled === false;
+              if (srvExplicitRemoved) {
+                return {
+                  ...locItem,
+                  ...srvItem,
+                  hasWarranty: srvItem.hasWarranty,
+                  warrantyCode: srvItem.warrantyCode,
+                  warrantyCodes: srvItem.warrantyCodes,
+                  warrantyDuration: srvItem.warrantyDuration,
+                  warrantyNotes: srvItem.warrantyNotes,
+                  warrantyDisabled: srvItem.warrantyDisabled,
+                  warrantyDisabledAt: srvItem.warrantyDisabledAt,
+                  warrantyDisabledBy: srvItem.warrantyDisabledBy,
+                  warrantyDisabledReason: srvItem.warrantyDisabledReason,
+                };
+              }
               return {
                 ...locItem,
                 ...srvItem,
@@ -3727,6 +3765,11 @@ function mergeSaleRecordsWithCache(
                     : locItem.warrantyCodes,
                 warrantyDuration: srvItem.warrantyDuration || locItem.warrantyDuration,
                 warrantyNotes: srvItem.warrantyNotes || locItem.warrantyNotes,
+                warrantyDisabled: srvItem.warrantyDisabled ?? locItem.warrantyDisabled,
+                warrantyDisabledAt: srvItem.warrantyDisabledAt ?? locItem.warrantyDisabledAt,
+                warrantyDisabledBy: srvItem.warrantyDisabledBy ?? locItem.warrantyDisabledBy,
+                warrantyDisabledReason:
+                  srvItem.warrantyDisabledReason ?? locItem.warrantyDisabledReason,
               };
             })
           : loc.items || [];
@@ -3962,9 +4005,11 @@ export async function recordSaleInFirestore(
         ? it.warrantyCodes.map((c) => String(c || '').trim()).filter(Boolean)
         : [];
       const singleCode = it.warrantyCode ? String(it.warrantyCode).trim() : cleanCodes.join(', ');
-      const hasWarrantyFlag = Boolean(
-        it.hasWarranty || singleCode || cleanCodes.length > 0 || it.warrantyDuration
-      );
+      const hasExplicitNoWarranty =
+        it.hasWarranty === false && !singleCode && cleanCodes.length === 0 && !it.warrantyDuration;
+      const hasWarrantyFlag =
+        !hasExplicitNoWarranty &&
+        Boolean(it.hasWarranty || singleCode || cleanCodes.length > 0 || it.warrantyDuration);
       return {
         productId: String(it.productId || ''),
         code: String(it.code || '').trim(),
@@ -3979,7 +4024,19 @@ export async function recordSaleInFirestore(
         cost: Number(it.cost) || 0,
         quantity: Number(it.quantity) || 1,
         subtotal: Number(it.subtotal) || 0,
-        ...(hasWarrantyFlag ? { hasWarranty: true } : {}),
+        ...(hasExplicitNoWarranty
+          ? { hasWarranty: false }
+          : hasWarrantyFlag
+          ? { hasWarranty: true }
+          : {}),
+        ...(it.warrantyDisabled ? { warrantyDisabled: true } : {}),
+        ...(it.warrantyDisabledAt ? { warrantyDisabledAt: Number(it.warrantyDisabledAt) } : {}),
+        ...(it.warrantyDisabledBy
+          ? { warrantyDisabledBy: String(it.warrantyDisabledBy).trim().slice(0, 150) }
+          : {}),
+        ...(it.warrantyDisabledReason
+          ? { warrantyDisabledReason: String(it.warrantyDisabledReason).trim().slice(0, 300) }
+          : {}),
         ...(singleCode ? { warrantyCode: singleCode.slice(0, 200) } : {}),
         ...(cleanCodes.length > 0 ? { warrantyCodes: cleanCodes } : {}),
         ...(it.warrantyDuration ? { warrantyDuration: String(it.warrantyDuration).trim().slice(0, 60) } : {}),
@@ -4275,9 +4332,11 @@ export async function updateSaleInFirestore(
       ? it.warrantyCodes.map((c) => String(c || '').trim()).filter(Boolean)
       : [];
     const singleCode = it.warrantyCode ? String(it.warrantyCode).trim() : cleanCodes.join(', ');
-    const hasWarrantyFlag = Boolean(
-      it.hasWarranty || singleCode || cleanCodes.length > 0 || it.warrantyDuration
-    );
+    const hasExplicitNoWarranty =
+      it.hasWarranty === false && !singleCode && cleanCodes.length === 0 && !it.warrantyDuration;
+    const hasWarrantyFlag =
+      !hasExplicitNoWarranty &&
+      Boolean(it.hasWarranty || singleCode || cleanCodes.length > 0 || it.warrantyDuration);
     return {
       productId: String(it.productId || ''),
       code: String(it.code || '').trim(),
@@ -4292,7 +4351,19 @@ export async function updateSaleInFirestore(
       cost: Number(it.cost) || 0,
       quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
       subtotal: Number(it.subtotal) || 0,
-      ...(hasWarrantyFlag ? { hasWarranty: true } : {}),
+      ...(hasExplicitNoWarranty
+        ? { hasWarranty: false }
+        : hasWarrantyFlag
+        ? { hasWarranty: true }
+        : {}),
+      ...(it.warrantyDisabled ? { warrantyDisabled: true } : {}),
+      ...(it.warrantyDisabledAt ? { warrantyDisabledAt: Number(it.warrantyDisabledAt) } : {}),
+      ...(it.warrantyDisabledBy
+        ? { warrantyDisabledBy: String(it.warrantyDisabledBy).trim().slice(0, 150) }
+        : {}),
+      ...(it.warrantyDisabledReason
+        ? { warrantyDisabledReason: String(it.warrantyDisabledReason).trim().slice(0, 300) }
+        : {}),
       ...(singleCode ? { warrantyCode: singleCode.slice(0, 200) } : {}),
       ...(cleanCodes.length > 0 ? { warrantyCodes: cleanCodes } : {}),
       ...(it.warrantyDuration ? { warrantyDuration: String(it.warrantyDuration).trim().slice(0, 60) } : {}),
@@ -6565,6 +6636,7 @@ export function getCachedPOSFinanceData(companyId = getActiveCompanyId()): POSFi
       shifts: [],
       expenses: [],
       creditAccountControls: {},
+      quotations: [],
       updatedAt: Date.now(),
     }
   );
@@ -6720,6 +6792,104 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
     ? raw.routeCollectorAlerts
     : [];
 
+  const quotations: PosQuotationRecord[] = Array.isArray(raw.quotations)
+    ? raw.quotations
+        .filter((q: any) => q && typeof q === 'object' && q.id)
+        .map((q: any): PosQuotationRecord => ({
+          id: String(q.id),
+          companyId: slug,
+          quotationNumber: String(q.quotationNumber || 'COT-0001'),
+          status: (['pending', 'converted', 'cancelled'].includes(q.status)
+            ? q.status
+            : 'pending') as PosQuotationRecord['status'],
+          createdAt: Number(q.createdAt) || Date.now(),
+          updatedAt: Number(q.updatedAt) || Number(q.createdAt) || Date.now(),
+          dateFormatted: String(q.dateFormatted || ''),
+          expiresAt: q.expiresAt ? Number(q.expiresAt) : undefined,
+          validUntilDate: q.validUntilDate ? String(q.validUntilDate) : undefined,
+          validDays: q.validDays !== undefined ? Number(q.validDays) : undefined,
+          createdBy: String(q.createdBy || 'Administrador'),
+          createdByUsername: q.createdByUsername ? String(q.createdByUsername) : undefined,
+          warehouseId: q.warehouseId ? String(q.warehouseId) : undefined,
+          warehouseName: q.warehouseName ? String(q.warehouseName) : undefined,
+          customerName: String(q.customerName || 'Cliente por confirmar'),
+          customerPhone: q.customerPhone ? String(q.customerPhone) : undefined,
+          customerRtn: q.customerRtn ? String(q.customerRtn) : undefined,
+          customerAddress: q.customerAddress ? String(q.customerAddress) : undefined,
+          items: Array.isArray(q.items)
+            ? q.items.map((it: any) => ({
+                productId: String(it.productId || ''),
+                code: String(it.code || ''),
+                name: String(it.name || ''),
+                category: it.category ? String(it.category) : undefined,
+                size: it.size ? String(it.size) : undefined,
+                originalPrice:
+                  it.originalPrice !== undefined ? Number(it.originalPrice) : undefined,
+                cashPrice: it.cashPrice !== undefined ? Number(it.cashPrice) : undefined,
+                creditPrice: it.creditPrice !== undefined ? Number(it.creditPrice) : undefined,
+                unitDiscount: it.unitDiscount !== undefined ? Number(it.unitDiscount) : undefined,
+                price: Number(it.price) || 0,
+                cost: Number(it.cost) || 0,
+                quantity: Math.max(1, Number(it.quantity) || 1),
+                subtotal: Number(it.subtotal) || 0,
+                warehouseId: it.warehouseId ? String(it.warehouseId) : undefined,
+                warehouseName: it.warehouseName ? String(it.warehouseName) : undefined,
+                hasWarranty: Boolean(it.hasWarranty),
+                warrantyCode: it.warrantyCode ? String(it.warrantyCode) : undefined,
+                warrantyCodes: Array.isArray(it.warrantyCodes) ? it.warrantyCodes : undefined,
+                warrantyDuration: it.warrantyDuration ? String(it.warrantyDuration) : undefined,
+                warrantyNotes: it.warrantyNotes ? String(it.warrantyNotes) : undefined,
+              }))
+            : [],
+          totalItems: Number(q.totalItems) || 0,
+          subtotal: Number(q.subtotal) || 0,
+          discountType: (q.discountType === 'percent' ? 'percent' : 'amount') as
+            | 'percent'
+            | 'amount',
+          discountValue: Number(q.discountValue) || 0,
+          discountAmount: Number(q.discountAmount) || 0,
+          applyTax: Boolean(q.applyTax),
+          taxAmount: Number(q.taxAmount) || 0,
+          cashTotal: Number(q.cashTotal) || 0,
+          paymentMode: (['cash', 'card', 'transfer', 'credit'].includes(q.paymentMode)
+            ? q.paymentMode
+            : 'cash') as PosQuotationRecord['paymentMode'],
+          creditTotal: q.creditTotal !== undefined ? Number(q.creditTotal) : undefined,
+          creditDownPayment:
+            q.creditDownPayment !== undefined ? Number(q.creditDownPayment) : undefined,
+          creditBalanceToFinance:
+            q.creditBalanceToFinance !== undefined
+              ? Number(q.creditBalanceToFinance)
+              : undefined,
+          creditInstallments:
+            q.creditInstallments !== undefined ? Number(q.creditInstallments) : undefined,
+          creditInstallmentAmount:
+            q.creditInstallmentAmount !== undefined
+              ? Number(q.creditInstallmentAmount)
+              : undefined,
+          creditFrequency: ['daily', 'weekly', 'biweekly', 'monthly'].includes(q.creditFrequency)
+            ? (q.creditFrequency as PosQuotationRecord['creditFrequency'])
+            : undefined,
+          creditFirstPaymentDate: q.creditFirstPaymentDate
+            ? String(q.creditFirstPaymentDate)
+            : undefined,
+          creditAssignedCollector: q.creditAssignedCollector
+            ? String(q.creditAssignedCollector)
+            : undefined,
+          creditArticleBrand: q.creditArticleBrand ? String(q.creditArticleBrand) : undefined,
+          creditArticleModel: q.creditArticleModel ? String(q.creditArticleModel) : undefined,
+          includeWarranty: Boolean(q.includeWarranty),
+          warrantyDuration: q.warrantyDuration ? String(q.warrantyDuration) : undefined,
+          warrantySerialNotes: q.warrantySerialNotes ? String(q.warrantySerialNotes) : undefined,
+          warrantyTerms: q.warrantyTerms ? String(q.warrantyTerms) : undefined,
+          notes: q.notes ? String(q.notes) : undefined,
+          convertedSaleId: q.convertedSaleId ? String(q.convertedSaleId) : undefined,
+          convertedSaleNumber: q.convertedSaleNumber ? String(q.convertedSaleNumber) : undefined,
+          convertedAt: q.convertedAt ? Number(q.convertedAt) : undefined,
+        }))
+        .sort((a: PosQuotationRecord, b: PosQuotationRecord) => b.createdAt - a.createdAt)
+    : [];
+
   return {
     companyId: slug,
     shifts: shifts.sort((a, b) => b.openedAt - a.openedAt),
@@ -6730,6 +6900,7 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
     onlineCustomers,
     loyaltyConfig,
     loyaltyCustomers,
+    quotations,
     updatedAt: Number(raw.updatedAt) || Date.now(),
   };
 }
@@ -6802,6 +6973,25 @@ function mergePOSFinanceObjects(
     if (ex && ex.id) expMap.set(ex.id, ex);
   }
 
+  const quotationMap = new Map<string, PosQuotationRecord>();
+  const primaryUpdatedAt = Math.max(aTs, bTs);
+  for (const q of primary.quotations || []) {
+    if (q && q.id) quotationMap.set(q.id, q);
+  }
+  for (const q of secondary.quotations || []) {
+    if (!q || !q.id) continue;
+    const existing = quotationMap.get(q.id);
+    if (existing) {
+      const exTs = Number(existing.updatedAt || existing.createdAt || 0);
+      const qTs = Number(q.updatedAt || q.createdAt || 0);
+      if (qTs > exTs || (q.status === 'converted' && existing.status !== 'converted')) {
+        quotationMap.set(q.id, q);
+      }
+    } else if (Number(q.updatedAt || q.createdAt || 0) > primaryUpdatedAt - 10000) {
+      quotationMap.set(q.id, q);
+    }
+  }
+
   return sanitizePOSFinanceDoc(slug, {
     ...secondary,
     ...primary,
@@ -6809,6 +6999,7 @@ function mergePOSFinanceObjects(
     shifts: Array.from(shiftMap.values()),
     expenses: Array.from(expMap.values()),
     creditAccountControls: mergedControls,
+    quotations: Array.from(quotationMap.values()).sort((x, y) => y.createdAt - x.createdAt),
     routeCollectorAlerts: Array.from(alertMap.values()).sort(
       (x, y) => (Number(y.timestamp) || 0) - (Number(x.timestamp) || 0)
     ),
@@ -6827,7 +7018,10 @@ export async function fetchPOSFinanceDataOnce(
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const cached = getCachedPOSFinanceData(slug);
   const hubSync = await syncCollectionsWithBackendHub(
-    cached && (cached.updatedAt > 0 || Object.keys(cached.creditAccountControls || {}).length > 0)
+    cached &&
+      (cached.updatedAt > 0 ||
+        Object.keys(cached.creditAccountControls || {}).length > 0 ||
+        (cached.quotations?.length || 0) > 0)
       ? { posFinance: cached }
       : {},
     slug
@@ -6955,6 +7149,7 @@ export async function savePOSFinanceDataToFirestore(
     routeCollectorAlerts: Array.isArray(data.routeCollectorAlerts)
       ? data.routeCollectorAlerts.slice(0, 300)
       : [],
+    quotations: Array.isArray(data.quotations) ? data.quotations.slice(0, 250) : [],
     updatedAt: Date.now(),
   };
 
@@ -6980,6 +7175,7 @@ export async function savePOSFinanceDataToFirestore(
           onlineCustomers: normalized.onlineCustomers,
           loyaltyConfig: normalized.loyaltyConfig,
           loyaltyCustomers: normalized.loyaltyCustomers,
+          quotations: normalized.quotations,
           updatedAt: normalized.updatedAt,
         }),
         { merge: true }

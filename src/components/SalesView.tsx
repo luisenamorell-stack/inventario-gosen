@@ -27,6 +27,7 @@ import {
   isCollaboratorRouteCollector,
   normalizeCollectorIdentifier,
   PriceCheckerCreditHandoff,
+  PosQuotationRecord,
 } from '../types';
 import {
   getProductStockInWarehouse,
@@ -49,6 +50,8 @@ import {
   downloadCreditContractPdf,
   buildWarrantyCertificateHtml,
   downloadWarrantyCertificatePdf,
+  downloadPosQuotationPdf,
+  buildPosQuotationWhatsAppText,
 } from '../utils/printPdfService';
 import {
   getBridgeConfig,
@@ -114,6 +117,7 @@ import {
   Gift,
   Star,
   UtensilsCrossed,
+  Clock,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -121,6 +125,7 @@ import { EditSaleModal, AdminCancelAuthModal } from './EditSaleModal';
 import { playSound } from '../utils/audio';
 import { PosProductGridSkeleton } from './SkeletonLoaders';
 import { POSFinanceTabs } from './POSFinanceTabs';
+import { SaveQuotationModal, POSQuotationsTab } from './POSQuotationsView';
 
 export const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
@@ -139,6 +144,7 @@ export const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-
 
 export type SalesSubTab =
   | 'pos'
+  | 'quotations'
   | 'warranty'
   | 'cash-register'
   | 'credits'
@@ -638,6 +644,22 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
   const [saleNotes, setSaleNotes] = useState<string>('');
   const [isSubmittingSale, setIsSubmittingSale] = useState<boolean>(false);
+  const [showSaveQuotationModal, setShowSaveQuotationModal] = useState<boolean>(false);
+  const [isSavingQuotation, setIsSavingQuotation] = useState<boolean>(false);
+  const [activeResumedQuotationId, setActiveResumedQuotationId] = useState<string | null>(null);
+  const [activeResumedQuotationNumber, setActiveResumedQuotationNumber] = useState<string | null>(
+    null
+  );
+
+  const quotationsList = useMemo<PosQuotationRecord[]>(
+    () => posFinanceData?.quotations || [],
+    [posFinanceData?.quotations]
+  );
+
+  const pendingQuotationsCount = useMemo(
+    () => quotationsList.filter((q) => q.status === 'pending').length,
+    [quotationsList]
+  );
 
   // Product Warranty state in POS & Receipt Modal (applicable to any product / sale)
   const getDefaultWarrantyTermsForStore = () => {
@@ -1279,12 +1301,204 @@ export const SalesView: React.FC<SalesViewProps> = ({
   // State for the dedicated "Consultar Garantía" module
   const [warrantyLookupQuery, setWarrantyLookupQuery] = useState('');
   const [warrantyStatusFilter, setWarrantyStatusFilter] = useState<
-    'all' | 'active' | 'expired' | 'all-sold'
+    'all' | 'active' | 'disabled' | 'expired' | 'all-sold'
   >('all');
   const [editingWarrantyItemKey, setEditingWarrantyItemKey] = useState<string | null>(null);
   const [draftItemWarrantyCode, setDraftItemWarrantyCode] = useState('');
   const [draftItemWarrantyDuration, setDraftItemWarrantyDuration] = useState('30 Días');
   const [draftItemWarrantyNotes, setDraftItemWarrantyNotes] = useState('');
+  const [warrantyToDeactivate, setWarrantyToDeactivate] = useState<{
+    sale: SaleRecord;
+    itemIdx: number;
+    itemName: string;
+    warrantyCode: string;
+  } | null>(null);
+  const [warrantyDeactivateReason, setWarrantyDeactivateReason] = useState('');
+  const [warrantyToDelete, setWarrantyToDelete] = useState<{
+    sale: SaleRecord;
+    itemIdx: number;
+    itemName: string;
+    warrantyCode: string;
+  } | null>(null);
+  const [isUpdatingWarrantyStatus, setIsUpdatingWarrantyStatus] = useState(false);
+
+  const handleToggleItemWarrantyDisabled = async (
+    sale: SaleRecord,
+    itemIdx: number,
+    disable: boolean,
+    reason?: string
+  ) => {
+    if (!onUpdateSale) return;
+    setIsUpdatingWarrantyStatus(true);
+    try {
+      const targetItem = sale.items[itemIdx];
+      if (!targetItem) return;
+      const nowMs = Date.now();
+      const actor = userSession?.userName || 'Administrador';
+      const fallbackDur =
+        targetItem.warrantyDuration || sale.warrantyInfo?.durationLabel || '30 Días';
+
+      const updatedItems: SaleItem[] = sale.items.map((it, idx) => {
+        if (idx === itemIdx) {
+          if (disable) {
+            return {
+              ...it,
+              hasWarranty: true,
+              warrantyDuration: fallbackDur,
+              warrantyDisabled: true,
+              warrantyDisabledAt: nowMs,
+              warrantyDisabledBy: actor,
+              warrantyDisabledReason: reason?.trim() || undefined,
+            };
+          }
+          const {
+            warrantyDisabled: _wd,
+            warrantyDisabledAt: _wda,
+            warrantyDisabledBy: _wdb,
+            warrantyDisabledReason: _wdr,
+            ...rest
+          } = it;
+          return {
+            ...rest,
+            hasWarranty: true,
+            warrantyDuration: fallbackDur,
+          };
+        }
+        // Materialize sibling items if invoice had warrantyInfo.enabled
+        if (sale.warrantyInfo?.enabled && it.hasWarranty !== false && !it.hasWarranty) {
+          return {
+            ...it,
+            hasWarranty: true,
+            warrantyDuration: it.warrantyDuration || sale.warrantyInfo.durationLabel || '30 Días',
+          };
+        }
+        return it;
+      });
+
+      const updatedSale: SaleRecord = {
+        ...sale,
+        items: updatedItems,
+        warrantyInfo: sale.warrantyInfo
+          ? {
+              ...sale.warrantyInfo,
+              enabled: disable ? sale.warrantyInfo.enabled : true,
+            }
+          : {
+              enabled: true,
+              durationLabel: fallbackDur,
+              coverageTerms: getDefaultWarrantyTermsForStore(),
+            },
+        lastEditedBy: actor,
+        lastEditedAt: new Date().toLocaleString('es-HN'),
+      };
+
+      await onUpdateSale(sale, updatedSale);
+      if (completedSale && completedSale.id === sale.id) {
+        setCompletedSale(updatedSale);
+      }
+      showToast(
+        disable
+          ? `Garantía desactivada para "${targetItem.name}" en factura ${sale.saleNumber}.`
+          : `Garantía reactivada para "${targetItem.name}" en factura ${sale.saleNumber}.`,
+        disable ? 'warning' : 'success'
+      );
+    } catch (err: any) {
+      showToast(`No se pudo actualizar la garantía: ${err?.message || err}`, 'error');
+    } finally {
+      setIsUpdatingWarrantyStatus(false);
+    }
+  };
+
+  const handleDeleteItemWarranty = async (sale: SaleRecord, itemIdx: number) => {
+    if (!onUpdateSale) return;
+    setIsUpdatingWarrantyStatus(true);
+    try {
+      const targetItem = sale.items[itemIdx];
+      if (!targetItem) return;
+      const actor = userSession?.userName || 'Administrador';
+
+      const updatedItems: SaleItem[] = sale.items.map((it, idx) => {
+        if (idx === itemIdx) {
+          const {
+            warrantyCode: _wc,
+            warrantyCodes: _wcs,
+            warrantyDuration: _wdur,
+            warrantyNotes: _wn,
+            warrantyDisabled: _wd,
+            warrantyDisabledAt: _wda,
+            warrantyDisabledBy: _wdb,
+            warrantyDisabledReason: _wdr,
+            ...rest
+          } = it;
+          return {
+            ...rest,
+            hasWarranty: false,
+          };
+        }
+        if (sale.warrantyInfo?.enabled && it.hasWarranty !== false) {
+          return {
+            ...it,
+            hasWarranty: true,
+            warrantyDuration: it.warrantyDuration || sale.warrantyInfo.durationLabel || '30 Días',
+          };
+        }
+        return it;
+      });
+
+      const remainingWarrantyItems = updatedItems.filter((it) => {
+        if (it.hasWarranty === false) return false;
+        return Boolean(
+          it.hasWarranty ||
+            (it.warrantyCode && it.warrantyCode.trim()) ||
+            (it.warrantyCodes && it.warrantyCodes.some((c) => c && c.trim()))
+        );
+      });
+
+      const rebuiltSerialNotes = remainingWarrantyItems
+        .map((it) => {
+          const cStr =
+            it.warrantyCodes && it.warrantyCodes.filter(Boolean).length > 0
+              ? it.warrantyCodes.filter(Boolean).join(', ')
+              : it.warrantyCode || '';
+          if (!cStr && !it.warrantyNotes) return '';
+          return `${it.name}${cStr ? ` [Cód. Garantía: ${cStr}]` : ''}${
+            it.warrantyNotes ? ` - ${it.warrantyNotes}` : ''
+          }`;
+        })
+        .filter(Boolean)
+        .join(' | ');
+
+      const hasRemaining = remainingWarrantyItems.length > 0;
+      const updatedSale: SaleRecord = {
+        ...sale,
+        items: updatedItems,
+        warrantyInfo: {
+          enabled: hasRemaining,
+          durationLabel: sale.warrantyInfo?.durationLabel || '30 Días',
+          coverageTerms: sale.warrantyInfo?.coverageTerms || getDefaultWarrantyTermsForStore(),
+          serialOrModelNotes: hasRemaining ? rebuiltSerialNotes : '',
+        },
+        lastEditedBy: actor,
+        lastEditedAt: new Date().toLocaleString('es-HN'),
+      };
+
+      await onUpdateSale(sale, updatedSale);
+      if (completedSale && completedSale.id === sale.id) {
+        setCompletedSale(updatedSale);
+      }
+      if (editingWarrantyItemKey === `${sale.id}__${itemIdx}`) {
+        setEditingWarrantyItemKey(null);
+      }
+      showToast(
+        `Garantía eliminada de "${targetItem.name}" (factura ${sale.saleNumber} conservada).`,
+        'success'
+      );
+    } catch (err: any) {
+      showToast(`No se pudo eliminar la garantía: ${err?.message || err}`, 'error');
+    } finally {
+      setIsUpdatingWarrantyStatus(false);
+    }
+  };
 
   // Update per-unit credit price for a specific item in the cart when selling on credit
   const updateCartItemCreditPrice = (code: string, rawCreditPrice: number) => {
@@ -1396,6 +1610,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setShowPosWarrantyDetails(false);
     setSelectedLoyaltyCustomerId('');
     setRedeemLoyaltyPoints(false);
+    setActiveResumedQuotationId(null);
+    setActiveResumedQuotationNumber(null);
     setMobilePosTab('catalog');
   };
 
@@ -1937,8 +2153,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
         ...saleData,
       };
 
-      // Update or auto-enroll Frequent Customer profile and/or Credit Contract Control Meta in POSFinanceStoreData
-      if ((isLoyaltyEligible || isCredit) && onSavePOSFinanceData && posFinanceData) {
+      // Update or auto-enroll Frequent Customer profile, Credit Contract Control Meta, and/or converted Quotation in POSFinanceStoreData
+      if (
+        (isLoyaltyEligible || isCredit || activeResumedQuotationId) &&
+        onSavePOSFinanceData &&
+        posFinanceData
+      ) {
         const nowMs = Date.now();
         let updatedCustomersList: LoyaltyCustomerProfile[] = loyaltyCustomers;
 
@@ -2110,10 +2330,26 @@ export const SalesView: React.FC<SalesViewProps> = ({
           }
         }
 
+        const nextQuotations = activeResumedQuotationId
+          ? (posFinanceData.quotations || []).map((q) =>
+              q.id === activeResumedQuotationId
+                ? {
+                    ...q,
+                    status: 'converted' as const,
+                    convertedSaleId: recorded.id,
+                    convertedSaleNumber: recorded.saleNumber,
+                    convertedAt: nowMs,
+                    updatedAt: nowMs,
+                  }
+                : q
+            )
+          : posFinanceData.quotations;
+
         await onSavePOSFinanceData({
           ...posFinanceData,
           loyaltyCustomers: updatedCustomersList,
           creditAccountControls: nextControls,
+          ...(nextQuotations ? { quotations: nextQuotations } : {}),
           ...(nextRouteConfig ? { routeCollectorConfig: nextRouteConfig } : {}),
           updatedAt: nowMs,
         });
@@ -2409,7 +2645,11 @@ export const SalesView: React.FC<SalesViewProps> = ({
           ? it.warrantyCodes.filter(Boolean).join(', ')
           : it.warrantyCode || '';
       msg += `• *${it.quantity}x* ${it.name} _(Cód Art: ${it.code} • L. ${it.subtotal.toFixed(2)})_\n`;
-      if (itemWCode || it.hasWarranty) {
+      if (it.warrantyDisabled) {
+        msg += `  ⛔ *GARANTÍA DESACTIVADA*${itemWCode ? ` _(Cód: ${itemWCode})_` : ''}${
+          it.warrantyDisabledReason ? ` • _Motivo: ${it.warrantyDisabledReason}_` : ''
+        }\n`;
+      } else if (it.hasWarranty !== false && (itemWCode || it.hasWarranty)) {
         msg += `  🛡️ *Código de Garantía:* *${itemWCode || 'Cubierto'}*${
           it.warrantyDuration ? ` • Plazo: *${it.warrantyDuration}*` : ''
         }${it.warrantyNotes ? ` • _${it.warrantyNotes}_` : ''}\n`;
@@ -3063,11 +3303,325 @@ export const SalesView: React.FC<SalesViewProps> = ({
     showToast('Excel (.xlsx) de ventas exportado con todas las columnas organizadas.', 'success');
   };
 
+  // Compute next sequential COT-XXXX quotation number
+  const getNextQuotationNumber = () => {
+    let maxNum = 0;
+    for (const q of quotationsList) {
+      const m = String(q.quotationNumber || '').match(/(\d+)$/);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n > maxNum) maxNum = n;
+      }
+    }
+    return `COT-${String(maxNum + 1).padStart(4, '0')}`;
+  };
+
+  const handleSaveCurrentCartAsQuotation = async (opts: {
+    customerName: string;
+    customerPhone: string;
+    customerRtn: string;
+    customerAddress: string;
+    validDays: number;
+    notes: string;
+    afterAction: 'none' | 'pdf' | 'whatsapp';
+    saveAsNew?: boolean;
+  }) => {
+    if (cart.length === 0) {
+      showToast('El ticket está vacío. Agrega artículos antes de guardar en espera.', 'warning');
+      return;
+    }
+    setIsSavingQuotation(true);
+    try {
+      const nowMs = Date.now();
+      const dateFormatted = new Date(nowMs).toLocaleString('es-HN', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const vDays = Math.max(1, Number(opts.validDays) || 7);
+      const expiresAt = nowMs + vDays * 86400000;
+      const validUntilDate = new Date(expiresAt).toISOString().slice(0, 10);
+
+      const isUpdatingExisting = Boolean(activeResumedQuotationId && !opts.saveAsNew);
+      const existingQuote = isUpdatingExisting
+        ? quotationsList.find((q) => q.id === activeResumedQuotationId)
+        : undefined;
+
+      const quotationNumber = existingQuote
+        ? existingQuote.quotationNumber
+        : getNextQuotationNumber();
+      const quotationId = existingQuote ? existingQuote.id : `cot_${nowMs}`;
+
+      const isCreditMode = paymentMethod === 'credit';
+      const normalizedPaymentMode: PosQuotationRecord['paymentMode'] = isCreditMode
+        ? 'credit'
+        : paymentMethod === 'card'
+        ? 'card'
+        : paymentMethod === 'transfer'
+        ? 'transfer'
+        : 'cash';
+
+      const cTotal = isCreditMode ? Number(effectiveCreditTotal.toFixed(2)) : undefined;
+      const cDown = isCreditMode
+        ? Number(Math.min(effectiveCreditTotal, Math.max(0, parseFloat(creditInitialDeposit) || 0)).toFixed(2))
+        : undefined;
+      const cBalance =
+        isCreditMode && cTotal !== undefined && cDown !== undefined
+          ? Number(Math.max(0, cTotal - cDown).toFixed(2))
+          : undefined;
+      const cInstCount = isCreditMode
+        ? Math.max(1, parseInt(creditInstallmentsCount, 10) || 6)
+        : undefined;
+      const parsedCustomQ = parseFloat(creditCustomQuota);
+      const cQuotaAmt =
+        isCreditMode && cBalance !== undefined && cInstCount
+          ? Number(
+              (parsedCustomQ > 0 ? parsedCustomQ : cBalance / cInstCount).toFixed(2)
+            )
+          : undefined;
+
+      const record: PosQuotationRecord = {
+        id: quotationId,
+        companyId: storeSettings.companyId || 'gosen',
+        quotationNumber,
+        status: 'pending',
+        createdAt: existingQuote ? existingQuote.createdAt : nowMs,
+        updatedAt: nowMs,
+        dateFormatted,
+        expiresAt,
+        validUntilDate,
+        validDays: vDays,
+        createdBy: invoiceIssuerName.trim() || userSession?.userName || 'Administrador',
+        createdByUsername: userSession?.username || undefined,
+        warehouseId: selectedWarehouse.id,
+        warehouseName: selectedWarehouse.name,
+        customerName: opts.customerName || 'Cliente por confirmar',
+        customerPhone: opts.customerPhone || undefined,
+        customerRtn: opts.customerRtn || undefined,
+        customerAddress: opts.customerAddress || undefined,
+        items: cart.map((it) => ({ ...it })),
+        totalItems: totalCartItemsCount,
+        subtotal: Number(cartSubtotal.toFixed(2)),
+        discountType,
+        discountValue: Number(discountValue) || 0,
+        discountAmount: Number(discountAmount.toFixed(2)),
+        applyTax,
+        taxAmount: Number(taxAmount.toFixed(2)),
+        cashTotal: Number(cartTotal.toFixed(2)),
+        paymentMode: normalizedPaymentMode,
+        creditTotal: cTotal,
+        creditDownPayment: cDown,
+        creditBalanceToFinance: cBalance,
+        creditInstallments: cInstCount,
+        creditInstallmentAmount: cQuotaAmt,
+        creditFrequency: isCreditMode ? creditPaymentFrequencyPos : undefined,
+        creditFirstPaymentDate: isCreditMode && creditDueDate ? creditDueDate : undefined,
+        creditAssignedCollector:
+          isCreditMode && creditAssignedCollectorPos ? creditAssignedCollectorPos : undefined,
+        creditArticleBrand:
+          isCreditMode && creditArticleBrand.trim() ? creditArticleBrand.trim() : undefined,
+        creditArticleModel:
+          isCreditMode && creditArticleModel.trim() ? creditArticleModel.trim() : undefined,
+        includeWarranty: posIncludeWarranty,
+        warrantyDuration: posIncludeWarranty ? posWarrantyDuration : undefined,
+        warrantySerialNotes:
+          posIncludeWarranty && posWarrantySerialNotes.trim()
+            ? posWarrantySerialNotes.trim()
+            : undefined,
+        warrantyTerms:
+          posIncludeWarranty && posWarrantyTerms.trim() ? posWarrantyTerms.trim() : undefined,
+        notes: opts.notes || undefined,
+      };
+
+      const baseFinance: POSFinanceStoreData = posFinanceData || {
+        companyId: storeSettings.companyId || 'gosen',
+        shifts: [],
+        expenses: [],
+        creditAccountControls: {},
+        quotations: [],
+        updatedAt: nowMs,
+      };
+
+      const nextQuotations = existingQuote
+        ? (baseFinance.quotations || []).map((q) => (q.id === record.id ? record : q))
+        : [record, ...(baseFinance.quotations || [])];
+
+      if (onSavePOSFinanceData) {
+        await onSavePOSFinanceData({
+          ...baseFinance,
+          quotations: nextQuotations,
+          updatedAt: nowMs,
+        });
+      }
+
+      if (opts.afterAction === 'pdf') {
+        await downloadPosQuotationPdf(record, storeSettings);
+      } else if (opts.afterAction === 'whatsapp') {
+        const text = buildPosQuotationWhatsAppText(record, storeSettings);
+        const cleanDigits = (record.customerPhone || '').replace(/\D/g, '');
+        const url =
+          cleanDigits.length >= 8
+            ? `https://api.whatsapp.com/send?phone=${
+                cleanDigits.length === 8 ? `504${cleanDigits}` : cleanDigits
+              }&text=${encodeURIComponent(text)}`
+            : `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+
+      playSound('beep');
+      setShowSaveQuotationModal(false);
+      clearCart();
+      showToast(
+        isUpdatingExisting
+          ? `Cotización ${record.quotationNumber} actualizada en espera.`
+          : `Cotización ${record.quotationNumber} guardada en espera (sin afectar inventario).`,
+        'success'
+      );
+    } catch (err: any) {
+      showToast(`No se pudo guardar la cotización: ${err?.message || err}`, 'error');
+    } finally {
+      setIsSavingQuotation(false);
+    }
+  };
+
+  const handleResumeQuotationInPos = (quote: PosQuotationRecord) => {
+    const stockWarnings: string[] = [];
+    const hydratedCart: SaleItem[] = (quote.items || []).map((it) => {
+      const liveProd = inventory.find((p) => p.code === it.code);
+      const targetWhId = it.warehouseId || selectedWarehouse.id;
+      const avail = liveProd
+        ? getPosWarehouseStock(liveProd, targetWhId)
+        : 0;
+      if (avail < it.quantity) {
+        stockWarnings.push(`${it.name} (Cotizado: ${it.quantity}, Disp: ${avail})`);
+      }
+      return { ...it };
+    });
+
+    if (quote.warehouseId && allowedPosWarehouses.some((w) => w.id === quote.warehouseId)) {
+      setSelectedWarehouseId(quote.warehouseId);
+    }
+
+    setCart(hydratedCart);
+    setDiscountType(quote.discountType || 'amount');
+    setDiscountValue(quote.discountValue > 0 ? String(quote.discountValue) : '');
+    setApplyTax(Boolean(quote.applyTax));
+    setCustomerName(quote.customerName || 'Consumidor Final');
+    setCustomerPhone(quote.customerPhone || '');
+    setCustomerRtn(quote.customerRtn || '');
+    setCustomerAddressPos(quote.customerAddress || '');
+    setShowCustomerFieldsPos(true);
+    setSaleNotes(quote.notes || '');
+
+    if (quote.paymentMode === 'credit') {
+      setPaymentMethod('credit');
+      setCreditTotalPriceInput(
+        quote.creditTotal !== undefined && quote.creditTotal > 0
+          ? Number(quote.creditTotal).toFixed(2)
+          : ''
+      );
+      setCreditInitialDeposit(
+        quote.creditDownPayment !== undefined && quote.creditDownPayment > 0
+          ? Number(quote.creditDownPayment).toFixed(2)
+          : ''
+      );
+      setCreditInstallmentsCount(String(quote.creditInstallments || 6));
+      setCreditPaymentFrequencyPos(quote.creditFrequency || 'weekly');
+      setCreditCustomQuota(
+        quote.creditInstallmentAmount !== undefined && quote.creditInstallmentAmount > 0
+          ? Number(quote.creditInstallmentAmount).toFixed(2)
+          : ''
+      );
+      setCreditDueDate(quote.creditFirstPaymentDate || '');
+      setCreditAssignedCollectorPos(quote.creditAssignedCollector || '');
+      setCreditArticleBrand(quote.creditArticleBrand || '');
+      setCreditArticleModel(quote.creditArticleModel || '');
+    } else {
+      setPaymentMethod(quote.paymentMode || 'cash');
+      setCreditTotalPriceInput('');
+      setCreditInitialDeposit('');
+      setCreditCustomQuota('');
+    }
+
+    setPosIncludeWarranty(Boolean(quote.includeWarranty));
+    if (quote.warrantyDuration) setPosWarrantyDuration(quote.warrantyDuration);
+    setPosWarrantySerialNotes(quote.warrantySerialNotes || '');
+    setPosWarrantyTerms(quote.warrantyTerms || '');
+
+    if (quote.status === 'pending') {
+      setActiveResumedQuotationId(quote.id);
+      setActiveResumedQuotationNumber(quote.quotationNumber);
+    } else {
+      setActiveResumedQuotationId(null);
+      setActiveResumedQuotationNumber(null);
+    }
+
+    setActiveSubTab('pos');
+    setMobilePosTab('cart');
+    playSound('click');
+
+    if (stockWarnings.length > 0) {
+      showToast(
+        `${quote.quotationNumber} cargada en POS, pero revisa stock en: ${stockWarnings.join(', ')}.`,
+        'warning'
+      );
+    } else {
+      showToast(
+        `${quote.quotationNumber} cargada en POS lista para ${
+          quote.paymentMode === 'credit' ? 'registrar el crédito' : 'facturar'
+        }.`,
+        'success'
+      );
+    }
+  };
+
+  const handleCancelQuotation = async (quote: PosQuotationRecord) => {
+    if (!onSavePOSFinanceData || !posFinanceData) return;
+    const nowMs = Date.now();
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      quotations: (posFinanceData.quotations || []).map((q) =>
+        q.id === quote.id ? { ...q, status: 'cancelled', updatedAt: nowMs } : q
+      ),
+      updatedAt: nowMs,
+    });
+    if (activeResumedQuotationId === quote.id) {
+      setActiveResumedQuotationId(null);
+      setActiveResumedQuotationNumber(null);
+    }
+    showToast(`Cotización ${quote.quotationNumber} marcada como cancelada.`, 'info');
+  };
+
+  const handleDeleteQuotation = async (quote: PosQuotationRecord) => {
+    if (!onSavePOSFinanceData || !posFinanceData) return;
+    const nowMs = Date.now();
+    await onSavePOSFinanceData({
+      ...posFinanceData,
+      quotations: (posFinanceData.quotations || []).filter((q) => q.id !== quote.id),
+      updatedAt: nowMs,
+    });
+    if (activeResumedQuotationId === quote.id) {
+      setActiveResumedQuotationId(null);
+      setActiveResumedQuotationNumber(null);
+    }
+    showToast(`Cotización ${quote.quotationNumber} eliminada.`, 'info');
+  };
+
   // For a Route Collector Collaborator, lock them directly into their Exclusive Route Collector Panel ('credits')
-  // and hide the POS sub-tabs (Caja/Arqueo, Consultar Garantía, Clientes VIP, Mis Ventas)
+  // Regular POS collaborators can switch between 'pos' and 'quotations'
   const effectiveSubTab: SalesSubTab = !isAdminUser
     ? isRouteCollectorCollab
       ? 'credits'
+      : activeSubTab === 'quotations'
+      ? 'quotations'
       : 'pos'
     : activeSubTab === 'warranty' && !canUseWarrantyModule
     ? 'pos'
@@ -3106,6 +3660,30 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 )}
               </button>
 
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('quotations')}
+                className={`min-h-[38px] flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                  effectiveSubTab === 'quotations'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'bg-white/70 text-slate-700 hover:text-slate-900 hover:bg-white border border-slate-200/60'
+                }`}
+              >
+                <Clock className="w-4 h-4 shrink-0" />
+                <span>Cotizaciones / Espera</span>
+                {pendingQuotationsCount > 0 && (
+                  <span
+                    className={`text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 ${
+                      effectiveSubTab === 'quotations'
+                        ? 'bg-white text-amber-900'
+                        : 'bg-amber-100 text-amber-900'
+                    }`}
+                  >
+                    {pendingQuotationsCount}
+                  </span>
+                )}
+              </button>
+
               {onOpenRestaurant && (
                 <button
                   type="button"
@@ -3132,33 +3710,27 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     >
                       <ShieldCheck className="w-4 h-4 shrink-0" />
                       <span>Consultar Garantía</span>
-                      {visibleSales.reduce(
-                        (acc, s) =>
-                          acc +
-                          (s.items || []).filter(
-                            (it) =>
-                              it.hasWarranty ||
-                              Boolean(it.warrantyCode) ||
-                              Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
-                              Boolean(s.warrantyInfo?.enabled)
-                          ).length,
-                        0
-                      ) > 0 && (
-                        <span className="bg-teal-100 text-teal-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
-                          {visibleSales.reduce(
-                            (acc, s) =>
-                              acc +
-                              (s.items || []).filter(
-                                (it) =>
-                                  it.hasWarranty ||
-                                  Boolean(it.warrantyCode) ||
-                                  Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
-                                  Boolean(s.warrantyInfo?.enabled)
-                              ).length,
-                            0
-                          )}
-                        </span>
-                      )}
+                      {(() => {
+                        const activeWarrantyBadgeCount = visibleSales.reduce(
+                          (acc, s) =>
+                            acc +
+                            (s.items || []).filter((it) => {
+                              if (it.hasWarranty === false || it.warrantyDisabled) return false;
+                              return (
+                                it.hasWarranty ||
+                                Boolean(it.warrantyCode) ||
+                                Boolean(it.warrantyCodes && it.warrantyCodes.some(Boolean)) ||
+                                Boolean(s.warrantyInfo?.enabled)
+                              );
+                            }).length,
+                          0
+                        );
+                        return activeWarrantyBadgeCount > 0 ? (
+                          <span className="bg-teal-100 text-teal-900 text-[10px] font-black px-2 py-0.5 rounded-full shrink-0">
+                            {activeWarrantyBadgeCount}
+                          </span>
+                        ) : null;
+                      })()}
                     </button>
                   )}
 
@@ -3319,6 +3891,19 @@ export const SalesView: React.FC<SalesViewProps> = ({
           onViewSaleTicket={(sale) => {
             setCompletedSale(sale);
             setShowReceiptModal(true);
+          }}
+          showToast={showToast}
+        />
+      ) : effectiveSubTab === 'quotations' ? (
+        <POSQuotationsTab
+          quotations={quotationsList}
+          storeSettings={storeSettings}
+          onResumeInPos={handleResumeQuotationInPos}
+          onCancelQuotation={handleCancelQuotation}
+          onDeleteQuotation={handleDeleteQuotation}
+          onGoToPos={() => {
+            setActiveSubTab('pos');
+            setMobilePosTab('catalog');
           }}
           showToast={showToast}
         />
@@ -3771,6 +4356,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 {cart.length > 0 && (
                   <button
                     type="button"
+                    onClick={() => setShowSaveQuotationModal(true)}
+                    className="px-2 py-1 rounded-lg bg-amber-400/25 text-amber-200 hover:bg-amber-400/40 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    title="Dejar en espera / Cotizar"
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Espera</span>
+                  </button>
+                )}
+                {cart.length > 0 && (
+                  <button
+                    type="button"
                     onClick={clearCart}
                     className="p-1.5 rounded-lg bg-rose-500/25 text-rose-200 hover:bg-rose-500/40 text-xs font-bold flex items-center cursor-pointer"
                     title="Vaciar ticket"
@@ -3798,6 +4394,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 {cart.length > 0 && (
                   <button
                     type="button"
+                    onClick={() => setShowSaveQuotationModal(true)}
+                    className="px-2.5 py-1 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                    title="Guardar factura en espera / cotización sin descontar stock"
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Espera</span>
+                  </button>
+                )}
+                {cart.length > 0 && (
+                  <button
+                    type="button"
                     onClick={clearCart}
                     className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
                     title="Vaciar ticket"
@@ -3808,6 +4415,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 )}
               </div>
             </div>
+
+            {activeResumedQuotationNumber && (
+              <div className="px-3.5 py-1.5 bg-amber-50 border-b border-amber-200 flex items-center justify-between gap-2 text-xs text-amber-950 shrink-0">
+                <span className="font-semibold flex items-center gap-1.5 truncate">
+                  <Clock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  <span>
+                    Retomando cotización <strong>{activeResumedQuotationNumber}</strong> — Al facturar se marcará como completada
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveResumedQuotationId(null);
+                    setActiveResumedQuotationNumber(null);
+                  }}
+                  className="text-amber-700 hover:text-amber-950 p-0.5 rounded cursor-pointer shrink-0"
+                  title="Desvincular de cotización original"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* 1. DEDICATED TICKET ITEMS ZONE (Flows naturally on Android mobile so virtual keyboard never crushes checkout; scrolls independently on md+) */}
             <div className=" shrink-0 md:shrink md:flex-1 md:min-h-[160px] md:overflow-y-auto md:scroll-container p-2.5 sm:p-3 space-y-2 bg-slate-50/50">
@@ -4487,6 +5116,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       </label>
                       <input
                         type="number"
+                        inputMode="decimal"
+                        enterKeyHint="done"
                         step="0.01"
                         min="0"
                         max={effectiveCreditTotal}
@@ -4513,6 +5144,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       </label>
                       <input
                         type="number"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        enterKeyHint="done"
                         min="1"
                         max="60"
                         placeholder="6"
@@ -4530,6 +5164,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       </label>
                       <input
                         type="number"
+                        inputMode="decimal"
+                        enterKeyHint="done"
                         step="0.01"
                         min="0"
                         placeholder={(() => {
@@ -4680,6 +5316,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                       <input
                         type="number"
                         inputMode="decimal"
+                        enterKeyHint="done"
                         step="0.01"
                         placeholder={cartTotal.toFixed(2)}
                         value={cashGiven}
@@ -4841,6 +5478,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   <input
                     type="number"
                     inputMode="decimal"
+                    enterKeyHint="done"
                     min="0"
                     max={discountType === 'percent' ? 100 : cartSubtotal || undefined}
                     step="any"
@@ -4873,8 +5511,23 @@ export const SalesView: React.FC<SalesViewProps> = ({
                 </div>
               </div>
 
-              {/* Sticky Bottom Checkout Action on Android Mobile so it is always reachable */}
-              <div className="sticky bottom-0 z-20 bg-white pt-1.5 pb-1 md:static md:p-0">
+              {/* Sticky Bottom Checkout Action + Hold/Quotation Button on Android Mobile so it is always reachable */}
+              <div className="sticky bottom-0 z-20 bg-white pt-1.5 pb-1 md:static md:p-0 flex flex-col sm:flex-row items-stretch gap-2">
+                {cart.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSaveQuotationModal(true)}
+                    disabled={isSubmittingSale || isSavingQuotation}
+                    className="py-2.5 px-3.5 rounded-2xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-950 font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                    title="Guardar como cotización o dejar factura en espera hasta que el cliente confirme"
+                  >
+                    <Clock className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span className="whitespace-nowrap">
+                      {activeResumedQuotationNumber ? 'Actualizar Espera' : 'En Espera / Cotizar'}
+                    </span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={handleCheckout}
@@ -4883,7 +5536,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     isSubmittingSale ||
                     (paymentMethod === 'cash' && isCashInsufficient)
                   }
-                  className={`w-full min-h-[52px] py-3 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-between gap-2 transition-all shadow-lg cursor-pointer ${
+                  className={`flex-1 min-h-[52px] py-3 px-4 rounded-2xl font-black text-sm sm:text-base flex items-center justify-between gap-2 transition-all shadow-lg cursor-pointer ${
                     cart.length === 0 ||
                     isSubmittingSale ||
                     (paymentMethod === 'cash' && isCashInsufficient)
@@ -5953,6 +6606,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     [
                       { id: 'all', label: '🛡️ Con Garantía' },
                       { id: 'active', label: '✅ Vigentes' },
+                      { id: 'disabled', label: '⛔ Desactivadas' },
                       { id: 'expired', label: '❌ Vencidas' },
                       { id: 'all-sold', label: '📦 Todos los Artículos' },
                     ] as const
@@ -5991,11 +6645,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           .filter(Boolean)
                       : [];
                   const combinedCodeStr = individualCodes.join(', ') || item.warrantyCode || '';
-                  const hasItemWarranty = Boolean(
-                    item.hasWarranty ||
-                      combinedCodeStr ||
-                      sale.warrantyInfo?.enabled
-                  );
+                  const hasExplicitNoWarranty =
+                    item.hasWarranty === false && !combinedCodeStr && !item.warrantyDuration;
+                  const hasItemWarranty =
+                    !hasExplicitNoWarranty &&
+                    Boolean(
+                      item.hasWarranty ||
+                        combinedCodeStr ||
+                        sale.warrantyInfo?.enabled
+                    );
+                  const isWarrantyDisabled = Boolean(hasItemWarranty && item.warrantyDisabled);
                   const effectiveDurationLabel =
                     item.warrantyDuration ||
                     sale.warrantyInfo?.durationLabel ||
@@ -6025,6 +6684,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     individualCodes,
                     combinedCodeStr,
                     hasItemWarranty,
+                    isWarrantyDisabled,
                     effectiveDurationLabel,
                     durationDays,
                     expiryMs,
@@ -6038,10 +6698,17 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
               const totalWithWarranty = allArticleEntries.filter((e) => e.hasItemWarranty).length;
               const totalActiveWarranty = allArticleEntries.filter(
-                (e) => e.hasItemWarranty && !e.isExpired && e.sale.status !== 'cancelled'
+                (e) =>
+                  e.hasItemWarranty &&
+                  !e.isWarrantyDisabled &&
+                  !e.isExpired &&
+                  e.sale.status !== 'cancelled'
+              ).length;
+              const totalDisabledWarranty = allArticleEntries.filter(
+                (e) => e.hasItemWarranty && e.isWarrantyDisabled
               ).length;
               const totalExpiredWarranty = allArticleEntries.filter(
-                (e) => e.hasItemWarranty && e.isExpired
+                (e) => e.hasItemWarranty && !e.isWarrantyDisabled && e.isExpired
               ).length;
 
               // If there are no items with warranty yet and filter is 'all', show all sold articles so the user can assign codes to any existing invoice item
@@ -6054,10 +6721,18 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   if (!rawQuery && !showAllSoldWhenEmpty && !entry.hasItemWarranty) return false;
 
                   if (warrantyStatusFilter === 'active') {
-                    if (!entry.hasItemWarranty || entry.isExpired || entry.sale.status === 'cancelled')
+                    if (
+                      !entry.hasItemWarranty ||
+                      entry.isWarrantyDisabled ||
+                      entry.isExpired ||
+                      entry.sale.status === 'cancelled'
+                    )
                       return false;
+                  } else if (warrantyStatusFilter === 'disabled') {
+                    if (!entry.hasItemWarranty || !entry.isWarrantyDisabled) return false;
                   } else if (warrantyStatusFilter === 'expired') {
-                    if (!entry.hasItemWarranty || !entry.isExpired) return false;
+                    if (!entry.hasItemWarranty || entry.isWarrantyDisabled || !entry.isExpired)
+                      return false;
                   }
 
                   if (!rawQuery) return true;
@@ -6096,7 +6771,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
               return (
                 <>
                   {/* Summary KPI Cards — Clickable to filter */}
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
                     <button
                       type="button"
                       onClick={() => setWarrantyStatusFilter('all')}
@@ -6143,6 +6818,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
                     <button
                       type="button"
+                      onClick={() => setWarrantyStatusFilter('disabled')}
+                      className={`text-left bg-white border rounded-xl p-3 sm:p-3.5 shadow-2xs flex items-center justify-between cursor-pointer transition-all ${
+                        warrantyStatusFilter === 'disabled'
+                          ? 'border-amber-500 ring-2 ring-amber-500/20'
+                          : 'border-amber-200 hover:border-amber-400'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <span className="text-[10px] sm:text-[11px] font-bold uppercase text-amber-700 block truncate">
+                          Desactivadas
+                        </span>
+                        <span className="text-lg sm:text-2xl font-black text-amber-700 tabular-nums">
+                          {totalDisabledWarranty}
+                        </span>
+                      </div>
+                      <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                        <Ban className="w-5 h-5" />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => setWarrantyStatusFilter('expired')}
                       className={`text-left bg-white border rounded-xl p-3 sm:p-3.5 shadow-2xs flex items-center justify-between cursor-pointer transition-all ${
                         warrantyStatusFilter === 'expired'
@@ -6166,7 +6863,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setWarrantyStatusFilter('all-sold')}
-                      className={`text-left bg-white border rounded-xl p-3 sm:p-3.5 shadow-2xs flex items-center justify-between cursor-pointer transition-all ${
+                      className={`col-span-2 sm:col-span-1 text-left bg-white border rounded-xl p-3 sm:p-3.5 shadow-2xs flex items-center justify-between cursor-pointer transition-all ${
                         warrantyStatusFilter === 'all-sold'
                           ? 'border-indigo-500 ring-2 ring-indigo-500/20'
                           : 'border-slate-200 hover:border-indigo-300'
@@ -6224,6 +6921,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
                           itemIdx,
                           combinedCodeStr,
                           hasItemWarranty,
+                          isWarrantyDisabled,
                           effectiveDurationLabel,
                           diffDays,
                           isExpired,
@@ -6241,6 +6939,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 ? 'border-2 border-teal-500 ring-2 ring-teal-500/20'
                                 : isCancelled
                                 ? 'border-rose-200 opacity-75'
+                                : isWarrantyDisabled
+                                ? 'border-amber-300 bg-amber-50/20'
                                 : hasItemWarranty && !isExpired
                                 ? 'border-emerald-300'
                                 : 'border-slate-200'
@@ -6253,6 +6953,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                   ? 'bg-rose-50 border-rose-200 text-rose-900'
                                   : !hasItemWarranty
                                   ? 'bg-slate-100 border-slate-200 text-slate-700'
+                                  : isWarrantyDisabled
+                                  ? 'bg-amber-50 border-amber-200 text-amber-950'
                                   : isExpired
                                   ? 'bg-rose-50 border-rose-200 text-rose-900'
                                   : 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
@@ -6267,6 +6969,13 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-600 text-white text-xs font-black">
                                     ⚪ SIN GARANTÍA ASIGNADA
                                   </span>
+                                ) : isWarrantyDisabled ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-600 text-white text-xs font-black">
+                                    ⛔ GARANTÍA DESACTIVADA
+                                    {item.warrantyDisabledReason
+                                      ? ` • ${item.warrantyDisabledReason}`
+                                      : ''}
+                                  </span>
                                 ) : isExpired ? (
                                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-xs font-black">
                                     ❌ GARANTÍA VENCIDA (Venció hace {Math.abs(diffDays)} días • {expiryDateFormatted})
@@ -6278,7 +6987,13 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 )}
 
                                 {combinedCodeStr ? (
-                                  <div className="inline-flex items-center gap-1.5 bg-white border-2 border-teal-600 text-teal-950 px-2.5 py-0.5 rounded-lg font-mono text-xs sm:text-sm font-black shadow-2xs">
+                                  <div
+                                    className={`inline-flex items-center gap-1.5 bg-white border-2 px-2.5 py-0.5 rounded-lg font-mono text-xs sm:text-sm font-black shadow-2xs ${
+                                      isWarrantyDisabled
+                                        ? 'border-amber-400 text-amber-900 line-through decoration-amber-600/70'
+                                        : 'border-teal-600 text-teal-950'
+                                    }`}
+                                  >
                                     <span>🛡️ CÓDIGO: {combinedCodeStr}</span>
                                     <button
                                       type="button"
@@ -6519,18 +7234,24 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                       const codesArr = cleanCode
                                         ? cleanCode.split(',').map((c) => c.trim()).filter(Boolean)
                                         : [];
-                                      const updatedItems = sale.items.map((it, idx) =>
-                                        idx === itemIdx
-                                          ? {
-                                              ...it,
-                                              hasWarranty: true,
-                                              warrantyCode: cleanCode,
-                                              warrantyCodes: codesArr,
-                                              warrantyDuration: draftItemWarrantyDuration,
-                                              warrantyNotes: draftItemWarrantyNotes.trim(),
-                                            }
-                                          : it
-                                      );
+                                      const updatedItems = sale.items.map((it, idx) => {
+                                        if (idx !== itemIdx) return it;
+                                        const {
+                                          warrantyDisabled: _wd,
+                                          warrantyDisabledAt: _wda,
+                                          warrantyDisabledBy: _wdb,
+                                          warrantyDisabledReason: _wdr,
+                                          ...rest
+                                        } = it;
+                                        return {
+                                          ...rest,
+                                          hasWarranty: true,
+                                          warrantyCode: cleanCode,
+                                          warrantyCodes: codesArr,
+                                          warrantyDuration: draftItemWarrantyDuration,
+                                          warrantyNotes: draftItemWarrantyNotes.trim(),
+                                        };
+                                      });
                                       const updatedSale: SaleRecord = {
                                         ...sale,
                                         items: updatedItems,
@@ -6595,13 +7316,82 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                   <Edit2 className="w-3.5 h-3.5 text-teal-700" />
                                   <span>Editar Código / Registrar Reclamo</span>
                                 </button>
+
+                                {hasItemWarranty && (
+                                  <>
+                                    {isWarrantyDisabled ? (
+                                      <button
+                                        type="button"
+                                        disabled={isUpdatingWarrantyStatus}
+                                        onClick={() =>
+                                          handleToggleItemWarrantyDisabled(sale, itemIdx, false)
+                                        }
+                                        className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                        title="Reactivar la garantía de este artículo"
+                                      >
+                                        <RotateCcw className="w-3.5 h-3.5 text-emerald-600" />
+                                        <span>Reactivar Garantía</span>
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        disabled={isUpdatingWarrantyStatus}
+                                        onClick={() => {
+                                          setWarrantyDeactivateReason('');
+                                          setWarrantyToDeactivate({
+                                            sale,
+                                            itemIdx,
+                                            itemName: item.name,
+                                            warrantyCode: combinedCodeStr || 'Sin código',
+                                          });
+                                        }}
+                                        className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                        title="Desactivar temporal o definitivamente esta garantía conservando su historial"
+                                      >
+                                        <Ban className="w-3.5 h-3.5 text-amber-700" />
+                                        <span>Desactivar Garantía</span>
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      disabled={isUpdatingWarrantyStatus}
+                                      onClick={() =>
+                                        setWarrantyToDelete({
+                                          sale,
+                                          itemIdx,
+                                          itemName: item.name,
+                                          warrantyCode: combinedCodeStr || 'Sin código',
+                                        })
+                                      }
+                                      className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                      title="Eliminar la garantía de este artículo (la factura se conserva intacta)"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                      <span>Eliminar Garantía</span>
+                                    </button>
+                                  </>
+                                )}
                               </div>
 
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <button
                                   type="button"
-                                  onClick={() => handleSendWarrantyWhatsApp(sale)}
-                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                                  onClick={() => {
+                                    if (isWarrantyDisabled) {
+                                      showToast(
+                                        'Esta garantía está desactivada. Reactívala si deseas enviarla por WhatsApp.',
+                                        'warning'
+                                      );
+                                      return;
+                                    }
+                                    handleSendWarrantyWhatsApp(sale);
+                                  }}
+                                  className={`px-2.5 py-1.5 rounded-xl text-white text-xs font-bold flex items-center gap-1 cursor-pointer ${
+                                    isWarrantyDisabled
+                                      ? 'bg-slate-400 hover:bg-slate-500'
+                                      : 'bg-emerald-600 hover:bg-emerald-700'
+                                  }`}
                                 >
                                   <WhatsAppIcon className="w-3.5 h-3.5 fill-white" />
                                   <span>WhatsApp Garantía</span>
@@ -6609,10 +7399,21 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    handlePrintWarrantyCertificate(receiptPrinterFormat, sale)
-                                  }
-                                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                                  onClick={() => {
+                                    if (isWarrantyDisabled) {
+                                      showToast(
+                                        'Esta garantía está desactivada. Reactívala si deseas imprimir su certificado.',
+                                        'warning'
+                                      );
+                                      return;
+                                    }
+                                    handlePrintWarrantyCertificate(receiptPrinterFormat, sale);
+                                  }}
+                                  className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1 cursor-pointer ${
+                                    isWarrantyDisabled
+                                      ? 'bg-slate-100 text-slate-400 border-slate-200'
+                                      : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300'
+                                  }`}
                                 >
                                   <Printer className="w-3.5 h-3.5 text-teal-600" />
                                   <span>Imprimir Garantía</span>
@@ -6931,18 +7732,29 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               </span>
                             )}
                           </div>
-                          {(itemWCode || it.hasWarranty) && (
-                            <div className="mt-0.5 inline-flex flex-wrap items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-[9.5px] font-bold text-emerald-900">
-                              <span>
-                                🛡️ Garantía{it.warrantyDuration ? ` (${it.warrantyDuration})` : ''}:
-                              </span>
-                              <span className="font-mono font-black">
-                                {itemWCode || 'Cubierto'}
-                              </span>
-                              {it.warrantyNotes && (
-                                <span className="text-emerald-700">• {it.warrantyNotes}</span>
+                          {it.warrantyDisabled ? (
+                            <div className="mt-0.5 inline-flex flex-wrap items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 border border-amber-300 text-[9.5px] font-bold text-amber-900">
+                              <span>⛔ Garantía Desactivada</span>
+                              {itemWCode && <span className="font-mono">({itemWCode})</span>}
+                              {it.warrantyDisabledReason && (
+                                <span>• {it.warrantyDisabledReason}</span>
                               )}
                             </div>
+                          ) : (
+                            it.hasWarranty !== false &&
+                            (itemWCode || it.hasWarranty) && (
+                              <div className="mt-0.5 inline-flex flex-wrap items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-[9.5px] font-bold text-emerald-900">
+                                <span>
+                                  🛡️ Garantía{it.warrantyDuration ? ` (${it.warrantyDuration})` : ''}:
+                                </span>
+                                <span className="font-mono font-black">
+                                  {itemWCode || 'Cubierto'}
+                                </span>
+                                {it.warrantyNotes && (
+                                  <span className="text-emerald-700">• {it.warrantyNotes}</span>
+                                )}
+                              </div>
+                            )
                           )}
                         </div>
                         <span className="font-bold text-slate-900 shrink-0">
@@ -7740,6 +8552,127 @@ export const SalesView: React.FC<SalesViewProps> = ({
         onCancel={() => setSaleToCancel(null)}
       />
 
+      {/* ==================== MODAL DESACTIVAR GARANTÍA ==================== */}
+      {warrantyToDeactivate && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-[145] animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 bg-amber-50 border-b border-amber-200 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                  <Ban className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-amber-950">
+                    Desactivar Garantía
+                  </h3>
+                  <p className="text-[11px] font-semibold text-amber-800">
+                    Factura {warrantyToDeactivate.sale.saleNumber} • Cód: {warrantyToDeactivate.warrantyCode}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWarrantyToDeactivate(null)}
+                className="p-1.5 rounded-lg text-amber-700 hover:bg-amber-100 cursor-pointer"
+                aria-label="Cerrar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3.5">
+              <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                Se desactivará la garantía de{' '}
+                <strong className="text-slate-900">{warrantyToDeactivate.itemName}</strong>{' '}
+                conservando su código e historial en caso de que necesites reactivarla más adelante.
+              </p>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold uppercase text-slate-600 block">
+                  Motivo de desactivación (Opcional)
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    'Daño físico / Mal uso',
+                    'Daño por humedad o voltaje',
+                    'Intervención externa',
+                    'Reemplazo ya entregado',
+                    'Anulada por tienda',
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setWarrantyDeactivateReason(preset)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                        warrantyDeactivateReason === preset
+                          ? 'bg-amber-600 text-white border-amber-600'
+                          : 'bg-slate-50 hover:bg-amber-50 text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={warrantyDeactivateReason}
+                  onChange={(e) => setWarrantyDeactivateReason(e.target.value)}
+                  placeholder="Escribe un motivo personalizado si lo deseas..."
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isUpdatingWarrantyStatus}
+                onClick={() => setWarrantyToDeactivate(null)}
+                className="px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isUpdatingWarrantyStatus}
+                onClick={async () => {
+                  const target = warrantyToDeactivate;
+                  setWarrantyToDeactivate(null);
+                  await handleToggleItemWarrantyDisabled(
+                    target.sale,
+                    target.itemIdx,
+                    true,
+                    warrantyDeactivateReason
+                  );
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>Sí, Desactivar Garantía</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== CONFIRM DELETE WARRANTY DIALOG ==================== */}
+      <ConfirmDialog
+        isOpen={Boolean(warrantyToDelete)}
+        title="¿Eliminar Garantía del Artículo?"
+        message={`¿Seguro que deseas eliminar permanentemente la garantía de "${warrantyToDelete?.itemName}" (${warrantyToDelete?.warrantyCode}) en la factura ${warrantyToDelete?.sale.saleNumber}? Se borrarán su código y plazo, pero la factura de venta se conservará intacta.`}
+        confirmLabel={isUpdatingWarrantyStatus ? 'Eliminando...' : 'Sí, Eliminar Garantía'}
+        cancelLabel="Conservar"
+        isDestructive={true}
+        onConfirm={async () => {
+          if (warrantyToDelete) {
+            const target = warrantyToDelete;
+            setWarrantyToDelete(null);
+            await handleDeleteItemWarranty(target.sale, target.itemIdx);
+          }
+        }}
+        onCancel={() => setWarrantyToDelete(null)}
+      />
+
       {/* ==================== MODAL EDITOR DE PLANTILLA DE FACTURAS Y TICKETS ==================== */}
       {showInvoiceTemplateModal && (
         <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-[140] animate-in fade-in duration-150">
@@ -7792,6 +8725,54 @@ export const SalesView: React.FC<SalesViewProps> = ({
             />
           </div>
         </div>
+      )}
+
+      {/* ==================== MODAL GUARDAR COTIZACIÓN / FACTURA EN ESPERA ==================== */}
+      {showSaveQuotationModal && (
+        <SaveQuotationModal
+          isOpen={showSaveQuotationModal}
+          onClose={() => setShowSaveQuotationModal(false)}
+          defaultCustomerName={customerName}
+          defaultCustomerPhone={customerPhone}
+          defaultCustomerRtn={customerRtn}
+          defaultCustomerAddress={customerAddressPos}
+          defaultNotes={saleNotes}
+          itemsCount={totalCartItemsCount}
+          paymentMode={
+            paymentMethod === 'credit'
+              ? 'credit'
+              : paymentMethod === 'card'
+              ? 'card'
+              : paymentMethod === 'transfer'
+              ? 'transfer'
+              : 'cash'
+          }
+          cashTotal={cartTotal}
+          creditTotal={effectiveCreditTotal}
+          creditDownPayment={Math.min(
+            effectiveCreditTotal,
+            Math.max(0, parseFloat(creditInitialDeposit) || 0)
+          )}
+          creditInstallments={Math.max(1, parseInt(creditInstallmentsCount, 10) || 6)}
+          creditInstallmentAmount={(() => {
+            const parsedQ = parseFloat(creditCustomQuota);
+            if (parsedQ > 0) return parsedQ;
+            const fin = Math.max(
+              0,
+              effectiveCreditTotal -
+                Math.min(
+                  effectiveCreditTotal,
+                  Math.max(0, parseFloat(creditInitialDeposit) || 0)
+                )
+            );
+            const cnt = Math.max(1, parseInt(creditInstallmentsCount, 10) || 6);
+            return fin / cnt;
+          })()}
+          creditFrequency={creditPaymentFrequencyPos}
+          resumedQuotationNumber={activeResumedQuotationNumber}
+          isSaving={isSavingQuotation}
+          onSaveQuotation={handleSaveCurrentCartAsQuotation}
+        />
       )}
     </div>
   );

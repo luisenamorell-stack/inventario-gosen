@@ -20,6 +20,7 @@ import {
   CreditAccountControlMeta,
   KitchenCommandTicket,
   RestaurantTableOrder,
+  PosQuotationRecord,
   getEffectiveInvoiceTemplate,
   resolveInvoiceIssuerName,
 } from '../types';
@@ -2234,7 +2235,9 @@ export function buildWarrantyCertificateHtml(
           <div style="font-weight:800;">${it.quantity}x ${it.name}</div>
           <div style="font-size:0.88em; color:#334155;">Código Art.: ${it.code} • Valor: ${formatCurrencyL(it.subtotal)}</div>
           ${
-            wCodeStr || it.hasWarranty
+            it.warrantyDisabled
+              ? `<div style="font-size:0.86em; font-weight:800; color:#b45309;">⛔ GARANTÍA DESACTIVADA${wCodeStr ? ` (${wCodeStr})` : ''}${it.warrantyDisabledReason ? ` • ${it.warrantyDisabledReason}` : ''}</div>`
+              : it.hasWarranty !== false && (wCodeStr || it.hasWarranty)
               ? `<div style="font-size:0.88em; font-weight:800; color:#000;">🛡️ Cód. Garantía: ${wCodeStr || 'Cubierto'}${it.warrantyDuration ? ` (${it.warrantyDuration})` : ''}${it.warrantyNotes ? ` • ${it.warrantyNotes}` : ''}</div>`
               : ''
           }
@@ -2299,7 +2302,11 @@ export function buildWarrantyCertificateHtml(
         <td>
           <strong>${it.name}</strong>${it.size ? ` (${it.size})` : ''}
           ${
-            wCodeStr || it.hasWarranty
+            it.warrantyDisabled
+              ? `<div style="font-size:10px;font-weight:800;color:#b45309;margin-top:2px;">
+                  ⛔ GARANTÍA DESACTIVADA${wCodeStr ? ` (Cód: <span style="font-family:monospace;">${wCodeStr}</span>)` : ''}${it.warrantyDisabledReason ? ` • Motivo: ${it.warrantyDisabledReason}` : ''}
+                </div>`
+              : it.hasWarranty !== false && (wCodeStr || it.hasWarranty)
               ? `<div style="font-size:10px;font-weight:800;color:#047857;margin-top:2px;">
                   🛡️ Cód. Garantía Individual: <span style="font-family:monospace;background:#ecfdf5;padding:1px 6px;border-radius:4px;border:1px solid #a7f3d0;">${wCodeStr || 'Cubierto'}</span>
                   ${it.warrantyDuration ? ` • Plazo: <strong>${it.warrantyDuration}</strong>` : ''}
@@ -7509,6 +7516,498 @@ export async function downloadCreditQuotePdf(payload: CreditQuoteSharePayload): 
   const slug = sanitizeQuoteFileSlug(payload.product.name || payload.product.code);
   doc.save(`Cotizacion_Credito_${slug}.pdf`);
 }
+
+// ============================================================================
+// COTIZACIÓN DE FACTURA / POS EN ESPERA (CONTADO Y CRÉDITO)
+// ============================================================================
+function getPosQuotationFreqLabel(
+  freq?: 'daily' | 'weekly' | 'biweekly' | 'monthly'
+): { singular: string; plural: string } {
+  switch (freq) {
+    case 'daily':
+      return { singular: 'Diaria', plural: 'Diarias' };
+    case 'weekly':
+      return { singular: 'Semanal', plural: 'Semanales' };
+    case 'biweekly':
+      return { singular: 'Quincenal', plural: 'Quincenales' };
+    case 'monthly':
+      return { singular: 'Mensual', plural: 'Mensuales' };
+    default:
+      return { singular: 'Semanal', plural: 'Semanales' };
+  }
+}
+
+export function buildPosQuotationWhatsAppText(
+  quote: PosQuotationRecord,
+  storeSettings?: StoreSettings
+): string {
+  const storeName = (storeSettings?.storeName || 'Nuestra Tienda').trim();
+  const isCredit = quote.paymentMode === 'credit';
+  const freq = getPosQuotationFreqLabel(quote.creditFrequency);
+
+  const lines: string[] = [
+    `*${storeName.toUpperCase()}*`,
+    `📋 *COTIZACIÓN ${quote.quotationNumber}* (${isCredit ? 'PLAN AL CRÉDITO' : 'CONTADO'})`,
+    `👤 *Cliente:* ${quote.customerName}`,
+    `📅 *Fecha:* ${quote.dateFormatted}`,
+  ];
+
+  if (quote.validUntilDate) {
+    lines.push(`⏳ *Válida hasta:* ${quote.validUntilDate}`);
+  }
+
+  lines.push('', '*Detalle de Artículos:*');
+  for (const it of quote.items || []) {
+    const unitVal =
+      isCredit && it.creditPrice && it.creditPrice > 0 ? it.creditPrice : it.price;
+    lines.push(
+      `• ${it.quantity}x ${it.name}${it.size ? ` (${it.size})` : ''} — ${formatCurrencyL(
+        unitVal * it.quantity
+      )}`
+    );
+  }
+
+  lines.push('');
+  if (quote.discountAmount > 0) {
+    lines.push(`🏷️ *Descuento:* -${formatCurrencyL(quote.discountAmount)}`);
+  }
+  if (quote.applyTax && quote.taxAmount > 0) {
+    lines.push(`🧾 *ISV (15%):* ${formatCurrencyL(quote.taxAmount)}`);
+  }
+
+  if (isCredit) {
+    const cTotal = Number(quote.creditTotal || quote.cashTotal) || 0;
+    const cDown = Number(quote.creditDownPayment) || 0;
+    const cBal =
+      quote.creditBalanceToFinance !== undefined
+        ? Number(quote.creditBalanceToFinance)
+        : Math.max(0, cTotal - cDown);
+    const cCount = Math.max(1, Number(quote.creditInstallments) || 6);
+    const cQuota = Number(quote.creditInstallmentAmount) || cBal / cCount;
+
+    lines.push(
+      `💳 *Total al Crédito:* ${formatCurrencyL(cTotal)}`,
+      `💵 *Prima / Enganche:* ${formatCurrencyL(cDown)}`,
+      `📊 *Saldo a Financiar:* ${formatCurrencyL(cBal)}`,
+      `🗓️ *Plan de Cuotas:* ${cCount} cuotas ${freq.plural.toLowerCase()} de *${formatCurrencyL(
+        cQuota
+      )}*`
+    );
+    if (quote.creditFirstPaymentDate) {
+      lines.push(`📆 *1er Pago estimado:* ${quote.creditFirstPaymentDate}`);
+    }
+  } else {
+    lines.push(`💰 *TOTAL A PAGAR:* *${formatCurrencyL(quote.cashTotal)}*`);
+  }
+
+  if (quote.notes) {
+    lines.push('', `📝 *Nota:* ${quote.notes}`);
+  }
+
+  if (storeSettings?.phone) {
+    lines.push('', `📞 Para confirmar tu pedido escríbenos al ${storeSettings.phone}`);
+  }
+  lines.push('_Cotización informativa (no descuenta inventario hasta su confirmación)._');
+
+  return lines.join('\n');
+}
+
+export async function downloadPosQuotationPdf(
+  quote: PosQuotationRecord,
+  storeSettings?: StoreSettings
+): Promise<void> {
+  const settings: StoreSettings = storeSettings || { storeName: 'TIENDA GOSÉN' };
+  await preloadStoreLogoForPdf(settings.logoUrl);
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'letter',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const isCredit = quote.paymentMode === 'credit';
+  const freq = getPosQuotationFreqLabel(quote.creditFrequency);
+
+  let y = drawExecutivePdfHeader(doc, {
+    storeSettings: settings,
+    documentTitle: isCredit ? 'COTIZACIÓN AL CRÉDITO' : 'COTIZACIÓN / PROFORMA',
+    documentNumber: quote.quotationNumber,
+    dateLabel: quote.dateFormatted || new Date(quote.createdAt).toLocaleString('es-HN'),
+    statusBadge: isCredit
+      ? {
+          text: 'EN ESPERA • CRÉDITO',
+          bgRgb: [254, 243, 199],
+          textRgb: [146, 64, 14],
+        }
+      : {
+          text: 'EN ESPERA • CONTADO',
+          bgRgb: [209, 250, 229],
+          textRgb: [6, 95, 70],
+        },
+    accentRgb: isCredit ? [180, 83, 9] : [4, 120, 87],
+  });
+
+  // Customer & Quotation Info Card
+  const cardX = 14;
+  const cardW = pageWidth - 28;
+  doc.setDrawColor(226, 232, 240);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(cardX, y, cardW, 24, 2.5, 2.5, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text('DATOS DEL CLIENTE', cardX + 5, y + 6);
+  doc.text('VIGENCIA Y ATENCIÓN', cardX + cardW / 2 + 5, y + 6);
+
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`Cliente: ${quote.customerName || 'Cliente por confirmar'}`, cardX + 5, y + 12);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(51, 65, 85);
+  const custMeta = [
+    quote.customerPhone ? `Tel: ${quote.customerPhone}` : '',
+    quote.customerRtn ? `RTN/ID: ${quote.customerRtn}` : '',
+  ]
+    .filter(Boolean)
+    .join('   •   ');
+  if (custMeta) {
+    doc.text(custMeta, cardX + 5, y + 17);
+  }
+  if (quote.customerAddress) {
+    doc.text(`Dir: ${quote.customerAddress.slice(0, 52)}`, cardX + 5, y + 21.5);
+  }
+
+  const rightX = cardX + cardW / 2 + 5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`Atendido por: ${quote.createdBy || 'Vendedor'}`, rightX, y + 12);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(51, 65, 85);
+  doc.text(
+    `Modalidad: ${isCredit ? 'Plan al Crédito / Fiado' : 'Contado'}`,
+    rightX,
+    y + 17
+  );
+  if (quote.validUntilDate) {
+    doc.text(`Válida hasta: ${quote.validUntilDate}`, rightX, y + 21.5);
+  }
+
+  y += 29;
+
+  // Itemized Table (No costs or profits exposed)
+  const itemRows = (quote.items || []).map((it, idx) => {
+    const unitVal =
+      isCredit && it.creditPrice && it.creditPrice > 0 ? it.creditPrice : it.price;
+    const desc = [
+      it.name,
+      it.code ? `SKU: ${it.code}` : '',
+      it.size ? `Talla: ${it.size}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    return [
+      String(idx + 1),
+      String(it.quantity),
+      desc,
+      formatCurrencyL(unitVal),
+      formatCurrencyL(unitVal * it.quantity),
+    ];
+  });
+
+  autoTable(doc, {
+    startY: y,
+    margin: { left: 14, right: 14 },
+    head: [['#', 'CANT.', 'DESCRIPCIÓN DEL ARTÍCULO', 'P. UNITARIO', 'IMPORTE']],
+    body: itemRows,
+    theme: 'grid',
+    styles: {
+      fontSize: 8.8,
+      cellPadding: 3.2,
+      textColor: [30, 41, 59],
+      lineColor: [226, 232, 240],
+      lineWidth: 0.25,
+    },
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 8.5,
+    },
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' },
+      1: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
+      2: { cellWidth: 'auto' },
+      3: { cellWidth: 32, halign: 'right' },
+      4: { cellWidth: 34, halign: 'right', fontStyle: 'bold' },
+    },
+  });
+
+  y =
+    ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ||
+      y + 50) + 6;
+
+  // Totals & Optional Credit Plan Summary
+  if (isCredit) {
+    const cTotal = Number(quote.creditTotal || quote.cashTotal) || 0;
+    const cDown = Number(quote.creditDownPayment) || 0;
+    const cBal =
+      quote.creditBalanceToFinance !== undefined
+        ? Number(quote.creditBalanceToFinance)
+        : Math.max(0, cTotal - cDown);
+    const cCount = Math.max(1, Number(quote.creditInstallments) || 6);
+    const cQuota = Number(quote.creditInstallmentAmount) || cBal / cCount;
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: 14, right: 14 },
+      head: [['PLAN AL CRÉDITO ESTIPULADO (COTIZACIÓN EN ESPERA)', 'VALOR']],
+      body: [
+        ['Valor de Contado de Referencia', formatCurrencyL(quote.cashTotal)],
+        ['Precio Total al Crédito', formatCurrencyL(cTotal)],
+        ['Prima / Enganche Inicial', formatCurrencyL(cDown)],
+        ['Saldo a Financiar', formatCurrencyL(cBal)],
+        ['Frecuencia y Plazo', `${cCount} cuotas ${freq.plural}`],
+        [`Valor de Cada Cuota (${freq.singular})`, formatCurrencyL(cQuota)],
+        ...(quote.creditFirstPaymentDate
+          ? [['1er Pago Estimado', quote.creditFirstPaymentDate]]
+          : []),
+      ],
+      theme: 'grid',
+      styles: {
+        fontSize: 9.2,
+        cellPadding: 3.5,
+        textColor: [30, 41, 59],
+        lineColor: [253, 230, 138],
+        lineWidth: 0.3,
+      },
+      headStyles: {
+        fillColor: [120, 53, 15],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+      },
+      columnStyles: {
+        0: { fontStyle: 'bold', cellWidth: 96, fillColor: [255, 251, 235] },
+        1: { halign: 'right', fontStyle: 'bold', fillColor: [255, 255, 255] },
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && (data.row.index === 1 || data.row.index === 5)) {
+          data.cell.styles.fillColor = [254, 243, 199];
+          data.cell.styles.textColor = [120, 53, 15];
+        }
+      },
+    });
+    y =
+      ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ||
+        y + 60) + 6;
+  } else {
+    const summaryRows: Array<[string, string]> = [
+      ['Subtotal Artículos', formatCurrencyL(quote.subtotal)],
+    ];
+    if (quote.discountAmount > 0) {
+      summaryRows.push(['Descuento Aplicado', `-${formatCurrencyL(quote.discountAmount)}`]);
+    }
+    if (quote.applyTax && quote.taxAmount > 0) {
+      summaryRows.push(['ISV (15%)', formatCurrencyL(quote.taxAmount)]);
+    }
+    summaryRows.push(['TOTAL COTIZADO (CONTADO)', formatCurrencyL(quote.cashTotal)]);
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: pageWidth - 96, right: 14 },
+      body: summaryRows,
+      theme: 'grid',
+      styles: {
+        fontSize: 9.2,
+        cellPadding: 3.2,
+        textColor: [30, 41, 59],
+        lineColor: [226, 232, 240],
+      },
+      columnStyles: {
+        0: { fontStyle: 'bold', fillColor: [248, 250, 252] },
+        1: { halign: 'right', fontStyle: 'bold' },
+      },
+      didParseCell: (data) => {
+        if (data.row.index === summaryRows.length - 1) {
+          data.cell.styles.fillColor = [6, 95, 70];
+          data.cell.styles.textColor = [255, 255, 255];
+          data.cell.styles.fontSize = 10.5;
+        }
+      },
+    });
+    y =
+      ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ||
+        y + 35) + 8;
+  }
+
+  if (quote.notes && y < pageHeight - 36) {
+    doc.setDrawColor(226, 232, 240);
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(14, y, cardW, 14, 2, 2, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.2);
+    doc.setTextColor(71, 85, 105);
+    doc.text('OBSERVACIONES / NOTAS DE LA COTIZACIÓN:', 18, y + 5.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(30, 41, 59);
+    doc.text(quote.notes.slice(0, 115), 18, y + 10.5);
+    y += 18;
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    'Documento proforma / cotización en espera. No descuenta inventario ni representa factura fiscal hasta su confirmación.',
+    pageWidth / 2,
+    pageHeight - 12,
+    { align: 'center' }
+  );
+
+  const slug = sanitizeQuoteFileSlug(quote.customerName || 'cliente');
+  doc.save(`Cotizacion_${quote.quotationNumber}_${slug}.pdf`);
+}
+
+export function buildPosQuotationPrintHtml(
+  quote: PosQuotationRecord,
+  storeSettings: StoreSettings,
+  format: PrinterPaperFormat
+): string {
+  const storeName = (storeSettings.storeName || 'TIENDA GOSÉN').toUpperCase();
+  const isThermal = format === '58mm' || format === '80mm';
+  const isCredit = quote.paymentMode === 'credit';
+  const freq = getPosQuotationFreqLabel(quote.creditFrequency);
+  const maxWidth = format === '58mm' ? '56mm' : format === '80mm' ? '76mm' : '195mm';
+
+  const itemsHtml = (quote.items || [])
+    .map((it) => {
+      const unitVal =
+        isCredit && it.creditPrice && it.creditPrice > 0 ? it.creditPrice : it.price;
+      return `
+        <tr>
+          <td style="padding:4px 2px;vertical-align:top;">
+            <strong>${it.quantity}x</strong> ${it.name}
+            <div style="font-size:10px;color:#475569;">${it.code}${
+        it.size ? ` • ${it.size}` : ''
+      } @ ${formatCurrencyL(unitVal)}</div>
+          </td>
+          <td class="text-right font-bold" style="padding:4px 2px;white-space:nowrap;vertical-align:top;">
+            ${formatCurrencyL(unitVal * it.quantity)}
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  const cTotal = Number(quote.creditTotal || quote.cashTotal) || 0;
+  const cDown = Number(quote.creditDownPayment) || 0;
+  const cBal =
+    quote.creditBalanceToFinance !== undefined
+      ? Number(quote.creditBalanceToFinance)
+      : Math.max(0, cTotal - cDown);
+  const cCount = Math.max(1, Number(quote.creditInstallments) || 6);
+  const cQuota = Number(quote.creditInstallmentAmount) || cBal / cCount;
+
+  return `
+    <div style="width:${maxWidth};margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+      <div class="text-center" style="margin-bottom:8px;">
+        <div style="font-size:${isThermal ? '14px' : '18px'};font-weight:900;">${storeName}</div>
+        ${storeSettings.phone ? `<div style="font-size:11px;">Tel: ${storeSettings.phone}</div>` : ''}
+        ${storeSettings.address ? `<div style="font-size:10px;color:#475569;">${storeSettings.address}</div>` : ''}
+        <div style="margin:6px 0;padding:4px;border:1.5px solid #0f172a;font-weight:900;font-size:${
+          isThermal ? '12px' : '14px'
+        };">
+          COTIZACIÓN / FACTURA EN ESPERA #${quote.quotationNumber}
+        </div>
+        <div style="font-size:10px;font-weight:700;color:#475569;">
+          Documento no fiscal • Modalidad: ${isCredit ? 'PLAN AL CRÉDITO' : 'CONTADO'}
+        </div>
+      </div>
+
+      <div style="border-top:1px dashed #334155;border-bottom:1px dashed #334155;padding:5px 0;margin:6px 0;font-size:${
+        isThermal ? '10.5px' : '12px'
+      };">
+        <div><strong>Cliente:</strong> ${quote.customerName}</div>
+        ${quote.customerPhone ? `<div><strong>Teléfono:</strong> ${quote.customerPhone}</div>` : ''}
+        ${quote.customerRtn ? `<div><strong>RTN/ID:</strong> ${quote.customerRtn}</div>` : ''}
+        <div><strong>Fecha:</strong> ${quote.dateFormatted}</div>
+        ${quote.validUntilDate ? `<div><strong>Válida hasta:</strong> ${quote.validUntilDate}</div>` : ''}
+        <div><strong>Atendido por:</strong> ${quote.createdBy}</div>
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;font-size:${isThermal ? '10.5px' : '12px'};">
+        <thead>
+          <tr style="border-bottom:1px solid #0f172a;">
+            <th style="text-align:left;padding:3px 2px;">CANT / ARTÍCULO</th>
+            <th style="text-align:right;padding:3px 2px;">IMPORTE</th>
+          </tr>
+        </thead>
+        <tbody>${itemsHtml}</tbody>
+      </table>
+
+      <div style="border-top:1px dashed #334155;margin-top:6px;padding-top:6px;font-size:${
+        isThermal ? '11px' : '12.5px'
+      };">
+        <div style="display:flex;justify-content:space-between;">
+          <span>Subtotal:</span><span>${formatCurrencyL(quote.subtotal)}</span>
+        </div>
+        ${
+          quote.discountAmount > 0
+            ? `<div style="display:flex;justify-content:space-between;"><span>Descuento:</span><span>-${formatCurrencyL(
+                quote.discountAmount
+              )}</span></div>`
+            : ''
+        }
+        ${
+          quote.applyTax && quote.taxAmount > 0
+            ? `<div style="display:flex;justify-content:space-between;"><span>ISV (15%):</span><span>${formatCurrencyL(
+                quote.taxAmount
+              )}</span></div>`
+            : ''
+        }
+        ${
+          isCredit
+            ? `
+          <div style="margin-top:6px;padding:6px;border:1px solid #b45309;background:#fffbeb;">
+            <div style="font-weight:900;font-size:11px;margin-bottom:3px;">PLAN AL CRÉDITO ESTIPULADO</div>
+            <div style="display:flex;justify-content:space-between;font-weight:900;">
+              <span>Precio al Crédito:</span><span>${formatCurrencyL(cTotal)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span>Prima / Enganche:</span><span>${formatCurrencyL(cDown)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span>Saldo a Financiar:</span><span>${formatCurrencyL(cBal)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-weight:900;margin-top:3px;border-top:1px dashed #b45309;padding-top:3px;">
+              <span>${cCount} cuotas ${freq.plural.toLowerCase()}:</span><span>${formatCurrencyL(cQuota)} c/u</span>
+            </div>
+          </div>
+        `
+            : `
+          <div style="display:flex;justify-content:space-between;font-weight:900;font-size:${
+            isThermal ? '13.5px' : '15px'
+          };border-top:1px solid #0f172a;margin-top:4px;padding-top:4px;">
+            <span>TOTAL CONTADO:</span><span>${formatCurrencyL(quote.cashTotal)}</span>
+          </div>
+        `
+        }
+      </div>
+
+      ${quote.notes ? `<div style="margin-top:6px;font-size:10px;"><strong>Nota:</strong> ${quote.notes}</div>` : ''}
+
+      <div class="text-center" style="margin-top:8px;font-size:10px;color:#475569;">
+        Cotización informativa. No descuenta inventario hasta confirmar su facturación.
+      </div>
+    </div>
+  `;
+}
+
 
 
 

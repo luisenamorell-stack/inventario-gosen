@@ -86,6 +86,32 @@
   html.dark textarea::placeholder {
     color: #64748b !important;
   }
+
+  button,
+  input,
+  select,
+  textarea,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+
+  input:-webkit-autofill {
+    animation-name: gosenAutoFillDetect;
+    animation-duration: 0.01s;
+  }
+}
+
+@keyframes gosenAutoFillDetect {
+  from {
+    opacity: 0.999;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.mobile-kb-accessory {
+  top: var(--mobile-kb-top, auto);
 }
 
 /* Visible, smooth scrollbars for vertical & horizontal scrollable areas */

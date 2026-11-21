@@ -60,6 +60,7 @@
         "phone": { "type": "string", "maxLength": 50 },
         "address": { "type": "string", "maxLength": 500 },
         "accessPassword": { "type": "string", "maxLength": 100 },
+        "quotations": { "type": "array" },
         "updatedAt": { "type": "number" }
       },
       "required": ["storeName"]

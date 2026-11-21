@@ -437,6 +437,10 @@ export interface SaleItem {
   quantity: number;
   subtotal: number;
   hasWarranty?: boolean;
+  warrantyDisabled?: boolean;
+  warrantyDisabledAt?: number;
+  warrantyDisabledBy?: string;
+  warrantyDisabledReason?: string;
   warrantyCode?: string;
   warrantyCodes?: string[];
   warrantyDuration?: string;
@@ -771,6 +775,57 @@ export interface RouteCollectorGlobalConfig {
   enabledCollectorUsernames?: string[];
 }
 
+export type PosQuotationStatus = 'pending' | 'converted' | 'cancelled';
+
+export interface PosQuotationRecord {
+  id: string;
+  companyId?: string;
+  quotationNumber: string;
+  status: PosQuotationStatus;
+  createdAt: number;
+  updatedAt: number;
+  dateFormatted: string;
+  expiresAt?: number;
+  validUntilDate?: string;
+  validDays?: number;
+  createdBy: string;
+  createdByUsername?: string;
+  warehouseId?: string;
+  warehouseName?: string;
+  customerName: string;
+  customerPhone?: string;
+  customerRtn?: string;
+  customerAddress?: string;
+  items: SaleItem[];
+  totalItems: number;
+  subtotal: number;
+  discountType: 'amount' | 'percent';
+  discountValue: number;
+  discountAmount: number;
+  applyTax: boolean;
+  taxAmount: number;
+  cashTotal: number;
+  paymentMode: 'cash' | 'card' | 'transfer' | 'credit';
+  creditTotal?: number;
+  creditDownPayment?: number;
+  creditBalanceToFinance?: number;
+  creditInstallments?: number;
+  creditInstallmentAmount?: number;
+  creditFrequency?: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+  creditFirstPaymentDate?: string;
+  creditAssignedCollector?: string;
+  creditArticleBrand?: string;
+  creditArticleModel?: string;
+  includeWarranty?: boolean;
+  warrantyDuration?: string;
+  warrantySerialNotes?: string;
+  warrantyTerms?: string;
+  notes?: string;
+  convertedSaleId?: string;
+  convertedSaleNumber?: string;
+  convertedAt?: number;
+}
+
 export interface POSFinanceStoreData {
   companyId: string;
   shifts: CashRegisterShift[];
@@ -781,6 +836,7 @@ export interface POSFinanceStoreData {
   onlineCustomers?: OnlineCustomerProfile[];
   loyaltyConfig?: LoyaltyProgramConfig;
   loyaltyCustomers?: LoyaltyCustomerProfile[];
+  quotations?: PosQuotationRecord[];
   updatedAt: number;
 }
 
