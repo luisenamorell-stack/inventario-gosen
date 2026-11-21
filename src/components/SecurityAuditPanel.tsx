@@ -1,7 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { belongsToCompany, getActiveCompanyId, normalizeCompanySlug } from '../firebase/firestoreService';
+import {
+  belongsToCompany,
+  getActiveCompanyId,
+  normalizeCompanySlug,
+  isMaskedOrHashedPassword,
+} from '../firebase/firestoreService';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -118,6 +123,18 @@ const INITIAL_TESTS: SecurityTestResult[] = [
   },
 ];
 
+export interface ServerSecurityEvent {
+  id: string;
+  type: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  ip: string;
+  companyId?: string;
+  username?: string;
+  path?: string;
+  detail: string;
+  timestamp: number;
+}
+
 export const SecurityAuditPanel: React.FC<SecurityAuditPanelProps> = ({
   storeName,
   companyId,
@@ -135,6 +152,33 @@ export const SecurityAuditPanel: React.FC<SecurityAuditPanelProps> = ({
     `[INFO] Motor Google Cloud Firestore Security Rules v2 activo. Presiona "Ejecutar Diagnóstico Completo" para iniciar las pruebas reales.`,
   ]);
   const [lastAuditTimestamp, setLastAuditTimestamp] = useState<string | null>(null);
+  const [securityEvents, setSecurityEvents] = useState<ServerSecurityEvent[]>([]);
+  const [eventsScope, setEventsScope] = useState<string>('');
+  const [isLoadingEvents, setIsLoadingEvents] = useState<boolean>(false);
+
+  const loadSecurityEvents = useCallback(async () => {
+    setIsLoadingEvents(true);
+    try {
+      const res = await fetch('/api/security/events', { credentials: 'include' });
+      if (!res.ok) {
+        setSecurityEvents([]);
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      if (data?.ok && Array.isArray(data.events)) {
+        setSecurityEvents(data.events);
+        setEventsScope(String(data.scope || ''));
+      }
+    } catch {
+      // ignore offline
+    } finally {
+      setIsLoadingEvents(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSecurityEvents();
+  }, [loadSecurityEvents]);
 
   const appendLog = (line: string) => {
     const time = new Date().toLocaleTimeString('es-HN', {
@@ -331,15 +375,19 @@ export const SecurityAuditPanel: React.FC<SecurityAuditPanelProps> = ({
         appendLog(`⚡ [PRUEBA 6] Verificando cifrado TLS, ping autenticado a /test/connection y políticas RBAC ...`);
         const connSnap = await getDoc(doc(db, 'test', 'connection'));
         const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-        const hasStrongPass = (accessPassword || '').trim().length >= 4;
+        const isProtectedHash = isMaskedOrHashedPassword(accessPassword);
+        const hasStrongPass = isProtectedHash || (accessPassword || '').trim().length >= 4;
         const elapsed = Math.round(performance.now() - start);
 
         if (hasStrongPass) {
+          const passSummary = isProtectedHash
+            ? 'Credencial protegida con hash scrypt y sesión HttpOnly activa'
+            : `Clave maestra configurada (${accessPassword.length} caracteres)`;
           updateTestState(testId, {
             status: 'passed',
             durationMs: elapsed,
             timestamp: nowStr,
-            serverResponse: `CANAL CIFRADO ACTIVO (${isHttps ? 'HTTPS / TLS 1.3' : 'Entorno Seguro'}) • Ping Firestore OK (${connSnap.exists() ? 'Sincronizado' : 'En línea'}) • Clave maestra configurada (${accessPassword.length} caracteres) y separación de roles Admin/Colaborador activa.`,
+            serverResponse: `CANAL CIFRADO ACTIVO (${isHttps ? 'HTTPS / TLS 1.3' : 'Entorno Seguro'}) • Ping Firestore OK (${connSnap.exists() ? 'Sincronizado' : 'En línea'}) • ${passSummary} y separación de roles Admin/Colaborador activa.`,
           });
           appendLog(`✅ [PRUEBA 6 SUPERADA] Canal TLS 1.3, autenticación por roles y conexión a Google Cloud verificados en ${elapsed}ms.`);
           return true;
@@ -730,6 +778,75 @@ export const SecurityAuditPanel: React.FC<SecurityAuditPanelProps> = ({
                 </p>
               </div>
             </div>
+          </div>
+
+          {/* Real-Time Server Suspicious Activity Monitor */}
+          <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-5 space-y-3.5">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <div className="min-w-0">
+                  <h4 className="font-black text-xs sm:text-sm uppercase tracking-wider text-white truncate">
+                    Monitor de Actividad Sospechosa ({securityEvents.length})
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    Alertas del servidor {eventsScope ? `• Alcance: ${eventsScope}` : ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={loadSecurityEvents}
+                disabled={isLoadingEvents}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 cursor-pointer disabled:opacity-50 shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingEvents ? 'animate-spin' : ''}`} />
+                <span>Actualizar</span>
+              </button>
+            </div>
+
+            {securityEvents.length === 0 ? (
+              <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 text-xs text-slate-400 text-center">
+                No se han registrado alertas sospechosas recientes en este alcance.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {securityEvents.slice(0, 30).map((ev) => {
+                  const sevClass =
+                    ev.severity === 'critical'
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                      : ev.severity === 'high'
+                      ? 'bg-orange-500/20 text-orange-300 border-orange-500/40'
+                      : ev.severity === 'medium'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+                  return (
+                    <div
+                      key={ev.id}
+                      className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${sevClass}`}
+                        >
+                          {ev.severity} • {ev.type}
+                        </span>
+                        <span className="text-[10px] font-mono text-slate-400">
+                          {new Date(ev.timestamp).toLocaleString('es-HN')}
+                        </span>
+                      </div>
+                      <p className="text-slate-200 font-medium leading-snug">{ev.detail}</p>
+                      <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-slate-400">
+                        <span>IP: {ev.ip}</span>
+                        {ev.companyId && <span>• Tienda: {ev.companyId}</span>}
+                        {ev.username && <span>• Usuario: @{ev.username}</span>}
+                        {ev.path && <span>• Ruta: {ev.path}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>

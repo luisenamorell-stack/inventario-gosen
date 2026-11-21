@@ -205,10 +205,7 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
   const hasAutoCapturedRef = useRef<boolean>(false);
 
   const [mapsApiKey, setMapsApiKey] = useState<string>(() => {
-    const envKey =
-      (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY ||
-      (typeof process !== 'undefined' && (process.env as any)?.GOOGLE_MAPS_PLATFORM_KEY) ||
-      '';
+    const envKey = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || '';
     return String(envKey || '');
   });
 

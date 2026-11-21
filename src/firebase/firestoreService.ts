@@ -1810,6 +1810,65 @@ export async function touchInventorySyncStamp(batch?: WriteBatch, companyId = ge
 
 // ----------------- BACKEND MULTI-DEVICE CLOUD SYNC HUB HELPERS -----------------
 
+export const HASHED_PASSWORD_MASK = '__HASHED__';
+
+export function isMaskedOrHashedPassword(val: unknown): boolean {
+  const clean = String(val ?? '').trim();
+  if (!clean) return false;
+  return clean === HASHED_PASSWORD_MASK || clean === '••••••••' || clean.startsWith('scrypt$');
+}
+
+export async function hashPasswordViaServer(plain: string): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  const clean = String(plain || '').trim();
+  if (!clean || isMaskedOrHashedPassword(clean)) return null;
+  try {
+    const res = await fetch('/api/auth/hash-password', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: clean }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.ok && typeof data.hash === 'string' ? data.hash : null;
+  } catch {
+    return null;
+  }
+}
+
+let hasBackendAuthSession = false;
+
+export function setBackendSessionAuthenticated(authenticated: boolean): void {
+  hasBackendAuthSession = Boolean(authenticated);
+}
+
+export function isBackendSessionAuthenticated(): boolean {
+  return hasBackendAuthSession;
+}
+
+export async function fetchPublicCatalogFromHub(
+  companyId = getActiveCompanyId()
+): Promise<{
+  storeSettings?: Partial<StoreSettings>;
+  items: Product[];
+} | null> {
+  if (typeof window === 'undefined') return null;
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  try {
+    const res = await fetch(`/api/public/catalog?empresa=${encodeURIComponent(slug)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.ok) return null;
+    return {
+      storeSettings: data.storeSettings,
+      items: Array.isArray(data.items) ? data.items : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchBackendSyncStatus(
   companyId = getActiveCompanyId()
 ): Promise<{
@@ -1820,10 +1879,16 @@ export async function fetchBackendSyncStatus(
   salesCount: number;
   suppliersCount: number;
 } | null> {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined' || !hasBackendAuthSession) return null;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   try {
-    const res = await fetch(`/api/cloud-sync/status?companyId=${encodeURIComponent(slug)}`);
+    const res = await fetch(`/api/cloud-sync/status?companyId=${encodeURIComponent(slug)}`, {
+      credentials: 'include',
+    });
+    if (res.status === 401) {
+      hasBackendAuthSession = false;
+      return null;
+    }
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -1835,7 +1900,7 @@ export async function syncInventoryWithBackendHub(
   localItems: Product[],
   companyId = getActiveCompanyId()
 ): Promise<Product[] | null> {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined' || !hasBackendAuthSession) return null;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const mut = getPendingMutations(slug);
 
@@ -1877,6 +1942,7 @@ export async function syncInventoryWithBackendHub(
   try {
     const res = await fetch('/api/cloud-sync/inventory', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         companyId: slug,
@@ -1888,6 +1954,10 @@ export async function syncInventoryWithBackendHub(
         deletedIds: mut.deletedIds || [],
       }),
     });
+    if (res.status === 401) {
+      hasBackendAuthSession = false;
+      return null;
+    }
     if (!res.ok) return null;
     const data = await res.json();
     if (!data?.ok || !Array.isArray(data.items)) return null;
@@ -1930,11 +2000,12 @@ export async function pushProductSaveToBackendHub(
   companyId = getActiveCompanyId(),
   products?: Product[]
 ): Promise<void> {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || !hasBackendAuthSession) return;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   try {
-    await fetch('/api/cloud-sync/product-save', {
+    const res = await fetch('/api/cloud-sync/product-save', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         companyId: slug,
@@ -1943,6 +2014,7 @@ export async function pushProductSaveToBackendHub(
         oldCode,
       }),
     });
+    if (res.status === 401) hasBackendAuthSession = false;
   } catch {}
 }
 
@@ -1951,11 +2023,12 @@ export async function pushProductDeleteToBackendHub(
   code?: string,
   companyId = getActiveCompanyId()
 ): Promise<void> {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || !hasBackendAuthSession) return;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   try {
-    await fetch('/api/cloud-sync/product-delete', {
+    const res = await fetch('/api/cloud-sync/product-delete', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         companyId: slug,
@@ -1963,6 +2036,7 @@ export async function pushProductDeleteToBackendHub(
         code,
       }),
     });
+    if (res.status === 401) hasBackendAuthSession = false;
   } catch {}
 }
 
@@ -1996,17 +2070,22 @@ export async function syncCollectionsWithBackendHub(
   companies: CompanyTenant[];
   updatedAt: number;
 } | null> {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined' || !hasBackendAuthSession) return null;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   try {
     const res = await fetch('/api/cloud-sync/collections', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         companyId: slug,
         ...payload,
       }),
     });
+    if (res.status === 401) {
+      hasBackendAuthSession = false;
+      return null;
+    }
     if (!res.ok) return null;
     const data = await res.json();
     if (!data?.ok) return null;
@@ -3429,6 +3508,12 @@ export async function saveStoreSettingsToFirestore(
   const sanitizedLocations = sanitizeStoreLocationsList(settings.storeLocations);
   const sanitizedBankAccounts = sanitizeStoreBankAccountsList(settings.bankAccounts);
   const sanitizedTemplate = sanitizeInvoiceTemplate(settings.invoiceTemplate);
+  const rawIncomingPass = (settings.accessPassword || '').trim();
+  const isChangingPassword = Boolean(rawIncomingPass && !isMaskedOrHashedPassword(rawIncomingPass));
+  const hashedPassForFirestore = isChangingPassword
+    ? (await hashPasswordViaServer(rawIncomingPass)) || rawIncomingPass
+    : undefined;
+
   const payload: any = {
     companyId: slug,
     storeName: settings.storeName.trim() || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
@@ -3443,7 +3528,6 @@ export async function saveStoreSettingsToFirestore(
         ? settings.receiptFooterText.trim()
         : '¡Gracias por su compra! Vuelva pronto.',
     invoiceTemplate: sanitizedTemplate || null,
-    accessPassword: settings.accessPassword?.trim() || (slug === 'gosen' ? 'GOSEN2026' : 'ADMIN2026'),
     whatsappOrderPhone: settings.whatsappOrderPhone?.trim() || '',
     catalogWelcomeMsg: settings.catalogWelcomeMsg?.trim() || '',
     showLocationsInCatalog: settings.showLocationsInCatalog !== false,
@@ -3453,6 +3537,10 @@ export async function saveStoreSettingsToFirestore(
     catalogHeaderBg: settings.catalogHeaderBg?.trim() || '',
     updatedAt: Date.now(),
   };
+
+  if (hashedPassForFirestore) {
+    payload.accessPassword = hashedPassForFirestore;
+  }
 
   if (Array.isArray(settings.allowedModules) && settings.allowedModules.length > 0) {
     payload.allowedModules = settings.allowedModules;
@@ -3485,26 +3573,39 @@ export async function saveStoreSettingsToFirestore(
     payload.maxUsers = Math.max(0, Number(settings.maxUsers) || 0);
   }
 
-  setCachedStoreSettings({ ...settings, ...payload }, slug);
-  syncCollectionsWithBackendHub({ settings: { ...settings, ...payload } }, slug).catch(() => {});
+  const cacheSettings: StoreSettings = {
+    ...settings,
+    ...payload,
+    accessPassword: isChangingPassword ? HASHED_PASSWORD_MASK : settings.accessPassword || HASHED_PASSWORD_MASK,
+  };
+  setCachedStoreSettings(cacheSettings, slug);
+  syncCollectionsWithBackendHub(
+    {
+      settings: {
+        ...settings,
+        ...payload,
+        accessPassword: isChangingPassword ? rawIncomingPass : HASHED_PASSWORD_MASK,
+      },
+    },
+    slug
+  ).catch(() => {});
 
   try {
     await setDoc(docRef, stripUndefinedDeep(payload), { merge: true });
     // Also keep the company tenant record in sync if it exists
     const compRef = doc(db, 'companies', slug);
-    await setDoc(
-      compRef,
-      {
-        name: payload.storeName,
-        slug,
-        adminPassword: payload.accessPassword,
-        phone: payload.phone,
-        logoUrl: payload.logoUrl,
-        tagline: payload.tagline,
-        address: payload.address,
-      },
-      { merge: true }
-    ).catch(() => {});
+    const compUpdate: Record<string, any> = {
+      name: payload.storeName,
+      slug,
+      phone: payload.phone,
+      logoUrl: payload.logoUrl,
+      tagline: payload.tagline,
+      address: payload.address,
+    };
+    if (hashedPassForFirestore) {
+      compUpdate.adminPassword = hashedPassForFirestore;
+    }
+    await setDoc(compRef, compUpdate, { merge: true }).catch(() => {});
   } catch (error) {
     if (isQuotaOrNetworkError(error)) {
       console.warn('Store settings saved in local cache; cloud sync deferred:', error);
@@ -5435,12 +5536,17 @@ export async function saveUserToFirestore(
       )
     : [];
 
-  const payload: UserAccount = {
+  const rawIncomingUserPass = (user.password || '').trim();
+  const isPasswordChanged = Boolean(rawIncomingUserPass && !isMaskedOrHashedPassword(rawIncomingUserPass));
+  const hashedUserPass = isPasswordChanged
+    ? (await hashPasswordViaServer(rawIncomingUserPass)) || rawIncomingUserPass
+    : undefined;
+
+  const basePayload: Omit<UserAccount, 'password'> & { password?: string } = {
     id: userId,
     companyId: slug,
     name: user.name.trim(),
     username: user.username.trim().toLowerCase().replace(/^@+/, ''),
-    password: user.password.trim(),
     role: user.role,
     isActive: user.isActive !== false,
     allowedTabs: user.allowedTabs,
@@ -5461,26 +5567,46 @@ export async function saveUserToFirestore(
     createdAt: user.createdAt || Date.now(),
     ...(user.lastLoginAt ? { lastLoginAt: user.lastLoginAt } : {}),
   };
+
+  const cachedPayload: UserAccount = {
+    ...basePayload,
+    password: HASHED_PASSWORD_MASK,
+  };
+
   const currentUsers = getCachedUsers(slug) || [];
   const nextUsers = [
     ...currentUsers.filter(
       (u) =>
         u.id !== userId &&
         u.id !== user.id &&
-        u.username.trim().toLowerCase() !== payload.username
+        u.username.trim().toLowerCase() !== basePayload.username
     ),
-    payload,
+    cachedPayload,
   ].sort((a, b) => a.name.localeCompare(b.name));
 
   setCachedUsers(nextUsers, slug);
-  syncCollectionsWithBackendHub({ users: nextUsers }, slug).catch(() => {});
+  syncCollectionsWithBackendHub(
+    {
+      users: [
+        {
+          ...basePayload,
+          password: isPasswordChanged ? rawIncomingUserPass : HASHED_PASSWORD_MASK,
+        },
+      ],
+    },
+    slug
+  ).catch(() => {});
 
   if (isFirestoreQuotaExhausted()) {
     return;
   }
 
   try {
-    await withFirestoreTimeout(setDoc(docRef, payload, { merge: true }), 2000);
+    const firestorePayload: any = { ...basePayload };
+    if (hashedUserPass) {
+      firestorePayload.password = hashedUserPass;
+    }
+    await withFirestoreTimeout(setDoc(docRef, firestorePayload, { merge: true }), 2000);
   } catch (error) {
     if (isQuotaOrNetworkError(error) || String(error).includes('timed out')) {
       console.warn('User saved in local cache & backend hub; Firestore sync deferred:', error);
@@ -5538,15 +5664,12 @@ function isSaaSSuperAdminUserOrSession(userName?: string): boolean {
   }
   if (typeof window !== 'undefined') {
     try {
-      if (localStorage.getItem('stockmaster_saas_owner_unlocked') === 'true') {
-        return true;
-      }
       const rawSess =
         localStorage.getItem('stockmaster_user_session') ||
         sessionStorage.getItem('stockmaster_user_session');
       if (rawSess) {
         const parsed = JSON.parse(rawSess);
-        if (parsed?.isSuperAdmin === true) {
+        if (parsed?.isSuperAdmin === true && hasBackendAuthSession) {
           return true;
         }
       }
@@ -5949,6 +6072,12 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     ? company.paymentHistory
     : [];
 
+  const rawCompanyPass = (company.adminPassword || '').trim();
+  const isPassExplicitlySet = Boolean(rawCompanyPass && !isMaskedOrHashedPassword(rawCompanyPass));
+  const hashedPassForFirestore = isPassExplicitlySet
+    ? (await hashPasswordViaServer(rawCompanyPass)) || rawCompanyPass
+    : undefined;
+
   const normalized: CompanyTenant = {
     id: slug,
     name: company.name.trim(),
@@ -5963,7 +6092,7 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
     moraReason: (company.moraReason || '').trim(),
     suspendedAt: company.status === 'suspended' ? (company.suspendedAt || Date.now()) : undefined,
     autoSuspend: company.autoSuspend !== undefined ? Boolean(company.autoSuspend) : true,
-    adminPassword: (company.adminPassword || 'ADMIN2026').trim(),
+    adminPassword: isPassExplicitlySet ? HASHED_PASSWORD_MASK : rawCompanyPass || HASHED_PASSWORD_MASK,
     logoUrl: safeLogo,
     tagline: (company.tagline || 'Control de Inventario y Ventas').trim(),
     address: (company.address || '').trim(),
@@ -6019,50 +6148,66 @@ export async function saveCompanyToFirestore(company: CompanyTenant): Promise<Co
   };
   setCachedStoreSettings(profilePayload, slug);
   syncCollectionsWithBackendHub(
-    { companies: [normalized], settings: profilePayload },
+    {
+      companies: [
+        {
+          ...normalized,
+          adminPassword: isPassExplicitlySet ? rawCompanyPass : HASHED_PASSWORD_MASK,
+        },
+      ],
+      settings: {
+        ...profilePayload,
+        accessPassword: isPassExplicitlySet ? rawCompanyPass : HASHED_PASSWORD_MASK,
+      },
+    },
     slug
   ).catch(() => {});
 
   try {
     const batch = writeBatch(db);
-    batch.set(
-      docRef,
-      {
-        name: normalized.name,
-        slug: normalized.slug,
-        ownerName: normalized.ownerName,
-        phone: normalized.phone,
-        email: normalized.email,
-        plan: normalized.plan,
-        price: normalized.price,
-        nextBillingDate: normalized.nextBillingDate,
-        status: normalized.status,
-        moraReason: normalized.moraReason || '',
-        suspendedAt: normalized.suspendedAt || null,
-        autoSuspend: normalized.autoSuspend,
-        adminPassword: normalized.adminPassword,
-        logoUrl: normalized.logoUrl,
-        tagline: normalized.tagline,
-        address: normalized.address,
-        notes: normalized.notes,
-        allowedModules: normalized.allowedModules,
-        enableDeliveryDvolada: normalized.enableDeliveryDvolada,
-        enableOnlineSales: normalized.enableOnlineSales,
-        enableRestaurantModule: normalized.enableRestaurantModule,
-        enableCreditContract: normalized.enableCreditContract,
-        enableDigitalSignature: normalized.enableDigitalSignature,
-        enableWarrantyModule: normalized.enableWarrantyModule,
-        enableCreditCalculator: normalized.enableCreditCalculator,
-        maxProducts: normalized.maxProducts,
-        maxUsers: normalized.maxUsers,
-        paymentHistory: normalized.paymentHistory,
-        createdAt: normalized.createdAt,
-        isPrimary: normalized.isPrimary,
-      },
-      { merge: true }
-    );
+    const firestoreCompData: Record<string, any> = {
+      name: normalized.name,
+      slug: normalized.slug,
+      ownerName: normalized.ownerName,
+      phone: normalized.phone,
+      email: normalized.email,
+      plan: normalized.plan,
+      price: normalized.price,
+      nextBillingDate: normalized.nextBillingDate,
+      status: normalized.status,
+      moraReason: normalized.moraReason || '',
+      suspendedAt: normalized.suspendedAt || null,
+      autoSuspend: normalized.autoSuspend,
+      logoUrl: normalized.logoUrl,
+      tagline: normalized.tagline,
+      address: normalized.address,
+      notes: normalized.notes,
+      allowedModules: normalized.allowedModules,
+      enableDeliveryDvolada: normalized.enableDeliveryDvolada,
+      enableOnlineSales: normalized.enableOnlineSales,
+      enableRestaurantModule: normalized.enableRestaurantModule,
+      enableCreditContract: normalized.enableCreditContract,
+      enableDigitalSignature: normalized.enableDigitalSignature,
+      enableWarrantyModule: normalized.enableWarrantyModule,
+      enableCreditCalculator: normalized.enableCreditCalculator,
+      maxProducts: normalized.maxProducts,
+      maxUsers: normalized.maxUsers,
+      paymentHistory: normalized.paymentHistory,
+      createdAt: normalized.createdAt,
+      isPrimary: normalized.isPrimary,
+    };
+    if (hashedPassForFirestore) {
+      firestoreCompData.adminPassword = hashedPassForFirestore;
+    }
+    batch.set(docRef, firestoreCompData, { merge: true });
 
-    batch.set(profileRef, stripUndefinedDeep(profilePayload), { merge: true });
+    const firestoreSettingsData = stripUndefinedDeep({ ...profilePayload }) as Record<string, any>;
+    if (hashedPassForFirestore) {
+      firestoreSettingsData.accessPassword = hashedPassForFirestore;
+    } else {
+      delete firestoreSettingsData.accessPassword;
+    }
+    batch.set(profileRef, firestoreSettingsData, { merge: true });
 
     await batch.commit();
     return normalized;

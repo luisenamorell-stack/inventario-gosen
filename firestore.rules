@@ -10,28 +10,35 @@ service cloud.firestore {
       return request.resource.data;
     }
 
+    function existing() {
+      return resource.data;
+    }
+
     function isValidProduct(data) {
       return data.keys().hasAll(['code', 'name', 'category', 'price', 'stock']) &&
-             data.code is string && data.code.size() <= 150 &&
-             data.name is string && data.name.size() <= 300 &&
+             data.code is string && data.code.size() >= 1 && data.code.size() <= 150 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 300 &&
              data.category is string && data.category.size() <= 150 &&
+             (!('companyId' in data) || data.companyId == null || (data.companyId is string && data.companyId.size() <= 150)) &&
              (!('size' in data) || data.size == null || (data.size is string && data.size.size() <= 100)) &&
              (!('color' in data) || data.color == null || (data.color is string && data.color.size() <= 200)) &&
-             (!('colors' in data) || data.colors == null || data.colors is list) &&
+             (!('colors' in data) || data.colors == null || (data.colors is list && data.colors.size() <= 200)) &&
              (!('supplier' in data) || data.supplier == null || (data.supplier is string && data.supplier.size() <= 300)) &&
-             (!('cost' in data) || data.cost == null || (data.cost is number || data.cost is int)) &&
-             (data.price is number || data.price is int) &&
+             (!('cost' in data) || data.cost == null || ((data.cost is number || data.cost is int) && data.cost >= 0)) &&
+             ((data.price is number || data.price is int) && data.price >= 0) &&
              (!('discount' in data) || data.discount == null || (data.discount is number || data.discount is int)) &&
              (!('discountType' in data) || data.discountType == null || (data.discountType is string && data.discountType.size() <= 50)) &&
              (!('discountValue' in data) || data.discountValue == null || (data.discountValue is number || data.discountValue is int)) &&
              (data.stock is number || data.stock is int) &&
+             (!('warehouseStocks' in data) || data.warehouseStocks == null || data.warehouseStocks is map) &&
              (!('img' in data) || data.img == null || (data.img is string && data.img.size() <= 1048576)) &&
              (!('img2' in data) || data.img2 == null || (data.img2 is string && data.img2.size() <= 1048576));
     }
 
     function isValidSupplier(data) {
       return data.keys().hasAll(['name']) &&
-             data.name is string && data.name.size() <= 300 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 300 &&
+             (!('companyId' in data) || data.companyId == null || (data.companyId is string && data.companyId.size() <= 150)) &&
              (!('contact' in data) || data.contact == null || (data.contact is string && data.contact.size() <= 300)) &&
              (!('phone' in data) || data.phone == null || (data.phone is string && data.phone.size() <= 100)) &&
              (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 300)) &&
@@ -44,41 +51,50 @@ service cloud.firestore {
              (data.match is number || data.match is int) &&
              (data.missing is number || data.missing is int) &&
              (data.extra is number || data.extra is int) &&
+             (!('companyId' in data) || data.companyId == null || (data.companyId is string && data.companyId.size() <= 150)) &&
              (!('netImpact' in data) || data.netImpact == null || (data.netImpact is number || data.netImpact is int)) &&
              (!('totalItems' in data) || data.totalItems == null || (data.totalItems is number || data.totalItems is int)) &&
              (!('scope' in data) || data.scope == null || (data.scope is string && data.scope.size() <= 200));
     }
 
     function isValidStoreSettings(data) {
-      return (!('storeName' in data) || data.storeName == null || (data.storeName is string && data.storeName.size() <= 300)) &&
+      return (!('companyId' in data) || data.companyId == null || (data.companyId is string && data.companyId.size() <= 150)) &&
+             (!('storeName' in data) || data.storeName == null || (data.storeName is string && data.storeName.size() <= 300)) &&
              (!('tagline' in data) || data.tagline == null || (data.tagline is string && data.tagline.size() <= 300)) &&
              (!('logoUrl' in data) || data.logoUrl == null || (data.logoUrl is string && data.logoUrl.size() <= 1048576)) &&
              (!('phone' in data) || data.phone == null || (data.phone is string && data.phone.size() <= 100)) &&
              (!('address' in data) || data.address == null || (data.address is string && data.address.size() <= 600)) &&
-             (!('accessPassword' in data) || data.accessPassword == null || (data.accessPassword is string && data.accessPassword.size() <= 150)) &&
+             (!('storeRtn' in data) || data.storeRtn == null || (data.storeRtn is string && data.storeRtn.size() <= 100)) &&
+             (!('accessPassword' in data) || data.accessPassword == null || (data.accessPassword is string && data.accessPassword.size() <= 300)) &&
              (!('whatsappOrderPhone' in data) || data.whatsappOrderPhone == null || (data.whatsappOrderPhone is string && data.whatsappOrderPhone.size() <= 100)) &&
              (!('catalogWelcomeMsg' in data) || data.catalogWelcomeMsg == null || (data.catalogWelcomeMsg is string && data.catalogWelcomeMsg.size() <= 1000)) &&
+             (!('warrantyTitle' in data) || data.warrantyTitle == null || (data.warrantyTitle is string && data.warrantyTitle.size() <= 200)) &&
+             (!('enableWarrantyModule' in data) || data.enableWarrantyModule == null || data.enableWarrantyModule is bool) &&
+             (!('allowedModules' in data) || data.allowedModules == null || (data.allowedModules is list && data.allowedModules.size() <= 50)) &&
+             (!('quotations' in data) || data.quotations == null || (data.quotations is list && data.quotations.size() <= 1000)) &&
+             (!('storeLocations' in data) || data.storeLocations == null || (data.storeLocations is list && data.storeLocations.size() <= 100)) &&
+             (!('bankAccounts' in data) || data.bankAccounts == null || (data.bankAccounts is list && data.bankAccounts.size() <= 100)) &&
              (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is number || data.updatedAt is int || data.updatedAt is string));
     }
 
     function isValidSale(data) {
       return data.keys().hasAll(['saleNumber', 'timestamp', 'date', 'items', 'total', 'status']) &&
-             data.saleNumber is string && data.saleNumber.size() <= 100 &&
+             data.saleNumber is string && data.saleNumber.size() >= 1 && data.saleNumber.size() <= 100 &&
              (data.timestamp is number || data.timestamp is int) &&
              data.date is string && data.date.size() <= 150 &&
-             data.items is list &&
+             data.items is list && data.items.size() <= 500 &&
              (!('totalItems' in data) || data.totalItems == null || (data.totalItems is number || data.totalItems is int)) &&
              (!('subtotal' in data) || data.subtotal == null || (data.subtotal is number || data.subtotal is int)) &&
              (!('discount' in data) || data.discount == null || (data.discount is number || data.discount is int)) &&
              (!('tax' in data) || data.tax == null || (data.tax is number || data.tax is int)) &&
-             (data.total is number || data.total is int) &&
+             ((data.total is number || data.total is int) && data.total >= 0) &&
              (!('paymentMethod' in data) || data.paymentMethod == null || (data.paymentMethod is string && data.paymentMethod.size() <= 100)) &&
              (!('amountPaid' in data) || data.amountPaid == null || (data.amountPaid is number || data.amountPaid is int)) &&
              (!('change' in data) || data.change == null || (data.change is number || data.change is int)) &&
              (!('balanceDue' in data) || data.balanceDue == null || (data.balanceDue is number || data.balanceDue is int)) &&
              (!('creditStatus' in data) || data.creditStatus == null || (data.creditStatus is string && data.creditStatus.size() <= 50)) &&
              (!('creditDueDate' in data) || data.creditDueDate == null || (data.creditDueDate is string && data.creditDueDate.size() <= 100)) &&
-             (!('creditPayments' in data) || data.creditPayments == null || data.creditPayments is list) &&
+             (!('creditPayments' in data) || data.creditPayments == null || (data.creditPayments is list && data.creditPayments.size() <= 500)) &&
              (!('customerName' in data) || data.customerName == null || (data.customerName is string && data.customerName.size() <= 300)) &&
              (!('customerPhone' in data) || data.customerPhone == null || (data.customerPhone is string && data.customerPhone.size() <= 100)) &&
              (!('customerRtn' in data) || data.customerRtn == null || (data.customerRtn is string && data.customerRtn.size() <= 100)) &&
@@ -91,19 +107,20 @@ service cloud.firestore {
 
     function isValidPurchase(data) {
       return data.keys().hasAll(['invoiceNumber', 'supplierId', 'supplierName', 'date', 'timestamp', 'items', 'total', 'status']) &&
-             data.invoiceNumber is string && data.invoiceNumber.size() <= 150 &&
+             data.invoiceNumber is string && data.invoiceNumber.size() >= 1 && data.invoiceNumber.size() <= 150 &&
              data.supplierId is string && data.supplierId.size() <= 200 &&
              data.supplierName is string && data.supplierName.size() <= 300 &&
              data.date is string && data.date.size() <= 150 &&
              (data.timestamp is number || data.timestamp is int) &&
+             (!('companyId' in data) || data.companyId == null || (data.companyId is string && data.companyId.size() <= 150)) &&
              (!('paymentCondition' in data) || data.paymentCondition == null || (data.paymentCondition is string && data.paymentCondition.size() <= 100)) &&
              (!('dueDate' in data) || data.dueDate == null || (data.dueDate is string && data.dueDate.size() <= 100)) &&
-             data.items is list &&
+             data.items is list && data.items.size() <= 500 &&
              (!('totalItems' in data) || data.totalItems == null || (data.totalItems is number || data.totalItems is int)) &&
              (!('subtotal' in data) || data.subtotal == null || (data.subtotal is number || data.subtotal is int)) &&
              (!('tax' in data) || data.tax == null || (data.tax is number || data.tax is int)) &&
              (!('discount' in data) || data.discount == null || (data.discount is number || data.discount is int)) &&
-             (data.total is number || data.total is int) &&
+             ((data.total is number || data.total is int) && data.total >= 0) &&
              (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() <= 1000)) &&
              data.status in ['completed', 'cancelled'] &&
              (!('receivedBy' in data) || data.receivedBy == null || (data.receivedBy is string && data.receivedBy.size() <= 150));
@@ -111,11 +128,13 @@ service cloud.firestore {
 
     function isValidUserAccount(data) {
       return data.keys().hasAll(['name', 'username', 'password', 'role', 'isActive']) &&
-             data.name is string && data.name.size() <= 300 &&
-             data.username is string && data.username.size() <= 150 &&
-             data.password is string && data.password.size() <= 150 &&
-             data.role is string && data.role.size() <= 50 &&
-             data.isActive is bool;
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 300 &&
+             data.username is string && data.username.size() >= 1 && data.username.size() <= 150 &&
+             data.password is string && data.password.size() <= 300 &&
+             data.role in ['admin', 'collaborator'] &&
+             data.isActive is bool &&
+             (!('companyId' in data) || data.companyId == null || (data.companyId is string && data.companyId.size() <= 150)) &&
+             (!('allowedTabs' in data) || data.allowedTabs == null || (data.allowedTabs is list && data.allowedTabs.size() <= 50));
     }
 
     function isValidActivityLog(data) {
@@ -124,15 +143,16 @@ service cloud.firestore {
              data.date is string && data.date.size() <= 150 &&
              data.userName is string && data.userName.size() <= 200 &&
              data.action is string && data.action.size() <= 1000 &&
-             data.module is string && data.module.size() <= 100;
+             data.module is string && data.module.size() <= 100 &&
+             (!('companyId' in data) || data.companyId == null || (data.companyId is string && data.companyId.size() <= 150));
     }
 
     function isValidCompany(data) {
       return data.keys().hasAll(['name', 'slug', 'status', 'adminPassword']) &&
-             data.name is string && data.name.size() <= 300 &&
-             data.slug is string && data.slug.size() <= 150 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 300 &&
+             data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 150 &&
              data.status in ['active', 'suspended'] &&
-             data.adminPassword is string && data.adminPassword.size() <= 150 &&
+             data.adminPassword is string && data.adminPassword.size() <= 300 &&
              (!('ownerName' in data) || data.ownerName == null || (data.ownerName is string && data.ownerName.size() <= 300)) &&
              (!('phone' in data) || data.phone == null || (data.phone is string && data.phone.size() <= 100)) &&
              (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 300)) &&
@@ -145,12 +165,19 @@ service cloud.firestore {
              (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() <= 2000));
     }
 
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
     match /inventory/{productId} {
       allow read: if true;
       allow create: if isValidId(productId) && isValidProduct(incoming());
       allow update: if isValidId(productId) && (
         isValidProduct(incoming()) ||
-        (incoming().stock is number || incoming().stock is int)
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'warehouseStocks', 'updatedAt']) &&
+          (incoming().stock is number || incoming().stock is int)
+        )
       );
       allow delete: if isValidId(productId);
     }
@@ -164,8 +191,7 @@ service cloud.firestore {
     match /audit_history/{auditId} {
       allow read: if true;
       allow create: if isValidId(auditId) && isValidAuditHistory(incoming());
-      allow update: if false;
-      allow delete: if isValidId(auditId);
+      allow update, delete: if false;
     }
 
     match /settings/{settingId} {
@@ -194,8 +220,8 @@ service cloud.firestore {
 
     match /activity_logs/{logId} {
       allow read: if true;
-      allow create, update: if isValidId(logId) && isValidActivityLog(incoming());
-      allow delete: if isValidId(logId);
+      allow create: if isValidId(logId) && isValidActivityLog(incoming());
+      allow update, delete: if false;
     }
 
     match /companies/{companyId} {
@@ -206,12 +232,9 @@ service cloud.firestore {
 
     match /test/connection {
       allow read: if true;
-      allow write: if true;
-    }
-
-    match /{document=**} {
-      allow read, write: if false;
+      allow create, update: if incoming().keys().hasOnly(['ping']) &&
+                               (incoming().ping is number || incoming().ping is int);
+      allow delete: if false;
     }
   }
 }
-

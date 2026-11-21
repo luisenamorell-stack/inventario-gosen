@@ -8,7 +8,11 @@ import {
   WarehouseLocation,
   isStoreCreditCalculatorEnabled,
 } from '../types';
-import { getDefaultWarehousesForStore } from '../firebase/firestoreService';
+import {
+  getDefaultWarehousesForStore,
+  HASHED_PASSWORD_MASK,
+  isMaskedOrHashedPassword,
+} from '../firebase/firestoreService';
 import {
   Users,
   UserPlus,
@@ -225,7 +229,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     setEditingUser(user);
     setName(user.name);
     setUsername(user.username);
-    setPassword(user.password);
+    setPassword(isMaskedOrHashedPassword(user.password) ? '' : user.password || '');
     setRole(user.role);
     setIsActive(user.isActive);
     setAllowedTabs(user.allowedTabs || ['sales', 'inventory', 'price-checker']);
@@ -293,7 +297,10 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
       showToast('Ingresa un usuario para iniciar sesión.', 'error');
       return;
     }
-    if (!password.trim()) {
+    const hasExistingProtectedPassword = Boolean(
+      editingUser && isMaskedOrHashedPassword(editingUser.password)
+    );
+    if (!password.trim() && !hasExistingProtectedPassword) {
       showToast('Ingresa la contraseña de acceso.', 'error');
       return;
     }
@@ -336,7 +343,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         id: editingUser ? editingUser.id : `usr_${Date.now()}`,
         name: name.trim(),
         username: cleanUsername,
-        password: password.trim(),
+        password: password.trim() || (editingUser ? HASHED_PASSWORD_MASK : ''),
         role,
         isActive,
         allowedTabs: role === 'admin' ? availableTabModules.map((t) => t.id) : allowedTabs,
@@ -434,7 +441,17 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               Acceso Máximo al Sistema
             </div>
             <div className="text-xs text-slate-300 font-mono mt-0.5">
-              Contraseña Master Configurada: <span className="font-black text-amber-300 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">{storeSettings.accessPassword || (isGosen ? 'GOSEN2026' : 'ADMIN2026')}</span>
+              Contraseña Master Configurada:{' '}
+              {isMaskedOrHashedPassword(storeSettings.accessPassword) ? (
+                <span className="font-black text-emerald-300 bg-slate-800 px-2 py-0.5 rounded border border-slate-700 inline-flex items-center gap-1">
+                  <Lock className="w-3 h-3" />
+                  Protegida con Hash scrypt
+                </span>
+              ) : (
+                <span className="font-black text-amber-300 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
+                  {storeSettings.accessPassword || (isGosen ? 'GOSEN2026' : 'ADMIN2026')}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -517,7 +534,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                       <div className="flex items-center justify-between text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-100 font-mono">
                         <span className="text-slate-400 font-sans">Contraseña:</span>
                         <span className="font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
-                          {u.password}
+                          {isMaskedOrHashedPassword(u.password) ? '•••••••• (Cifrada)' : u.password}
                         </span>
                       </div>
 
@@ -746,13 +763,20 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
-                      Contraseña de Acceso / PIN <span className="text-rose-500">*</span>
+                      Contraseña de Acceso / PIN{' '}
+                      {(!editingUser || !isMaskedOrHashedPassword(editingUser.password)) && (
+                        <span className="text-rose-500">*</span>
+                      )}
                     </label>
                     <div className="relative">
                       <input
                         type={showPassword ? 'text' : 'password'}
-                        required
-                        placeholder="ej. 1234 o clave"
+                        required={!editingUser || !isMaskedOrHashedPassword(editingUser.password)}
+                        placeholder={
+                          editingUser && isMaskedOrHashedPassword(editingUser.password)
+                            ? 'Dejar vacío para mantener la clave cifrada'
+                            : 'ej. 1234 o clave'
+                        }
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         className="w-full pl-3.5 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
