@@ -61,7 +61,10 @@ import {
   MapPin,
   Navigation,
   ExternalLink,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+import { getAuthHeaders, verifyAdminPinViaFirestore } from '../firebase/firestoreService';
 import { WhatsAppIcon } from './SalesView';
 import { PrintFormatModal } from './PrintFormatModal';
 import { CreditContractModal } from './CreditContractModal';
@@ -104,6 +107,7 @@ interface POSFinanceTabsProps {
   onRecordCreditPayment: (sale: SaleRecord, abone: CreditPaymentAbone) => Promise<SaleRecord>;
   onRecordSale?: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
   onUpdateSale?: (originalSale: SaleRecord, updatedSale: SaleRecord) => Promise<void>;
+  onDeleteSale?: (sale: SaleRecord) => Promise<void>;
   onSaveProduct?: (product: Product, oldCode?: string) => Promise<void>;
   onSaveUser?: (user: UserAccount) => Promise<void>;
   onViewSaleTicket: (sale: SaleRecord) => void;
@@ -122,6 +126,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   onRecordCreditPayment,
   onRecordSale,
   onUpdateSale,
+  onDeleteSale,
   onSaveProduct,
   onSaveUser,
   onViewSaleTicket,
@@ -579,6 +584,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [isCreatingDebt, setIsCreatingDebt] = useState<boolean>(false);
   const [selectedSaleForGpsModal, setSelectedSaleForGpsModal] = useState<SaleRecord | null>(null);
   const [isCapturingInlineGps, setIsCapturingInlineGps] = useState<boolean>(false);
+  const [selectedSaleForDelete, setSelectedSaleForDelete] = useState<SaleRecord | null>(null);
+  const [deleteAdminPassword, setDeleteAdminPassword] = useState<string>('');
+  const [showDeletePassword, setShowDeletePassword] = useState<boolean>(false);
+  const [deleteAuthError, setDeleteAuthError] = useState<string>('');
+  const [isDeletingAccount, setIsDeletingAccount] = useState<boolean>(false);
 
   const inventoryCostMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -1928,6 +1938,79 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       setNewDebtHistoricalSummaryTotal('');
     } finally {
       setIsCreatingDebt(false);
+    }
+  };
+
+  const openDeleteCreditModal = (sale: SaleRecord) => {
+    if (!isAdminSession || !onDeleteSale) return;
+    setSelectedSaleForDelete(sale);
+    setDeleteAdminPassword('');
+    setShowDeletePassword(false);
+    setDeleteAuthError('');
+  };
+
+  const handleConfirmDeleteCreditAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSaleForDelete || !onDeleteSale || !isAdminSession) return;
+    const candidatePin = deleteAdminPassword.trim();
+    if (!candidatePin) {
+      setDeleteAuthError('Ingresa tu contraseña de inicio de sesión para confirmar.');
+      return;
+    }
+
+    setIsDeletingAccount(true);
+    setDeleteAuthError('');
+    try {
+      let authorized = false;
+      try {
+        const res = await fetch('/api/auth/verify-admin-pin', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({
+            companyId: storeSettings.companyId || 'gosen',
+            pin: candidatePin,
+          }),
+        });
+        const ct = String(res.headers.get('content-type') || '').toLowerCase();
+        if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+          authorized = await verifyAdminPinViaFirestore(
+            storeSettings.companyId || 'gosen',
+            candidatePin
+          );
+        } else {
+          const data = await res.json().catch(() => ({}));
+          authorized = Boolean(res.ok && data?.authorized);
+        }
+      } catch {
+        authorized = await verifyAdminPinViaFirestore(
+          storeSettings.companyId || 'gosen',
+          candidatePin
+        );
+      }
+
+      if (!authorized) {
+        setDeleteAuthError('Contraseña de inicio de sesión incorrecta. Intenta nuevamente.');
+        showToast('Contraseña incorrecta. No se eliminó la cuenta.', 'error');
+        return;
+      }
+
+      const deletedCust = selectedSaleForDelete.customerName || 'Cliente';
+      const deletedNum = selectedSaleForDelete.saleNumber;
+      await onDeleteSale(selectedSaleForDelete);
+      setSelectedSaleForDelete(null);
+      setDeleteAdminPassword('');
+      setShowDeletePassword(false);
+      setDeleteAuthError('');
+      showToast(
+        `Cuenta ${deletedNum} (${deletedCust}) eliminada permanentemente.`,
+        'success'
+      );
+    } catch {
+      setDeleteAuthError('Ocurrió un error al eliminar la cuenta. Intenta de nuevo.');
+      showToast('Error al intentar eliminar la cuenta.', 'error');
+    } finally {
+      setIsDeletingAccount(false);
     }
   };
 
@@ -5737,6 +5820,18 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
                         <span>Ver Factura</span>
                       </button>
+
+                      {isAdminSession && onDeleteSale && (
+                        <button
+                          type="button"
+                          onClick={() => openDeleteCreditModal(sale)}
+                          className="min-h-[42px] px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                          title="Eliminar cuenta por cobrar (requiere contraseña de Administrador)"
+                        >
+                          <Trash2 className="w-4 h-4 shrink-0" />
+                          <span>Eliminar</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -8110,6 +8205,140 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 showToast('Contrato de Crédito actualizado y guardado en la cuenta.', 'success');
               }}
             />
+          )}
+          {/* ==================== MODAL 9: CONFIRMAR ELIMINACIÓN DE CUENTA CON CONTRASEÑA DE LOGIN ==================== */}
+          {selectedSaleForDelete && (
+            <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-[160]">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden max-h-[92vh] flex flex-col border border-rose-200">
+                <div className="px-4 sm:px-5 py-4 bg-rose-700 text-white flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-2">
+                    <Trash2 className="w-5 h-5 shrink-0" />
+                    <div>
+                      <h3 className="font-black text-sm sm:text-base">
+                        Eliminar Cuenta por Cobrar
+                      </h3>
+                      <p className="text-xs text-rose-100">
+                        Requiere contraseña de inicio de sesión
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isDeletingAccount) {
+                        setSelectedSaleForDelete(null);
+                        setDeleteAdminPassword('');
+                        setDeleteAuthError('');
+                      }
+                    }}
+                    className="p-2 rounded-lg hover:bg-white/15 cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+                    aria-label="Cerrar"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form
+                  onSubmit={handleConfirmDeleteCreditAccount}
+                  className="p-4 sm:p-5 overflow-y-auto space-y-4"
+                >
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 space-y-1.5 text-xs">
+                    <p className="font-black text-rose-950">
+                      ¿Seguro que deseas eliminar permanentemente esta cuenta?
+                    </p>
+                    <div className="text-slate-700 space-y-0.5 tabular-nums">
+                      <p>
+                        <strong>Cliente:</strong>{' '}
+                        {selectedSaleForDelete.customerName || 'Cliente'}
+                      </p>
+                      <p>
+                        <strong>Factura / Cuenta:</strong> {selectedSaleForDelete.saleNumber}
+                      </p>
+                      <p>
+                        <strong>Total:</strong> L.{' '}
+                        {(Number(selectedSaleForDelete.total) || 0).toFixed(2)} ·{' '}
+                        <strong>Abonado:</strong> L.{' '}
+                        {(Number(selectedSaleForDelete.amountPaid) || 0).toFixed(2)}
+                      </p>
+                    </div>
+                    <p className="text-[11px] font-semibold text-rose-800 pt-1">
+                      Se eliminará la cuenta y su historial de abonos.{' '}
+                      {selectedSaleForDelete.isHistoricalPreApp ||
+                      selectedSaleForDelete.skipInventoryDeduction
+                        ? 'Como es un crédito ya existente, no sumará ni restará unidades del Inventario actual.'
+                        : 'Si la venta descontó inventario al crearse, sus unidades volverán al stock actual.'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Contraseña de Administrador (Login) *
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <input
+                        type={showDeletePassword ? 'text' : 'password'}
+                        required
+                        autoFocus
+                        autoComplete="off"
+                        placeholder="Ingresa tu contraseña de inicio de sesión"
+                        value={deleteAdminPassword}
+                        onChange={(e) => {
+                          setDeleteAdminPassword(e.target.value);
+                          if (deleteAuthError) setDeleteAuthError('');
+                        }}
+                        className="w-full pl-9 pr-11 py-2.5 min-h-[44px] rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm font-bold text-slate-900"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowDeletePassword((v) => !v)}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-slate-800 cursor-pointer"
+                        aria-label={showDeletePassword ? 'Ocultar contraseña' : 'Ver contraseña'}
+                      >
+                        {showDeletePassword ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                    {deleteAuthError && (
+                      <p className="mt-1.5 text-xs font-bold text-rose-600 flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{deleteAuthError}</span>
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      disabled={isDeletingAccount}
+                      onClick={() => {
+                        setSelectedSaleForDelete(null);
+                        setDeleteAdminPassword('');
+                        setDeleteAuthError('');
+                      }}
+                      className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isDeletingAccount}
+                      className="min-h-[42px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:bg-rose-400 text-white font-black text-xs cursor-pointer shadow-sm flex items-center gap-1.5"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>
+                        {isDeletingAccount ? 'Verificando...' : 'Confirmar y Eliminar'}
+                      </span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
           )}
         </div>
       </div>

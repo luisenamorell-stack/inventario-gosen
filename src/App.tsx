@@ -146,6 +146,7 @@ import {
   recordCreditPaymentInFirestore,
   updateSaleInFirestore,
   cancelSaleInFirestore,
+  deleteSaleAccountInFirestore,
   recordPurchaseInFirestore,
   cancelPurchaseInFirestore,
   saveUserToFirestore,
@@ -2510,6 +2511,105 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleDeleteSale = async (sale: SaleRecord) => {
+    if (userSession && userSession.role !== 'admin') {
+      showToast('Solo el Administrador puede eliminar cuentas por cobrar.', 'error');
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      const baseInventory = inventory;
+      const workingByCode = new Map<string, Product>();
+      baseInventory.forEach((p) => workingByCode.set(p.code.trim().toLowerCase(), p));
+      const updatedByCode = new Map<string, Product>();
+
+      if (sale.status !== 'cancelled' && !sale.skipInventoryDeduction && !sale.isHistoricalPreApp) {
+        for (const soldItem of sale.items || []) {
+          const key = (soldItem.code || '').trim().toLowerCase();
+          if (!key) continue;
+          const currentProd =
+            workingByCode.get(key) ||
+            baseInventory.find((p) => p.id && soldItem.productId && p.id === soldItem.productId);
+          if (!currentProd) continue;
+
+          const itemTargetWhId = soldItem.warehouseId || sale.warehouseId;
+          const { newStock, newWarehouseStocks } = applyWarehouseStockDelta(
+            currentProd,
+            Number(soldItem.quantity) || 1,
+            itemTargetWhId,
+            warehousesData.warehouses
+          );
+          const newColorStocks = applyColorStockDelta(
+            currentProd,
+            soldItem.selectedColor,
+            Number(soldItem.quantity) || 1
+          );
+          const updatedProd: Product = {
+            ...currentProd,
+            stock: newStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
+          };
+          workingByCode.set(key, updatedProd);
+          updatedByCode.set(key, updatedProd);
+        }
+      }
+
+      await deleteSaleAccountInFirestore(sale, baseInventory, activeCompanyId);
+
+      if (updatedByCode.size > 0) {
+        updatedByCode.forEach((updatedProd) => {
+          recordLocalProductSave(updatedProd, updatedProd.code, activeCompanyId);
+          pushProductSaveToBackendHub(updatedProd, updatedProd.code, activeCompanyId).catch(() => {});
+        });
+
+        setInventory((prev) => {
+          const nextInv = prev.map((prod) => {
+            const key = prod.code.trim().toLowerCase();
+            return updatedByCode.get(key) || prod;
+          });
+          setCachedInventory(nextInv, Date.now(), activeCompanyId);
+          return nextInv;
+        });
+      }
+
+      setSales((prev) => {
+        const nextSales = prev.filter((s) => s.id !== sale.id);
+        setCachedSales(nextSales, activeCompanyId);
+        return nextSales;
+      });
+
+      if (
+        posFinanceData.creditAccountControls?.[sale.id] ||
+        (posFinanceData.routeCollectorAlerts || []).some((a) => a.saleId === sale.id)
+      ) {
+        const nextControls = { ...(posFinanceData.creditAccountControls || {}) };
+        delete nextControls[sale.id];
+        const nextAlerts = (posFinanceData.routeCollectorAlerts || []).filter(
+          (a) => a.saleId !== sale.id
+        );
+        await handleSavePOSFinanceData({
+          ...posFinanceData,
+          creditAccountControls: nextControls,
+          routeCollectorAlerts: nextAlerts,
+          updatedAt: Date.now(),
+        });
+      }
+
+      setLastSyncTime(new Date());
+
+      logActivityInFirestore({
+        userName: userSession?.userName || 'Administrador',
+        userRole: userSession?.role || 'admin',
+        action: `Eliminó Cuenta/Venta N° ${sale.saleNumber}`,
+        module: 'sales',
+        details: `Cliente: ${sale.customerName || 'Cliente'} - Total: L. ${sale.total.toFixed(2)}`,
+      }, activeCompanyId);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const handleUpdateSale = async (originalSale: SaleRecord, updatedSale: SaleRecord) => {
     setIsSyncing(true);
     try {
@@ -3909,6 +4009,7 @@ export const App: React.FC = () => {
                       onRecordSale={handleRecordSale}
                       onUpdateSale={handleUpdateSale}
                       onCancelSale={handleCancelSale}
+                      onDeleteSale={handleDeleteSale}
                       onSavePOSFinanceData={handleSavePOSFinanceData}
                       onRecordCreditPayment={handleRecordCreditPayment}
                       onSaveStoreSettings={handleSaveStoreSettings}

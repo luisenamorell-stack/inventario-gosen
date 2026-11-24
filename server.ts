@@ -2295,6 +2295,9 @@ app.post('/api/auth/verify-admin-pin', requireAuthSession, async (req, res) => {
     let tenant = getTenantStore(requestedSlug);
 
     const checkMatch = (): boolean => {
+      if (session.sa && verifySaasMasterKey(candidate)) {
+        return true;
+      }
       if (comp?.adminPassword && verifyPassword(candidate, comp.adminPassword, { allowUpperFallback: true })) {
         return true;
       }

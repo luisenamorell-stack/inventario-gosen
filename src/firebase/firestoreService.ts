@@ -5064,7 +5064,18 @@ export async function restoreCancelledSaleInFirestore(
   return restoredRecord;
 }
 
-export async function deleteSaleFromFirestore(saleId: string): Promise<void> {
+export async function deleteSaleFromFirestore(
+  saleId: string,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const prevSales = getCachedSales(slug) || [];
+  setCachedSales(
+    prevSales.filter((s) => s.id !== saleId),
+    slug
+  );
+  syncCollectionsWithBackendHub({ deleteSaleId: saleId }, slug).catch(() => {});
+
   try {
     await deleteDoc(doc(db, 'sales', saleId));
   } catch (error) {
@@ -5073,6 +5084,90 @@ export async function deleteSaleFromFirestore(saleId: string): Promise<void> {
       return;
     }
     handleFirestoreError(error, OperationType.DELETE, `sales/${saleId}`);
+  }
+}
+
+export async function deleteSaleAccountInFirestore(
+  sale: SaleRecord,
+  currentInventory: Product[],
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  await deleteSaleFromFirestore(sale.id, slug);
+
+  // Restore stock ONLY if active non-historical sale that deducted stock when created
+  if (sale.status !== 'cancelled' && !sale.skipInventoryDeduction && !sale.isHistoricalPreApp) {
+    try {
+      const storeWhData = getCachedStoreWarehouses(slug);
+      const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
+      const batch = writeBatch(db);
+      const workingByCode = new Map<string, Product>();
+      for (const p of currentInventory) {
+        workingByCode.set(p.code.trim().toLowerCase(), p);
+      }
+      const finalPayloadsByDocId = new Map<string, { ref: any; payload: Record<string, any> }>();
+
+      for (const item of sale.items || []) {
+        const codeKey = (item.code || '').trim().toLowerCase();
+        if (!codeKey) continue;
+        const currentProd =
+          workingByCode.get(codeKey) ||
+          currentInventory.find((p) => p.id === item.productId);
+        if (!currentProd && (item.code || '').trim().toUpperCase() === 'CREDITO') {
+          continue;
+        }
+        if (!currentProd) continue;
+
+        const rawCode = currentProd.code;
+        const productDocId = getScopedDocId(rawCode, slug);
+        const productRef = doc(db, 'inventory', productDocId);
+
+        const { newStock: restoredStock, newWarehouseStocks } = applyWarehouseStockDelta(
+          currentProd,
+          Number(item.quantity) || 1,
+          item.warehouseId || sale.warehouseId,
+          activeWhList
+        );
+        const newColorStocks = applyColorStockDelta(
+          currentProd,
+          item.selectedColor,
+          Number(item.quantity) || 1
+        );
+
+        workingByCode.set(codeKey, {
+          ...currentProd,
+          stock: restoredStock,
+          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
+        });
+
+        finalPayloadsByDocId.set(productDocId, {
+          ref: productRef,
+          payload: {
+            companyId: slug,
+            code: rawCode.trim().slice(0, 100),
+            name: (currentProd.name || item.name || 'Producto').trim().slice(0, 200),
+            category: (currentProd.category || item.category || 'General').trim().slice(0, 100),
+            price: Number(currentProd.price ?? item.price) || 0,
+            cost: Number(currentProd.cost ?? item.cost) || 0,
+            stock: restoredStock,
+            ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
+          },
+        });
+      }
+
+      for (const e of finalPayloadsByDocId.values()) {
+        batch.set(e.ref, e.payload, { merge: true });
+      }
+
+      if (finalPayloadsByDocId.size > 0) {
+        await touchInventorySyncStamp(batch, slug);
+        await batch.commit();
+      }
+    } catch (invError) {
+      console.warn('Warning restoring stock on sale delete:', invError);
+    }
   }
 }
 

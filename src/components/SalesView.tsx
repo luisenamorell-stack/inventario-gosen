@@ -169,6 +169,7 @@ interface SalesViewProps {
   onRecordSale: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
   onUpdateSale?: (originalSale: SaleRecord, updatedSale: SaleRecord) => Promise<void>;
   onCancelSale: (sale: SaleRecord) => Promise<void>;
+  onDeleteSale?: (sale: SaleRecord) => Promise<void>;
   onSaveStoreSettings?: (settings: StoreSettings) => Promise<void>;
   onSaveUser?: (user: UserAccount) => Promise<void>;
   onSaveProduct?: (product: Product, oldCode?: string) => Promise<void>;
@@ -195,6 +196,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   onRecordSale,
   onUpdateSale,
   onCancelSale,
+  onDeleteSale,
   onSaveStoreSettings,
   onSaveUser,
   onSaveProduct,
@@ -3905,6 +3907,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
           }}
           onRecordSale={onRecordSale}
           onUpdateSale={onUpdateSale}
+          onDeleteSale={onDeleteSale}
           onSaveProduct={onSaveProduct}
           onSaveUser={onSaveUser}
           onViewSaleTicket={(sale) => {
