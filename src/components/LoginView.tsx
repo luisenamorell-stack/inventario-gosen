@@ -4,6 +4,7 @@ import {
   normalizeCompanySlug,
   setBackendSessionAuthenticated,
   setAuthToken,
+  resolveClientLoginAcrossAllTenants,
 } from '../firebase/firestoreService';
 import {
   Lock,
@@ -262,18 +263,180 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
 
       const contentType = String(res.headers.get('content-type') || '').toLowerCase();
-      if (!contentType.includes('application/json')) {
-        const rawBody = await res.text().catch(() => '');
+      const isStaticHostMissingApi =
+        res.status === 404 ||
+        res.status === 405 ||
+        !contentType.includes('application/json');
+
+      if (isStaticHostMissingApi) {
+        const rawBody = !contentType.includes('application/json')
+          ? await res.text().catch(() => '')
+          : '';
         const lowerBody = rawBody.toLowerCase();
         const isGoogleProxy =
           (res.url || '').includes('accounts.google.com') ||
           lowerBody.includes('accounts.google.com') ||
           lowerBody.includes('servicelogin');
-        setError(
-          isGoogleProxy
-            ? 'Este navegador móvil requiere iniciar sesión con la cuenta de Google autorizada, o abrir el enlace público publicado.'
-            : `El servidor de autenticación no respondió correctamente (HTTP ${res.status}). Verifica que estés entrando desde el enlace activo actualizado.`
-        );
+
+        if (isGoogleProxy) {
+          setError(
+            'Este navegador móvil requiere iniciar sesión con la cuenta de Google autorizada, o abrir el enlace público publicado.'
+          );
+          return;
+        }
+
+        // Static hosting fallback (e.g. custom domain serving Vite dist/ without /api/* Node backend):
+        // Authenticate securely directly against Cloud Firestore + scrypt-js hash verification.
+        if (loginMode === 'saas_owner') {
+          setError(
+            'El acceso directo al Panel Central SaaS requiere el servidor backend activo.'
+          );
+          return;
+        }
+
+        const resolved = await resolveClientLoginAcrossAllTenants({
+          passwordInput: cleanInput,
+          usernameInput: loginMode === 'collaborator' ? cleanUser : undefined,
+          mode: loginMode === 'collaborator' ? 'collaborator' : 'store_pass',
+          preferredSlug: hasUrlEmpresa ? normalizedSlug : undefined,
+          companiesInMemory: companies,
+          usersInMemory: users,
+          activeStoreSettings: storeSettings,
+        });
+
+        if (!resolved.matched || !resolved.companySlug) {
+          registerFailedAttempt(
+            loginMode === 'collaborator'
+              ? 'Usuario o contraseña incorrectos. Verifica tus datos e intenta nuevamente.'
+              : 'Contraseña de acceso incorrecta. Verifica tu clave e intenta nuevamente.'
+          );
+          return;
+        }
+
+        if (resolved.companyObj?.status === 'suspended') {
+          setError(
+            `El acceso para "${resolved.companyObj.name || resolved.companySlug}" se encuentra suspendido.${resolved.companyObj.moraReason ? ` Motivo: ${resolved.companyObj.moraReason}.` : ''}`
+          );
+          return;
+        }
+
+        const matchedSlug = normalizeCompanySlug(resolved.companySlug);
+        const resolvedName =
+          resolved.companyName ||
+          resolved.companyObj?.name ||
+          (matchedSlug === 'tiendagyg'
+            ? 'COMERCIAL GYG'
+            : matchedSlug === 'gosen'
+            ? 'Tienda Gosén'
+            : matchedSlug.toUpperCase());
+
+        const effectiveRole: 'admin' | 'collaborator' =
+          resolved.type === 'admin'
+            ? 'admin'
+            : resolved.collaborator?.role === 'admin'
+            ? 'admin'
+            : 'collaborator';
+
+        const collab = resolved.collaborator;
+        const assignedWarehouseIds = Array.isArray(collab?.allowedWarehouseIds)
+          ? collab.allowedWarehouseIds
+          : Array.isArray(collab?.salesPermissions?.allowedWarehouseIds)
+          ? collab.salesPermissions.allowedWarehouseIds
+          : [];
+
+        const fallbackSession: UserSession = {
+          userId:
+            resolved.type === 'admin'
+              ? `admin_${matchedSlug}`
+              : collab?.id || `${matchedSlug}__collab_${cleanUser || 'user'}`,
+          companyId: matchedSlug,
+          companyName: resolvedName,
+          isSuperAdmin: false,
+          isStandaloneSaaS: false,
+          userName:
+            resolved.type === 'admin'
+              ? matchedSlug === 'gosen'
+                ? 'Administrador Gosén'
+                : `Admin ${resolvedName}`
+              : collab?.name || collab?.username || 'Colaborador',
+          username:
+            resolved.type === 'admin' ? 'admin' : collab?.username || cleanUser || 'colaborador',
+          role: effectiveRole,
+          allowedTabs:
+            Array.isArray(collab?.allowedTabs) && collab.allowedTabs.length > 0
+              ? collab.allowedTabs
+              : effectiveRole === 'admin'
+              ? [
+                  'dashboard',
+                  'inventory',
+                  'warehouses',
+                  'sales',
+                  'purchases',
+                  'audit',
+                  'price-checker',
+                  'suppliers',
+                  'settings',
+                  'catalog',
+                  'users',
+                  'activity',
+                ]
+              : ['sales', 'inventory', 'price-checker', 'catalog'],
+          allowedWarehouseIds:
+            effectiveRole === 'admin' || assignedWarehouseIds.length === 0
+              ? undefined
+              : assignedWarehouseIds,
+          salesPermissions:
+            resolved.type === 'admin'
+              ? {
+                  canEditSales: true,
+                  canCancelSales: true,
+                  canViewCostsAndProfits: true,
+                  canUseCreditCalculator: true,
+                }
+              : {
+                  canEditSales:
+                    collab?.salesPermissions?.canEditSales !== undefined
+                      ? collab.salesPermissions.canEditSales
+                      : true,
+                  canCancelSales:
+                    collab?.salesPermissions?.canCancelSales !== undefined
+                      ? collab.salesPermissions.canCancelSales
+                      : effectiveRole === 'admin',
+                  canViewCostsAndProfits:
+                    collab?.salesPermissions?.canViewCostsAndProfits !== undefined
+                      ? collab.salesPermissions.canViewCostsAndProfits
+                      : effectiveRole === 'admin',
+                  canUseCreditCalculator: Boolean(collab?.salesPermissions?.canUseCreditCalculator),
+                  isRouteCollector: Boolean(collab?.salesPermissions?.isRouteCollector),
+                  routeCollectorScope:
+                    collab?.salesPermissions?.routeCollectorScope === 'assigned'
+                      ? 'assigned'
+                      : 'all',
+                  ...(effectiveRole !== 'admin' && assignedWarehouseIds.length > 0
+                    ? { allowedWarehouseIds: assignedWarehouseIds }
+                    : {}),
+                },
+        };
+
+        setAuthToken(null);
+        setBackendSessionAuthenticated(false);
+        setFailedAttempts(0);
+        setSelectedSlug(matchedSlug);
+        onSelectCompany?.(matchedSlug);
+
+        try {
+          localStorage.removeItem('stockmaster_saas_owner_unlocked');
+          localStorage.removeItem('stockmaster_saas_master_key');
+          const url = new URL(window.location.href);
+          url.searchParams.delete('ventas');
+          url.searchParams.delete('landing');
+          url.searchParams.delete('demo');
+          url.searchParams.delete('saas');
+          url.searchParams.set('empresa', matchedSlug);
+          window.history.replaceState({}, '', url.toString());
+        } catch {}
+
+        executeAnimatedLoaderAndEnter(fallbackSession, resolvedName, resolved.logoUrl);
         return;
       }
 

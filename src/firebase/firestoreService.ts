@@ -62,6 +62,7 @@ import {
 } from '../types';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
 import { db, auth } from './config';
+import { scrypt } from 'scrypt-js';
 
 export enum OperationType {
   CREATE = 'create',
@@ -1816,6 +1817,53 @@ export function isMaskedOrHashedPassword(val: unknown): boolean {
   const clean = String(val ?? '').trim();
   if (!clean) return false;
   return clean === HASHED_PASSWORD_MASK || clean === '••••••••' || clean.startsWith('scrypt$');
+}
+
+export async function verifyPasswordClient(
+  candidateInput: string,
+  storedSecret: unknown
+): Promise<boolean> {
+  const cleanCandidate = String(candidateInput || '')
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+    .normalize('NFC')
+    .trim();
+  const stored = String(storedSecret || '').normalize('NFC').trim();
+  if (!cleanCandidate || !stored || stored === HASHED_PASSWORD_MASK || stored === '••••••••') {
+    return false;
+  }
+
+  if (stored.startsWith('scrypt$')) {
+    const parts = stored.split('$');
+    if (parts.length !== 3 || parts[1].length < 16 || parts[2].length < 32) return false;
+    const [, saltHex, expectedHex] = parts;
+    try {
+      const enc = new TextEncoder();
+      const saltBytes = enc.encode(saltHex);
+      const expectedLower = expectedHex.toLowerCase();
+      const variants = Array.from(
+        new Set([cleanCandidate, cleanCandidate.toUpperCase(), cleanCandidate.toLowerCase()])
+      );
+      for (const variant of variants) {
+        const derived = await scrypt(enc.encode(variant), saltBytes, 16384, 8, 1, 64);
+        let derivedHex = '';
+        for (let i = 0; i < derived.length; i++) {
+          derivedHex += derived[i].toString(16).padStart(2, '0');
+        }
+        if (derivedHex === expectedLower) {
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  return (
+    cleanCandidate === stored ||
+    cleanCandidate.toUpperCase() === stored.toUpperCase() ||
+    cleanCandidate.toLowerCase() === stored.toLowerCase()
+  );
 }
 
 let inMemoryAuthToken: string | null = null;
@@ -7742,6 +7790,76 @@ export interface UniversalLoginResolution {
  * identifies which client store or collaborator is logging in across all registered tenants
  * in memory and Firestore, without exposing any store list on the login screen.
  */
+export async function verifyAdminPinViaFirestore(
+  companyId: string,
+  candidatePin: string
+): Promise<boolean> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId || 'gosen');
+  const cleanPin = String(candidatePin || '')
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+    .normalize('NFC')
+    .trim();
+  if (!cleanPin) return false;
+
+  const cachedComp = (getCachedCompanies() || []).find(
+    (c) => normalizeCompanySlug(c.slug) === slug
+  );
+  const cachedSettings = getCachedStoreSettings(slug);
+  if (cachedComp?.adminPassword && (await verifyPasswordClient(cleanPin, cachedComp.adminPassword))) {
+    return true;
+  }
+  if (
+    cachedSettings?.accessPassword &&
+    (await verifyPasswordClient(cleanPin, cachedSettings.accessPassword))
+  ) {
+    return true;
+  }
+
+  if (!isFirestoreQuotaExhausted()) {
+    try {
+      const [compSnap, settingsSnap, usersSnap] = await Promise.all([
+        withFirestoreTimeout(getDoc(doc(db, 'companies', slug)), 5000).catch(() => null),
+        withFirestoreTimeout(getDoc(doc(db, 'settings', getStoreProfileDocId(slug))), 5000).catch(
+          () => null
+        ),
+        withFirestoreTimeout(getDocs(collection(db, 'users')), 5000).catch(() => null),
+      ]);
+
+      const compPass = compSnap?.exists() ? compSnap.data()?.adminPassword : undefined;
+      const settingsPass = settingsSnap?.exists() ? settingsSnap.data()?.accessPassword : undefined;
+
+      if (compPass && (await verifyPasswordClient(cleanPin, compPass))) return true;
+      if (settingsPass && (await verifyPasswordClient(cleanPin, settingsPass))) return true;
+
+      if (!compPass && !settingsPass) {
+        const up = cleanPin.toUpperCase();
+        if (slug === 'tiendagyg' && up === 'GYG2026') return true;
+        if (slug === 'gosen' && (up === 'GOSEN2026' || up === 'ADMIN2026')) return true;
+      }
+
+      if (usersSnap) {
+        for (const uDoc of usersSnap.docs) {
+          const d = uDoc.data();
+          const uSlug = isGyGAlias(d.companyId || uDoc.id)
+            ? 'tiendagyg'
+            : normalizeCompanySlug(d.companyId || 'gosen');
+          if (
+            uSlug === slug &&
+            d.role === 'admin' &&
+            d.isActive !== false &&
+            (await verifyPasswordClient(cleanPin, d.password))
+          ) {
+            return true;
+          }
+        }
+      }
+    } catch (err) {
+      isQuotaOrNetworkError(err);
+    }
+  }
+  return false;
+}
+
 export async function resolveClientLoginAcrossAllTenants(params: {
   passwordInput: string;
   usernameInput?: string;
@@ -7751,13 +7869,18 @@ export async function resolveClientLoginAcrossAllTenants(params: {
   usersInMemory: UserAccount[];
   activeStoreSettings?: StoreSettings;
 }): Promise<UniversalLoginResolution> {
-  const cleanPass = params.passwordInput.trim();
+  const cleanPass = String(params.passwordInput || '')
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+    .normalize('NFC')
+    .trim();
   const upperPass = cleanPass.toUpperCase();
-  const lowerPass = cleanPass.toLowerCase();
-  const cleanUser = (params.usernameInput || '')
+  const cleanUser = String(params.usernameInput || '')
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+    .normalize('NFC')
     .trim()
     .toLowerCase()
-    .replace(/^@+/, '');
+    .replace(/^@+/, '')
+    .replace(/\s+/g, ' ');
   const hasUrlEmpresa =
     typeof window !== 'undefined' &&
     Boolean(
@@ -7772,199 +7895,217 @@ export async function resolveClientLoginAcrossAllTenants(params: {
         : normalizeCompanySlug(params.preferredSlug)
       : '';
 
-  const matchCompanyFromList = (list: CompanyTenant[]): CompanyTenant | undefined => {
-    // 1. If URL has an explicit company parameter (?empresa=...), check that company first
+  // Map of Firestore store_profile passwords (slug -> accessPassword) collected from Firestore
+  const firestoreSettingsMap = new Map<string, Partial<StoreSettings>>();
+
+  const verifyCompanyMatch = async (comp: CompanyTenant): Promise<boolean> => {
+    const slug = normalizeCompanySlug(comp.slug);
+    const fsSettings = firestoreSettingsMap.get(slug);
+    const cachedSettings = getCachedStoreSettings(slug);
+    const compPass = String(comp.adminPassword || '').trim();
+    const settingsPass = String(
+      fsSettings?.accessPassword || cachedSettings?.accessPassword || ''
+    ).trim();
+
+    if (compPass && (await verifyPasswordClient(cleanPass, compPass))) {
+      return true;
+    }
+    if (settingsPass && (await verifyPasswordClient(cleanPass, settingsPass))) {
+      return true;
+    }
+
+    const hasRealStoredPass =
+      (compPass && !isMaskedOrHashedPassword(compPass)) ||
+      isHashedPasswordPrefix(compPass) ||
+      (settingsPass && !isMaskedOrHashedPassword(settingsPass)) ||
+      isHashedPasswordPrefix(settingsPass);
+
+    if (!hasRealStoredPass) {
+      if (slug === 'tiendagyg' && upperPass === 'GYG2026') return true;
+      if (slug === 'gosen' && (upperPass === 'GOSEN2026' || upperPass === 'ADMIN2026')) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const isHashedPasswordPrefix = (val: string) => val.startsWith('scrypt$');
+
+  const matchCompanyFromList = async (
+    list: CompanyTenant[]
+  ): Promise<CompanyTenant | undefined> => {
     if (preferred) {
       const prefComp = list.find((c) => normalizeCompanySlug(c.slug) === preferred);
-      if (prefComp) {
-        const expected = (prefComp.adminPassword || '').trim().toUpperCase();
-        const cachedSettings = getCachedStoreSettings(preferred);
-        const settingsPass = (cachedSettings?.accessPassword || '').trim().toUpperCase();
-        if (
-          (expected && expected === upperPass) ||
-          (settingsPass && settingsPass === upperPass) ||
-          (preferred === 'tiendagyg' && upperPass === 'GYG2026') ||
-          (preferred === 'gosen' && (upperPass === 'GOSEN2026' || upperPass === 'ADMIN2026'))
-        ) {
-          return prefComp;
-        }
+      if (prefComp && (await verifyCompanyMatch(prefComp))) {
+        return prefComp;
       }
     }
 
-    // 2. Check non-primary client companies first so a client store password never collides with default gosen
-    const clientMatch = list.find((comp) => {
+    for (const comp of list) {
       const slug = normalizeCompanySlug(comp.slug);
-      if (slug === 'gosen') return false;
-      const pass = (comp.adminPassword || '').trim().toUpperCase();
-      const cachedSettings = getCachedStoreSettings(slug);
-      const settingsPass = (cachedSettings?.accessPassword || '').trim().toUpperCase();
-      return (
-        (pass.length > 0 && pass === upperPass) ||
-        (settingsPass.length > 0 && settingsPass === upperPass) ||
-        (slug === 'tiendagyg' && upperPass === 'GYG2026')
-      );
-    });
-    if (clientMatch) return clientMatch;
+      if (slug === 'gosen') continue;
+      if (await verifyCompanyMatch(comp)) return comp;
+    }
 
-    // 3. Check primary gosen company
-    const gosenMatch = list.find((comp) => {
-      const slug = normalizeCompanySlug(comp.slug);
-      if (slug !== 'gosen') return false;
-      const pass = (comp.adminPassword || '').trim().toUpperCase();
-      const cachedSettings = getCachedStoreSettings('gosen');
-      const settingsPass = (cachedSettings?.accessPassword || '').trim().toUpperCase();
-      return (
-        (pass.length > 0 && pass === upperPass) ||
-        (settingsPass.length > 0 && settingsPass === upperPass) ||
-        upperPass === 'GOSEN2026' ||
-        upperPass === 'ADMIN2026'
-      );
-    });
+    const gosenComp = list.find((c) => normalizeCompanySlug(c.slug) === 'gosen');
+    if (gosenComp && (await verifyCompanyMatch(gosenComp))) {
+      return gosenComp;
+    }
 
-    return gosenMatch;
+    return undefined;
   };
 
-  // Helper to match a collaborator by username + password (case-insensitive username & mobile-safe password check)
-  const findCollabInList = (userList: UserAccount[]): UserAccount | undefined => {
-    const matchesCredentials = (u: UserAccount): boolean => {
+  const findCollabInList = async (
+    userList: UserAccount[]
+  ): Promise<UserAccount | undefined> => {
+    const userNameMatches = (u: UserAccount): boolean => {
       if (u.isActive === false) return false;
-      const uName = (u.username || '').trim().toLowerCase().replace(/^@+/, '');
-      const fullName = (u.name || '').trim().toLowerCase();
-      const uPass = (u.password || '').trim();
-      const userMatches =
-        !cleanUser || uName === cleanUser || fullName === cleanUser;
-      const passMatches =
-        uPass.length > 0 && (uPass === cleanPass || uPass.toLowerCase() === lowerPass);
-      return userMatches && passMatches;
+      if (!cleanUser) return true;
+      const uName = (u.username || '').trim().toLowerCase().replace(/^@+/, '').replace(/\s+/g, ' ');
+      const fullName = (u.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      return uName === cleanUser || fullName === cleanUser;
     };
 
+    const matchingCandidates = userList.filter(userNameMatches);
+    const ordered: UserAccount[] = [];
     if (preferred) {
-      const inPreferred = userList.find(
-        (u) =>
-          matchesCredentials(u) &&
-          (isGyGAlias(u.companyId) ? 'tiendagyg' : normalizeCompanySlug(u.companyId || 'gosen')) ===
+      ordered.push(
+        ...matchingCandidates.filter(
+          (u) =>
+            (isGyGAlias(u.companyId) ? 'tiendagyg' : normalizeCompanySlug(u.companyId || 'gosen')) ===
             preferred
+        )
       );
-      if (inPreferred) return inPreferred;
     }
-
-    // Prefer non-gosen tenant collaborators first if there is any ambiguity
-    const clientCollab = userList.find(
-      (u) =>
-        matchesCredentials(u) &&
-        (isGyGAlias(u.companyId) ? 'tiendagyg' : normalizeCompanySlug(u.companyId || 'gosen')) !==
+    ordered.push(
+      ...matchingCandidates.filter(
+        (u) =>
+          (isGyGAlias(u.companyId) ? 'tiendagyg' : normalizeCompanySlug(u.companyId || 'gosen')) !==
           'gosen'
+      )
     );
-    if (clientCollab) return clientCollab;
+    ordered.push(...matchingCandidates);
 
-    return userList.find(matchesCredentials);
+    const seenIds = new Set<string>();
+    for (const u of ordered) {
+      if (seenIds.has(u.id)) continue;
+      seenIds.add(u.id);
+      if (await verifyPasswordClient(cleanPass, u.password)) {
+        return u;
+      }
+    }
+    return undefined;
   };
 
-  // --- A. COLLABORATOR MODE ---
-  if (params.mode === 'collaborator') {
-    const allLocalCachedUsers = [
-      ...params.usersInMemory,
-      ...getAllLocallyCachedUsersAcrossAllTenants(),
-    ];
-    let foundUser = findCollabInList(allLocalCachedUsers);
-    let allCompanies =
-      params.companiesInMemory.length > 0
-        ? params.companiesInMemory
-        : getCachedCompanies() || [DEFAULT_GOSEN_COMPANY];
+  const loadLiveFirestoreAuthState = async (): Promise<{
+    companies: CompanyTenant[];
+    users: UserAccount[];
+  }> => {
+    const compMap = new Map<string, CompanyTenant>();
+    compMap.set('gosen', { ...DEFAULT_GOSEN_COMPANY });
 
-    // Step 2: Check Backend Multi-Device Sync Hub (/api/cloud-sync/collections) — responds in ~15ms
-    if (!foundUser) {
+    for (const c of [...(getCachedCompanies() || []), ...(params.companiesInMemory || [])]) {
+      if (c && (c.slug || c.id)) {
+        const s = normalizeCompanySlug(c.slug || c.id);
+        compMap.set(s, sanitizeCompanyDoc(s, c));
+      }
+    }
+
+    const userMap = new Map<string, UserAccount>();
+    for (const u of [...params.usersInMemory, ...getAllLocallyCachedUsersAcrossAllTenants()]) {
+      if (u && u.id) userMap.set(u.id, u);
+    }
+
+    if (!isFirestoreQuotaExhausted()) {
       try {
-        const gygLocalUsers = getCachedUsers('tiendagyg') || undefined;
-        const [gygHub, gosenHub] = await Promise.all([
-          syncCollectionsWithBackendHub(
-            gygLocalUsers && gygLocalUsers.length > 0 ? { users: gygLocalUsers } : {},
-            'tiendagyg'
-          ),
-          syncCollectionsWithBackendHub({}, 'gosen'),
+        const [compSnap, settingsSnap, usersSnap] = await Promise.all([
+          withFirestoreTimeout(getDocs(collection(db, 'companies')), 6000).catch(() => null),
+          withFirestoreTimeout(getDocs(collection(db, 'settings')), 6000).catch(() => null),
+          withFirestoreTimeout(getDocs(collection(db, 'users')), 6000).catch(() => null),
         ]);
-        const hubUsers: UserAccount[] = [];
-        for (const h of [gygHub, gosenHub]) {
-          if (Array.isArray(h?.allUsers)) {
-            for (const rawU of h.allUsers) {
-              hubUsers.push(sanitizeUserAccountDoc(rawU, rawU.companyId || 'tiendagyg', rawU.id));
-            }
-          }
-          if (Array.isArray(h?.users)) {
-            for (const rawU of h.users) {
-              hubUsers.push(sanitizeUserAccountDoc(rawU, rawU.companyId || 'tiendagyg', rawU.id));
-            }
-          }
-          if (Array.isArray(h?.companies) && h.companies.length > 0) {
-            const compMap = new Map<string, CompanyTenant>();
-            allCompanies.forEach((c) => compMap.set(normalizeCompanySlug(c.slug), c));
-            h.companies.forEach((c: any) => {
-              if (c && (c.slug || c.id)) {
-                const s = normalizeCompanySlug(c.slug || c.id);
-                compMap.set(s, sanitizeCompanyDoc(s, c));
-              }
+
+        if (compSnap) {
+          compSnap.forEach((docSnap) => {
+            const d = docSnap.data();
+            const slug = normalizeCompanySlug(d.slug || docSnap.id);
+            compMap.set(slug, sanitizeCompanyDoc(slug, d));
+          });
+        }
+
+        if (settingsSnap) {
+          settingsSnap.forEach((docSnap) => {
+            if (!docSnap.id.startsWith('store_profile')) return;
+            const d = docSnap.data();
+            const slug = normalizeCompanySlug(
+              d.companyId || docSnap.id.replace(/^store_profile_?/, '') || 'gosen'
+            );
+            firestoreSettingsMap.set(slug, {
+              companyId: slug,
+              storeName: d.storeName,
+              logoUrl: d.logoUrl,
+              accessPassword: d.accessPassword,
+              tagline: d.tagline,
+              address: d.address,
+              phone: d.phone,
             });
-            allCompanies = Array.from(compMap.values());
-          }
+            if (!compMap.has(slug)) {
+              compMap.set(slug, {
+                id: slug,
+                name: d.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
+                slug,
+                ownerName: 'Administrador',
+                phone: d.phone || '',
+                plan: 'mensual',
+                price: 0,
+                nextBillingDate: '',
+                status: 'active',
+                adminPassword: d.accessPassword || '',
+                logoUrl: d.logoUrl || '',
+                tagline: d.tagline || '',
+                address: d.address || '',
+                allowedModules: d.allowedModules || [...ALL_COMPANY_MODULES],
+                createdAt: Date.now(),
+              });
+            }
+          });
         }
-        if (hubUsers.length > 0) {
-          foundUser = findCollabInList(hubUsers);
+
+        if (usersSnap) {
+          usersSnap.forEach((docSnap) => {
+            const d = docSnap.data();
+            const cSlug = isGyGAlias(d.companyId || docSnap.id)
+              ? 'tiendagyg'
+              : normalizeCompanySlug(d.companyId || 'gosen');
+            const sanitized = sanitizeUserAccountDoc(d, cSlug, docSnap.id);
+            userMap.set(sanitized.id, sanitized);
+          });
         }
-      } catch {
-        // Ignore hub error
-      }
-    }
-
-    // Step 3: Check Firestore IndexedDB Local Cache (instant, 0 network wait)
-    if (!foundUser) {
-      try {
-        const cacheSnap = await getDocsFromCache(collection(db, 'users'));
-        const cachedCloudUsers: UserAccount[] = [];
-        cacheSnap.forEach((docSnap) => {
-          const d = docSnap.data();
-          const cSlug = isGyGAlias(d.companyId || docSnap.id)
-            ? 'tiendagyg'
-            : normalizeCompanySlug(d.companyId || 'gosen');
-          cachedCloudUsers.push(sanitizeUserAccountDoc(d, cSlug, docSnap.id));
-        });
-        foundUser = findCollabInList(cachedCloudUsers);
-      } catch {
-        // Ignore cache miss
-      }
-    }
-
-    // Step 4: Try live Firestore with strict 2-second timeout (so it NEVER hangs on "Verificando acceso...")
-    if (!foundUser && !isFirestoreQuotaExhausted()) {
-      try {
-        const snap = await withFirestoreTimeout(getDocs(collection(db, 'users')), 2000);
-        const allCloudUsers: UserAccount[] = [];
-        snap.forEach((docSnap) => {
-          const d = docSnap.data();
-          const cSlug = isGyGAlias(d.companyId || docSnap.id)
-            ? 'tiendagyg'
-            : normalizeCompanySlug(d.companyId || 'gosen');
-          allCloudUsers.push(sanitizeUserAccountDoc(d, cSlug, docSnap.id));
-        });
-        foundUser = findCollabInList(allCloudUsers);
       } catch (err) {
         isQuotaOrNetworkError(err);
       }
     }
 
+    return {
+      companies: Array.from(compMap.values()),
+      users: Array.from(userMap.values()),
+    };
+  };
+
+  const { companies: allCompanies, users: allUsers } = await loadLiveFirestoreAuthState();
+
+  // --- A. COLLABORATOR MODE ---
+  if (params.mode === 'collaborator') {
+    const foundUser = await findCollabInList(allUsers);
     if (foundUser) {
       const targetSlug = isGyGAlias(foundUser.companyId || foundUser.id)
         ? 'tiendagyg'
         : normalizeCompanySlug(foundUser.companyId || 'gosen');
-      let compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
-      if (!compObj) {
-        const cachedComp = (getCachedCompanies() || []).find(
-          (c) => normalizeCompanySlug(c.slug) === targetSlug
-        );
-        compObj = cachedComp;
-      }
+      const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
+      const fsSettings = firestoreSettingsMap.get(targetSlug);
       const cachedTargetSettings = getCachedStoreSettings(targetSlug);
       const companyName =
         compObj?.name ||
+        fsSettings?.storeName ||
         cachedTargetSettings?.storeName ||
         (targetSlug === 'tiendagyg'
           ? 'COMERCIAL GYG'
@@ -7976,21 +8117,20 @@ export async function resolveClientLoginAcrossAllTenants(params: {
         type: 'collaborator',
         companySlug: targetSlug,
         companyName,
-        logoUrl: compObj?.logoUrl || cachedTargetSettings?.logoUrl,
+        logoUrl: compObj?.logoUrl || fsSettings?.logoUrl || cachedTargetSettings?.logoUrl,
         companyObj: compObj,
         collaborator: foundUser,
       };
     }
 
-    // Step 5: Fallback in Collaborator Mode — if the collaborator entered their username + the store's access password (e.g. GYG2026 or Comercial GYG password), allow entry as collaborator for that store!
-    const matchedStoreForCollab = matchCompanyFromList(allCompanies);
-    if (matchedStoreForCollab || upperPass === 'GYG2026') {
-      const targetSlug = matchedStoreForCollab
-        ? normalizeCompanySlug(matchedStoreForCollab.slug)
-        : 'tiendagyg';
+    const matchedStoreForCollab = await matchCompanyFromList(allCompanies);
+    if (matchedStoreForCollab) {
+      const targetSlug = normalizeCompanySlug(matchedStoreForCollab.slug);
+      const fsSettings = firestoreSettingsMap.get(targetSlug);
       const cachedTargetSettings = getCachedStoreSettings(targetSlug);
       const companyName =
-        matchedStoreForCollab?.name ||
+        matchedStoreForCollab.name ||
+        fsSettings?.storeName ||
         cachedTargetSettings?.storeName ||
         (targetSlug === 'tiendagyg' ? 'COMERCIAL GYG' : targetSlug.toUpperCase());
       const displayCollabName = cleanUser
@@ -8001,7 +8141,7 @@ export async function resolveClientLoginAcrossAllTenants(params: {
         companyId: targetSlug,
         name: displayCollabName,
         username: cleanUser || 'colaborador',
-        password: cleanPass,
+        password: HASHED_PASSWORD_MASK,
         role: 'collaborator',
         isActive: true,
         allowedTabs: ['sales', 'inventory', 'price-checker', 'catalog'],
@@ -8018,7 +8158,7 @@ export async function resolveClientLoginAcrossAllTenants(params: {
         type: 'collaborator',
         companySlug: targetSlug,
         companyName,
-        logoUrl: matchedStoreForCollab?.logoUrl || cachedTargetSettings?.logoUrl,
+        logoUrl: matchedStoreForCollab.logoUrl || fsSettings?.logoUrl || cachedTargetSettings?.logoUrl,
         companyObj: matchedStoreForCollab,
         collaborator: fallbackCollab,
       };
@@ -8028,75 +8168,22 @@ export async function resolveClientLoginAcrossAllTenants(params: {
   }
 
   // --- B. DIRECT STORE PASSWORD MODE ---
-  let allCompanies =
-    params.companiesInMemory.length > 0
-      ? params.companiesInMemory
-      : getCachedCompanies() || [DEFAULT_GOSEN_COMPANY];
-  if (allCompanies.length <= 1) {
-    try {
-      allCompanies = await fetchCompaniesOnce(true);
-    } catch {
-      // Ignore offline error
-    }
-  }
-  let matchedComp = matchCompanyFromList(allCompanies);
-
-  // If not matched in memory, query fresh companies from backend hub & Firestore (with timeout)
-  if (!matchedComp) {
-    try {
-      allCompanies = await fetchCompaniesOnce(true);
-      matchedComp = matchCompanyFromList(allCompanies);
-    } catch {
-      // Ignore offline error
-    }
-  }
-
-  if (!matchedComp && !isFirestoreQuotaExhausted()) {
-    try {
-      const settingsSnap = await withFirestoreTimeout(getDocs(collection(db, 'settings')), 2000);
-      settingsSnap.forEach((docSnap) => {
-        if (matchedComp) return;
-        if (!docSnap.id.startsWith('store_profile')) return;
-        const d = docSnap.data();
-        const pass = (d.accessPassword || '').trim().toUpperCase();
-        if (pass && pass === upperPass) {
-          const slug = normalizeCompanySlug(
-            d.companyId || docSnap.id.replace(/^store_profile_?/, '') || 'gosen'
-          );
-          const existingComp = allCompanies.find((c) => normalizeCompanySlug(c.slug) === slug);
-          matchedComp = existingComp || {
-            id: slug,
-            name: d.storeName || (slug === 'gosen' ? 'Tienda Gosén' : slug.toUpperCase()),
-            slug,
-            ownerName: 'Administrador',
-            phone: d.phone || '',
-            plan: 'mensual',
-            price: 0,
-            nextBillingDate: '',
-            status: 'active',
-            adminPassword: d.accessPassword,
-            logoUrl: d.logoUrl || '',
-            tagline: d.tagline || '',
-            address: d.address || '',
-            allowedModules: d.allowedModules || [...ALL_COMPANY_MODULES],
-            createdAt: Date.now(),
-          };
-        }
-      });
-    } catch (err) {
-      isQuotaOrNetworkError(err);
-    }
-  }
-
+  const matchedComp = await matchCompanyFromList(allCompanies);
   if (matchedComp) {
     const targetSlug = normalizeCompanySlug(matchedComp.slug);
+    const fsSettings = firestoreSettingsMap.get(targetSlug);
+    const cachedTargetSettings = getCachedStoreSettings(targetSlug);
     const targetName =
       matchedComp.name ||
+      fsSettings?.storeName ||
+      cachedTargetSettings?.storeName ||
       (targetSlug === 'gosen'
         ? params.activeStoreSettings?.storeName || 'Tienda Gosén'
         : targetSlug.toUpperCase());
     const targetLogo =
       matchedComp.logoUrl ||
+      fsSettings?.logoUrl ||
+      cachedTargetSettings?.logoUrl ||
       (targetSlug === 'gosen' ? params.activeStoreSettings?.logoUrl || '/store-logo.jpg' : '');
     return {
       matched: true,
@@ -8108,19 +8195,18 @@ export async function resolveClientLoginAcrossAllTenants(params: {
     };
   }
 
-  // Fallback: check if the password directly matches an active collaborator across local cache, backend hub, or Firestore
-  const localCollabMatch = findCollabInList([
-    ...params.usersInMemory,
-    ...getAllLocallyCachedUsersAcrossAllTenants(),
-  ]);
-  if (localCollabMatch) {
-    const targetSlug = isGyGAlias(localCollabMatch.companyId || localCollabMatch.id)
+  // Fallback: check if entered password directly matches an active collaborator
+  const matchedCollab = await findCollabInList(allUsers);
+  if (matchedCollab) {
+    const targetSlug = isGyGAlias(matchedCollab.companyId || matchedCollab.id)
       ? 'tiendagyg'
-      : normalizeCompanySlug(localCollabMatch.companyId || 'gosen');
+      : normalizeCompanySlug(matchedCollab.companyId || 'gosen');
     const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
+    const fsSettings = firestoreSettingsMap.get(targetSlug);
     const cachedTargetSettings = getCachedStoreSettings(targetSlug);
     const companyName =
       compObj?.name ||
+      fsSettings?.storeName ||
       cachedTargetSettings?.storeName ||
       (targetSlug === 'tiendagyg'
         ? 'COMERCIAL GYG'
@@ -8132,49 +8218,10 @@ export async function resolveClientLoginAcrossAllTenants(params: {
       type: 'collaborator',
       companySlug: targetSlug,
       companyName,
-      logoUrl: compObj?.logoUrl || cachedTargetSettings?.logoUrl,
+      logoUrl: compObj?.logoUrl || fsSettings?.logoUrl || cachedTargetSettings?.logoUrl,
       companyObj: compObj,
-      collaborator: localCollabMatch,
+      collaborator: matchedCollab,
     };
-  }
-
-  if (!isFirestoreQuotaExhausted()) {
-    try {
-      const snap = await withFirestoreTimeout(getDocs(collection(db, 'users')), 2000);
-      const cloudList: UserAccount[] = [];
-      snap.forEach((docSnap) => {
-        const d = docSnap.data();
-        const cSlug = isGyGAlias(d.companyId || docSnap.id)
-          ? 'tiendagyg'
-          : normalizeCompanySlug(d.companyId || 'gosen');
-        cloudList.push(sanitizeUserAccountDoc(d, cSlug, docSnap.id));
-      });
-      const matchedCollab = findCollabInList(cloudList);
-      if (matchedCollab) {
-        const targetSlug = isGyGAlias(matchedCollab.companyId || matchedCollab.id)
-          ? 'tiendagyg'
-          : normalizeCompanySlug(matchedCollab.companyId || 'gosen');
-        const compObj = allCompanies.find((c) => normalizeCompanySlug(c.slug) === targetSlug);
-        const companyName =
-          compObj?.name ||
-          (targetSlug === 'tiendagyg'
-            ? 'COMERCIAL GYG'
-            : targetSlug === 'gosen'
-            ? 'Tienda Gosén'
-            : targetSlug.toUpperCase());
-        return {
-          matched: true,
-          type: 'collaborator',
-          companySlug: targetSlug,
-          companyName,
-          logoUrl: compObj?.logoUrl,
-          companyObj: compObj,
-          collaborator: matchedCollab,
-        };
-      }
-    } catch (err) {
-      isQuotaOrNetworkError(err);
-    }
   }
 
   return { matched: false };

@@ -406,8 +406,12 @@ export const App: React.FC = () => {
           credentials: 'include',
           headers: getAuthHeaders(),
         });
+        const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+        if (!res.ok || !contentType.includes('application/json')) {
+          return;
+        }
         const data = await res.json().catch(() => null);
-        if (!active || !data || lastAuthActionAtRef.current > checkStartedAt) return;
+        if (!active || !data || typeof data.authenticated !== 'boolean' || lastAuthActionAtRef.current > checkStartedAt) return;
 
         if (data.authenticated && data.session) {
           if (data.authToken) {
@@ -495,7 +499,7 @@ export const App: React.FC = () => {
             setIsAuthenticated(true);
             return reconciled;
           });
-        } else {
+        } else if (data.authenticated === false) {
           setBackendSessionAuthenticated(false);
           setUserSession(null);
           setIsAuthenticated(false);

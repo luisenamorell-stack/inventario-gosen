@@ -6,7 +6,7 @@ import {
   StoreSettings,
   resolveInvoiceIssuerName,
 } from '../types';
-import { isMaskedOrHashedPassword, getAuthHeaders } from '../firebase/firestoreService';
+import { isMaskedOrHashedPassword, getAuthHeaders, verifyAdminPinViaFirestore } from '../firebase/firestoreService';
 import {
   X,
   Save,
@@ -261,12 +261,15 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
             pin: candidatePin,
           }),
         });
-        const data = await res.json().catch(() => ({}));
-        authorized = Boolean(res.ok && data?.authorized);
-      } catch {
-        if (storeSettings.accessPassword && !isMaskedOrHashedPassword(storeSettings.accessPassword)) {
-          authorized = candidatePin.toUpperCase() === storeSettings.accessPassword.trim().toUpperCase();
+        const ct = String(res.headers.get('content-type') || '').toLowerCase();
+        if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+          authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
+        } else {
+          const data = await res.json().catch(() => ({}));
+          authorized = Boolean(res.ok && data?.authorized);
         }
+      } catch {
+        authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
       }
       if (!authorized) {
         showToast('Contraseña de Administrador incorrecta para autorizar reducción de venta.', 'error');
@@ -743,12 +746,15 @@ export const AdminCancelAuthModal: React.FC<AdminCancelAuthModalProps> = ({
           pin: candidatePin,
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      authorized = Boolean(res.ok && data?.authorized);
-    } catch {
-      if (storeSettings.accessPassword && !isMaskedOrHashedPassword(storeSettings.accessPassword)) {
-        authorized = candidatePin.toUpperCase() === storeSettings.accessPassword.trim().toUpperCase();
+      const ct = String(res.headers.get('content-type') || '').toLowerCase();
+      if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+        authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        authorized = Boolean(res.ok && data?.authorized);
       }
+    } catch {
+      authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
     } finally {
       setIsVerifyingPin(false);
     }
