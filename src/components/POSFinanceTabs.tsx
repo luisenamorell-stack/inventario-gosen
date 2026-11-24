@@ -5734,9 +5734,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
           {/* ==================== MODAL 2: CONFIGURAR CUENTA, COBRADOR DE RUTA, ALERTA Y BITÁCORA ==================== */}
           {selectedSaleForControl && controlModalAnalytics && (
-            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden max-h-[92vh] flex flex-col">
-                <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+            <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 z-[150]">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden max-h-[92vh] sm:max-h-[88vh] flex flex-col border border-slate-200">
+                <div className="px-4 sm:px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
                   <div>
                     <h3 className="font-black text-sm sm:text-base">
                       Configuración de Cuenta por Cobrar, Ruta y Alertas
@@ -5749,13 +5749,14 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   <button
                     type="button"
                     onClick={() => setSelectedSaleForControl(null)}
-                    className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                    className="p-2 rounded-lg hover:bg-white/15 cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+                    aria-label="Cerrar"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                <div className="p-5 overflow-y-auto space-y-5">
+                <div className="p-4 sm:p-5 overflow-y-auto scroll-container flex-1 space-y-5">
                   <form onSubmit={handleSaveCreditAccountControl} className="space-y-4">
                     {/* Section A: Assign Route Collector & Customer Route Address */}
                     <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3">
@@ -6113,6 +6114,33 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       )}
                     </div>
                   </div>
+                </div>
+
+                {/* Sticky Footer with Cancel and Save Buttons */}
+                <div className="px-4 sm:px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSaleForControl(null)}
+                    className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer min-h-[40px]"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSavingControl}
+                    onClick={() => {
+                      const form = document.getElementById('credit-control-form') as HTMLFormElement | null;
+                      if (form) {
+                        form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+                      } else {
+                        setSelectedSaleForControl(null);
+                      }
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-black text-xs cursor-pointer shadow-md min-h-[40px] flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>{isSavingControl ? 'Guardando...' : 'Guardar Configuración'}</span>
+                  </button>
                 </div>
               </div>
             </div>

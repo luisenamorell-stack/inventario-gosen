@@ -44,7 +44,7 @@ export interface SidebarProps {
   onCloseMobile?: () => void;
   onLogout?: () => void;
   onOpenInstallPrompt?: () => void;
-  onUnlockSuperAdmin?: (masterKey: string) => boolean;
+  onUnlockSuperAdmin?: (masterKey: string) => Promise<boolean> | boolean;
   onLockSuperAdmin?: () => void;
   companyAllowedModules?: ActiveTab[];
   isRouteCollector?: boolean;
@@ -107,17 +107,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  const handleConfirmUnlock = (e: React.FormEvent) => {
+  const [isUnlocking, setIsUnlocking] = useState(false);
+
+  const handleConfirmUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!onUnlockSuperAdmin) return;
-    const ok = onUnlockSuperAdmin(masterKeyInput.trim());
-    if (ok) {
-      setShowSaaSUnlockModal(false);
-      setMasterKeyInput('');
-      setUnlockError(null);
-      onCloseMobile();
-    } else {
-      setUnlockError('Clave Maestra de Propietario SaaS incorrecta.');
+    if (!onUnlockSuperAdmin || isUnlocking) return;
+    setIsUnlocking(true);
+    try {
+      const ok = await onUnlockSuperAdmin(masterKeyInput.trim());
+      if (ok) {
+        setShowSaaSUnlockModal(false);
+        setMasterKeyInput('');
+        setUnlockError(null);
+        onCloseMobile();
+      } else {
+        setUnlockError('Clave Maestra de Propietario SaaS incorrecta.');
+      }
+    } finally {
+      setIsUnlocking(false);
     }
   };
 

@@ -32,6 +32,11 @@ import {
   buildEscPosFromSale,
   buildTestPrintEscPos,
 } from './printerHardwareService';
+import {
+  escapeHtml,
+  extractPlainTextFromHtml,
+  sanitizePrintHtml,
+} from './htmlSanitizer';
 
 export interface PrinterFormatOption {
   id: PrinterPaperFormat;
@@ -501,17 +506,8 @@ export async function shareHtmlDocumentAsPdfToPrinterApp(
   doc.text(title.toUpperCase(), pageWidth / 2, y, { align: 'center' });
   y += 5;
 
-  // Extract structured lines from HTML
-  const temp = document.createElement('div');
-  temp.innerHTML = htmlBody
-    .replace(/<\/tr>/gi, '\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/td>/gi, '   ')
-    .replace(/<\/th>/gi, '   ');
-
-  const lines = (temp.textContent || temp.innerText || '')
+  // Extract structured lines safely without live DOM innerHTML execution
+  const lines = extractPlainTextFromHtml(htmlBody)
     .split('\n')
     .map((l) => l.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
@@ -726,13 +722,16 @@ function triggerSystemPrintNow(
     }
   `;
 
+  const sanitizedHtmlBody = sanitizePrintHtml(htmlBody);
+  const safeDocTitle = escapeHtml(title);
+
   let portalContainer = document.getElementById('gosen-print-portal');
   if (!portalContainer) {
     portalContainer = document.createElement('div');
     portalContainer.id = 'gosen-print-portal';
     document.body.appendChild(portalContainer);
   }
-  portalContainer.innerHTML = `<div class="print-wrapper">${htmlBody}</div>`;
+  portalContainer.innerHTML = `<div class="print-wrapper">${sanitizedHtmlBody}</div>`;
 
   // 2. Also mount an isolated print iframe with full layout dimensions off-screen so flex/table rules compute accurately
   let printIframe = document.getElementById('gosen-isolated-print-frame') as HTMLIFrameElement | null;
@@ -755,7 +754,7 @@ function triggerSystemPrintNow(
   document.title = title;
 
   // Swap remote logo URLs with pre-cached base64 data URI if already loaded so logos render instantly in print
-  const printSafeHtmlBody = htmlBody.replace(
+  const printSafeHtmlBody = sanitizedHtmlBody.replace(
     /<img\s+([^>]*?)src="(https?:\/\/[^"]+|\/store-logo\.jpg)"/gi,
     (full, attrs, srcUrl) => {
       const cached = logoBase64Cache.get(srcUrl);
@@ -776,7 +775,7 @@ function triggerSystemPrintNow(
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <title>${title}</title>
+  <title>${safeDocTitle}</title>
   <style>${sharedCss}</style>
 </head>
 <body>
@@ -5255,11 +5254,11 @@ export function buildClientAppKeysDossierHtml(
               </div>
               <div style="background:#0f172a;color:#ffffff;padding:8px 10px;border-radius:8px;">
                 <div style="font-size:9.5px;color:#94a3b8;text-transform:uppercase;font-weight:800;">Contraseña Maestra Admin</div>
-                <div style="font-family:monospace;font-size:14px;font-weight:900;color:#fbbf24;">${company.adminPassword}</div>
+                <div style="font-family:monospace;font-size:14px;font-weight:900;color:#fbbf24;">${company.adminPassword === '__HASHED__' || company.adminPassword?.startsWith('scrypt$') ? 'Protegida (Cifrada)' : company.adminPassword}</div>
               </div>
             </div>
             <div style="margin-top:7px;font-size:11px;color:#065f46;">
-              • <strong>Clave en Ajustes Internos de Tienda:</strong> <code style="font-family:monospace;font-weight:900;background:#ffffff;padding:2px 6px;border-radius:4px;border:1px solid #a7f3d0;">${storeSettings?.accessPassword || company.adminPassword}</code>
+              • <strong>Clave en Ajustes Internos de Tienda:</strong> <code style="font-family:monospace;font-weight:900;background:#ffffff;padding:2px 6px;border-radius:4px;border:1px solid #a7f3d0;">${(() => { const p = storeSettings?.accessPassword || company.adminPassword; return p === '__HASHED__' || p?.startsWith('scrypt$') ? 'Protegida (Cifrada)' : p; })()}</code>
               &nbsp;|&nbsp;
               <strong>Capacidad Contratada:</strong> ${company.maxProducts && company.maxProducts > 0 ? `${company.maxProducts} productos` : 'Productos Ilimitados'} / ${company.maxUsers && company.maxUsers > 0 ? `${company.maxUsers} usuarios` : 'Usuarios Ilimitados'}
             </div>
@@ -5303,7 +5302,7 @@ export function buildClientAppKeysDossierHtml(
             <tr style="border-bottom:1px solid #e2e8f0;background:#ecfdf5;">
               <td style="padding:6px 8px;font-weight:900;">${company.ownerName || 'Administrador Principal'} (Llave Maestra)</td>
               <td style="padding:6px 8px;font-family:monospace;font-weight:900;color:#047857;">Código: ${company.slug}</td>
-              <td style="padding:6px 8px;font-family:monospace;font-weight:900;color:#b45309;">${company.adminPassword}</td>
+              <td style="padding:6px 8px;font-family:monospace;font-weight:900;color:#b45309;">${company.adminPassword === '__HASHED__' || company.adminPassword?.startsWith('scrypt$') ? 'Protegida (Cifrada)' : company.adminPassword}</td>
               <td style="padding:6px 8px;font-weight:800;color:#047857;">ADMIN MAESTRO</td>
               <td style="padding:6px 8px;">Control Total de la Tienda (${enabledMods.length} módulos)</td>
             </tr>
@@ -5313,7 +5312,7 @@ export function buildClientAppKeysDossierHtml(
                   <tr style="border-bottom:1px solid #e2e8f0;background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
                     <td style="padding:6px 8px;font-weight:800;">${u.name} ${u.isActive === false ? '(Inactivo)' : ''}</td>
                     <td style="padding:6px 8px;font-family:monospace;font-weight:800;">@${u.username}</td>
-                    <td style="padding:6px 8px;font-family:monospace;font-weight:900;color:#0f172a;">${u.password}</td>
+                    <td style="padding:6px 8px;font-family:monospace;font-weight:900;color:#0f172a;">${u.password === '__HASHED__' || u.password?.startsWith('scrypt$') ? 'Protegida (Cifrada)' : u.password}</td>
                     <td style="padding:6px 8px;font-weight:800;color:${u.role === 'admin' ? '#047857' : '#4338ca'};">${u.role === 'admin' ? 'Administrador' : 'Colaborador'}</td>
                     <td style="padding:6px 8px;font-size:10px;">${
                       u.role === 'admin'
@@ -5463,6 +5462,9 @@ export async function downloadClientAppKeysDossierPdf(
         : { text: 'LICENCIA ACTIVA', bgRgb: [209, 250, 229], textRgb: [4, 120, 87] },
   });
 
+  const maskCred = (val?: string) =>
+    !val || val === '__HASHED__' || val.startsWith('scrypt$') ? 'Protegida (Cifrada)' : val;
+
   y = drawExecutiveKpiCards(doc, y, [
     {
       label: 'Código de Empresa',
@@ -5472,8 +5474,8 @@ export async function downloadClientAppKeysDossierPdf(
     },
     {
       label: 'Clave Maestra Admin',
-      value: company.adminPassword,
-      subtext: `Ajustes: ${storeSettings?.accessPassword || company.adminPassword}`,
+      value: maskCred(company.adminPassword),
+      subtext: `Ajustes: ${maskCred(storeSettings?.accessPassword || company.adminPassword)}`,
       valueRgb: [180, 83, 9],
     },
     {
@@ -5510,8 +5512,8 @@ export async function downloadClientAppKeysDossierPdf(
       ['Enlace Oficial Sistema POS y Administración', loginUrl],
       ['Enlace Público Catálogo Digital y Pedidos QR', catalogUrl],
       ['Código Único de Empresa (ID de Ingreso)', company.slug],
-      ['Contraseña Maestra de Administrador Principal', company.adminPassword],
-      ['Contraseña de Seguridad en Ajustes de Tienda', storeSettings?.accessPassword || company.adminPassword],
+      ['Contraseña Maestra de Administrador Principal', maskCred(company.adminPassword)],
+      ['Contraseña de Seguridad en Ajustes de Tienda', maskCred(storeSettings?.accessPassword || company.adminPassword)],
       ['Plan, Cuota y Próxima Fecha de Corte', `Plan ${company.plan.toUpperCase()} • Cuota: ${formatCurrencyL(company.price || 0)} • Próximo Corte: ${company.nextBillingDate || 'Vitalicio / Sin vencimiento'}`],
       ['Contrato Oficial de Licencia de Uso', `${contractNumber} (${company.contractData?.status === 'signed' ? 'Firmado Digitalmente' : 'Vigente'})`],
       ['Módulos Habilitados en la Licencia', enabledMods.map((m) => MODULE_LABELS_ES[m] || m).join(', ')],
@@ -5534,14 +5536,14 @@ export async function downloadClientAppKeysDossierPdf(
     [
       `${company.ownerName || 'Administrador Principal'} (Maestro)`,
       `Código: ${company.slug}`,
-      company.adminPassword,
+      maskCred(company.adminPassword),
       'ADMIN MAESTRO',
       'Control Total del Sistema y Ajustes',
     ],
     ...users.map((u) => [
       `${u.name}${u.isActive === false ? ' (Inactivo)' : ''}`,
       `@${u.username}`,
-      u.password,
+      maskCred(u.password),
       u.role === 'admin' ? 'Administrador' : 'Colaborador / Cajero',
       u.role === 'admin'
         ? 'Acceso Administrativo Completo'

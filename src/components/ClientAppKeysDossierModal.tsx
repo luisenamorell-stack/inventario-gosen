@@ -15,6 +15,7 @@ import {
   saveUserToFirestore,
   deleteUserFromFirestore,
   saveStoreSettingsToFirestore,
+  isMaskedOrHashedPassword,
 } from '../firebase/firestoreService';
 import {
   ClientAppKeysDossierPayload,
@@ -145,7 +146,11 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
 
   useEffect(() => {
     if (isOpen && currentCompany?.slug) {
-      setEditingMasterPass(currentCompany.adminPassword || 'ADMIN2026');
+      setEditingMasterPass(
+        isMaskedOrHashedPassword(currentCompany.adminPassword)
+          ? ''
+          : currentCompany.adminPassword || 'ADMIN2026'
+      );
       loadClientDossier(currentCompany.slug);
     }
   }, [isOpen, currentCompany?.slug, currentCompany?.adminPassword, loadClientDossier]);
@@ -280,6 +285,9 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
 
   const buildFullTextDossier = (): string => {
     const brand = saasGlobalConfig?.saasBrandName || 'MIAPPHN.ONLINE';
+    const formatCred = (val?: string) =>
+      isMaskedOrHashedPassword(val) ? 'Protegida (Cifrada)' : val || 'N/A';
+
     const userLines =
       users.length === 0
         ? '• (Sin colaboradores adicionales creados; puede crearlos en el módulo Colaboradores)'
@@ -288,7 +296,7 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
               (u) =>
                 `• *${u.name}* (${u.role === 'admin' ? 'Administrador' : 'Colaborador'}) -> Usuario: *@${
                   u.username
-                }* | Clave: *${u.password}*`
+                }* | Clave: *${formatCred(u.password)}*`
             )
             .join('\n');
 
@@ -333,12 +341,22 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
       `2️⃣ *Catálogo Digital Público y Pedidos WhatsApp:*\n${catalogUrl}\n\n` +
       `🔐 *LLAVES MAESTRAS DE ADMINISTRADOR:*\n` +
       `• Código de Empresa: *${currentCompany.slug}*\n` +
-      `• Contraseña Maestra Admin: *${currentCompany.adminPassword}*\n` +
+      `• Contraseña Maestra Admin: *${
+        isMaskedOrHashedPassword(currentCompany.adminPassword)
+          ? 'Protegida (Cifrada)'
+          : currentCompany.adminPassword
+      }*\n` +
       `• Contraseña en Ajustes de Tienda: *${
-        storeSettings?.accessPassword || currentCompany.adminPassword
+        isMaskedOrHashedPassword(storeSettings?.accessPassword || currentCompany.adminPassword)
+          ? 'Protegida (Cifrada)'
+          : storeSettings?.accessPassword || currentCompany.adminPassword
       }*\n\n` +
       `👥 *USUARIOS Y COLABORADORES REGISTRADOS (${users.length + 1}):*\n` +
-      `• *Administrador Maestro* -> Código: *${currentCompany.slug}* | Clave: *${currentCompany.adminPassword}*\n` +
+      `• *Administrador Maestro* -> Código: *${currentCompany.slug}* | Clave: *${
+        isMaskedOrHashedPassword(currentCompany.adminPassword)
+          ? 'Protegida (Cifrada)'
+          : currentCompany.adminPassword
+      }*\n` +
       `${userLines}\n\n` +
       `🏬 *BODEGAS Y SUCURSALES CONFIGURADAS:*\n` +
       `${whLines}\n\n` +
@@ -639,24 +657,26 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
                         >
                           {showMasterPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleCopyText(
-                              'admin_pass',
-                              currentCompany.adminPassword,
-                              'Contraseña maestra'
-                            )
-                          }
-                          className="text-[11px] font-extrabold text-amber-900 hover:underline inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          {copiedField === 'admin_pass' ? (
-                            <Check className="w-3 h-3 text-emerald-700" />
-                          ) : (
-                            <Copy className="w-3 h-3" />
-                          )}
-                          <span>Copiar</span>
-                        </button>
+                        {!isMaskedOrHashedPassword(currentCompany.adminPassword) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleCopyText(
+                                'admin_pass',
+                                currentCompany.adminPassword,
+                                'Contraseña maestra'
+                              )
+                            }
+                            className="text-[11px] font-extrabold text-amber-900 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            {copiedField === 'admin_pass' ? (
+                              <Check className="w-3 h-3 text-emerald-700" />
+                            ) : (
+                              <Copy className="w-3 h-3" />
+                            )}
+                            <span>Copiar</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -664,26 +684,36 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
                       <input
                         type={showMasterPass ? 'text' : 'password'}
                         value={editingMasterPass}
+                        placeholder={
+                          isMaskedOrHashedPassword(currentCompany.adminPassword)
+                            ? 'Protegida con Hash (escribe nueva clave para cambiar)'
+                            : 'Contraseña maestra'
+                        }
                         onChange={(e) => setEditingMasterPass(e.target.value)}
                         className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-amber-300 font-mono font-black text-sm text-slate-900"
                       />
-                      {editingMasterPass.trim() !== currentCompany.adminPassword && (
-                        <button
-                          type="button"
-                          disabled={isSavingMasterPass}
-                          onClick={handleUpdateMasterPassword}
-                          className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[11px] shrink-0 cursor-pointer"
-                        >
-                          {isSavingMasterPass ? '...' : 'Guardar'}
-                        </button>
-                      )}
+                      {editingMasterPass.trim().length > 0 &&
+                        editingMasterPass.trim() !== currentCompany.adminPassword && (
+                          <button
+                            type="button"
+                            disabled={isSavingMasterPass}
+                            onClick={handleUpdateMasterPassword}
+                            className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[11px] shrink-0 cursor-pointer"
+                          >
+                            {isSavingMasterPass ? '...' : 'Guardar'}
+                          </button>
+                        )}
                     </div>
 
                     <div className="text-[10px] text-amber-900/80 flex items-center justify-between">
                       <span>
                         Clave en Ajustes:{' '}
                         <strong className="font-mono">
-                          {storeSettings?.accessPassword || currentCompany.adminPassword}
+                          {isMaskedOrHashedPassword(
+                            storeSettings?.accessPassword || currentCompany.adminPassword
+                          )
+                            ? 'Protegida con Hash scrypt'
+                            : storeSettings?.accessPassword || currentCompany.adminPassword}
                         </strong>
                       </span>
                     </div>
@@ -845,7 +875,9 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
                       Código: {currentCompany.slug}
                     </td>
                     <td className="py-2.5 px-3 font-mono font-black text-amber-800">
-                      {currentCompany.adminPassword}
+                      {isMaskedOrHashedPassword(currentCompany.adminPassword)
+                        ? '🔒 Cifrada (scrypt)'
+                        : currentCompany.adminPassword}
                     </td>
                     <td className="py-2.5 px-3">
                       <span className="px-2 py-0.5 rounded bg-emerald-600 text-white font-black text-[10px] uppercase">
@@ -861,8 +893,8 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
                         onClick={() =>
                           handleCopyText(
                             'master_row',
-                            `Empresa: ${currentCompany.slug} | Clave Admin: ${currentCompany.adminPassword} | Link: ${loginUrl}`,
-                            'Credencial maestra'
+                            `Empresa: ${currentCompany.slug} | Link: ${loginUrl}`,
+                            'Acceso de empresa'
                           )
                         }
                         className="px-2 py-1 rounded bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[11px] cursor-pointer"
@@ -887,7 +919,7 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
                         @{u.username}
                       </td>
                       <td className="py-2.5 px-3 font-mono font-black text-slate-900">
-                        {u.password}
+                        {isMaskedOrHashedPassword(u.password) ? '🔒 Cifrada' : u.password}
                       </td>
                       <td className="py-2.5 px-3">
                         <span
@@ -912,7 +944,9 @@ export const ClientAppKeysDossierModal: React.FC<ClientAppKeysDossierModalProps>
                             onClick={() =>
                               handleCopyText(
                                 `usr_${u.id}`,
-                                `Sistema: ${loginUrl} | Usuario: @${u.username} | Contraseña: ${u.password}`,
+                                isMaskedOrHashedPassword(u.password)
+                                  ? `Sistema: ${loginUrl} | Usuario: @${u.username}`
+                                  : `Sistema: ${loginUrl} | Usuario: @${u.username} | Contraseña: ${u.password}`,
                                 `Acceso de @${u.username}`
                               )
                             }

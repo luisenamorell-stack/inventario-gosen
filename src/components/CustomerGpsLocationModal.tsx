@@ -18,6 +18,8 @@ import {
   RefreshCw,
   ExternalLink,
   AlertCircle,
+  Globe,
+  Compass,
 } from 'lucide-react';
 import { SaleRecord, CreditAccountControlMeta } from '../types';
 
@@ -131,32 +133,46 @@ const MapPanController: React.FC<{ panTarget: PanTarget | null }> = ({ panTarget
 
 const MapLoadStatusGuard: React.FC<{
   coords: { lat: number; lng: number } | null;
-}> = ({ coords }) => {
+  onSwitchToIframe: () => void;
+}> = ({ coords, onSwitchToIframe }) => {
   const status = useApiLoadingStatus();
 
   if (status === APILoadingStatus.FAILED || status === APILoadingStatus.AUTH_FAILURE) {
     return (
-      <div className="absolute inset-0 z-10 bg-slate-100/95 flex flex-col items-center justify-center p-4 text-center text-xs text-slate-700">
+      <div className="absolute inset-0 z-10 bg-slate-100/98 flex flex-col items-center justify-center p-4 text-center text-xs text-slate-700">
         <AlertCircle className="w-7 h-7 text-amber-600 mb-1.5" />
         <p className="font-bold text-slate-900">
-          No se pudo cargar el mapa interactivo en este dispositivo.
+          El mapa interactivo requiere clave de API de Google Maps en este dispositivo.
         </p>
-        <p className="text-[11px] text-slate-600 mt-1">
+        <p className="text-[11px] text-slate-600 mt-1 mb-3">
           {coords
-            ? `Las coordenadas GPS ya están listas (${coords.lat.toFixed(6)}, ${coords.lng.toFixed(
-                6
-              )}) y puedes guardarlas normalmente.`
-            : 'Verifica tu conexión a internet o presiona "Obtener Ubicación GPS Aquí".'}
+            ? `Tus coordenadas GPS (${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}) están listas.`
+            : 'Puedes usar el botón de navegación GPS directa abajo.'}
         </p>
+        <button
+          type="button"
+          onClick={onSwitchToIframe}
+          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm cursor-pointer flex items-center gap-1.5"
+        >
+          <Globe className="w-4 h-4" />
+          <span>Abrir Vista de Mapa Web Confiable</span>
+        </button>
       </div>
     );
   }
 
   if (status === APILoadingStatus.LOADING || status === APILoadingStatus.NOT_LOADED) {
     return (
-      <div className="absolute inset-0 z-10 bg-slate-100/80 flex items-center justify-center text-xs font-bold text-slate-600 gap-2 pointer-events-none">
-        <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
-        <span>Cargando mapa interactivo...</span>
+      <div className="absolute inset-0 z-10 bg-slate-100/90 flex flex-col items-center justify-center text-xs font-bold text-slate-600 gap-2">
+        <RefreshCw className="w-5 h-5 animate-spin text-emerald-600" />
+        <span>Cargando mapa...</span>
+        <button
+          type="button"
+          onClick={onSwitchToIframe}
+          className="mt-2 text-[11px] text-emerald-700 underline font-semibold cursor-pointer hover:text-emerald-900"
+        >
+          ¿Tarda demasiado? Cambiar a vista web inmediata
+        </button>
       </div>
     );
   }
@@ -215,6 +231,7 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(() =>
     hasExistingCoords ? { lat: existingLat!, lng: existingLng! } : null
   );
+  const [mapRenderMode, setMapRenderMode] = useState<'interactive' | 'iframe'>('interactive');
   const [panTarget, setPanTarget] = useState<PanTarget | null>(null);
   const [accuracy, setAccuracy] = useState<number | undefined>(controlMeta?.customerGpsAccuracy);
   const [formattedAddress, setFormattedAddress] = useState<string>(
@@ -375,12 +392,15 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
     }
   };
 
-  const googleMapsNavigationUrl = coords
-    ? `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`
-    : '';
+  const currentLat = coords?.lat ?? DEFAULT_HONDURAS_CENTER.lat;
+  const currentLng = coords?.lng ?? DEFAULT_HONDURAS_CENTER.lng;
+  const googleMapsNavigationUrl = `https://www.google.com/maps/dir/?api=1&destination=${currentLat},${currentLng}`;
+  const wazeNavigationUrl = `https://waze.com/ul?ll=${currentLat},${currentLng}&navigate=yes`;
+  const appleMapsUrl = `https://maps.apple.com/?q=${currentLat},${currentLng}`;
+  const embedMapUrl = `https://maps.google.com/maps?q=${currentLat},${currentLng}&z=${coords ? 16 : 12}&output=embed`;
 
   return (
-    <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50">
+    <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-150">
       <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden max-h-[94vh] flex flex-col border border-emerald-200">
         {/* Header */}
         <div className="px-5 py-4 bg-gradient-to-r from-emerald-700 via-teal-700 to-slate-900 text-white flex items-center justify-between shrink-0">
@@ -406,7 +426,7 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
           </button>
         </div>
 
-        <form onSubmit={handleSave} className="p-4 sm:p-5 overflow-y-auto space-y-4">
+        <form onSubmit={handleSave} className="p-4 sm:p-5 overflow-y-auto space-y-4 scroll-container">
           {/* Primary Action: Capture GPS right at customer's location */}
           <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -445,20 +465,22 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
               <div>
                 <p className="font-bold">{gpsError}</p>
                 <p className="text-[11px] text-amber-800 mt-0.5">
-                  También puedes mover el mapa, arrastrar el pin o tocar el punto exacto abajo.
+                  También puedes tocar el mapa o usar los botones de navegación directa abajo.
                 </p>
               </div>
             </div>
           )}
 
-          {/* Coordinates & Reverse Geocoded Status Badge */}
-          {coords && (
-            <div className="p-3 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-2 text-xs">
+          {/* Coordinates & Navigation App Buttons */}
+          <div className="p-3 rounded-xl bg-slate-900 text-white space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="space-y-0.5">
                 <div className="flex items-center gap-1.5 font-black text-emerald-400">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>
-                    Coordenadas GPS: {coords.lat.toFixed(6)}, {coords.lng.toFixed(6)}
+                    {coords
+                      ? `Coordenadas: ${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`
+                      : 'Ubicación pendiente de captura'}
                   </span>
                   {accuracy !== undefined && accuracy > 0 && (
                     <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px]">
@@ -468,60 +490,105 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
                 </div>
                 {isReverseGeocoding ? (
                   <p className="text-[11px] text-slate-300">
-                    Consultando nombre de calle y colonia en Google Maps...
+                    Buscando dirección postal en Google Maps...
                   </p>
                 ) : formattedAddress ? (
                   <p className="text-[11px] text-slate-200">
-                    📍 Detectado: <strong>{formattedAddress}</strong>
-                    {plusCode ? ` (${plusCode})` : ''}
+                    📍 {formattedAddress}
                   </p>
                 ) : null}
               </div>
+            </div>
 
+            {/* Direct GPS App Navigation Strip (Works 100% on Mobile iOS / Android) */}
+            <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-800">
               <a
                 href={googleMapsNavigationUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] flex items-center gap-1 shrink-0 transition-all"
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center justify-center gap-1.5 shadow-xs transition-all active:scale-95 text-center"
+                title="Abrir navegación en Google Maps"
               >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Iniciar Ruta GPS</span>
+                <Navigation className="w-3.5 h-3.5 text-emerald-200 shrink-0" />
+                <span className="truncate">Google Maps</span>
+              </a>
+
+              <a
+                href={wazeNavigationUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-black text-[11px] flex items-center justify-center gap-1.5 shadow-xs transition-all active:scale-95 text-center"
+                title="Abrir navegación en Waze"
+              >
+                <Compass className="w-3.5 h-3.5 text-sky-200 shrink-0" />
+                <span className="truncate">Waze</span>
+              </a>
+
+              <a
+                href={appleMapsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-black text-[11px] flex items-center justify-center gap-1.5 shadow-xs transition-all active:scale-95 text-center"
+                title="Abrir en Apple Maps"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                <span className="truncate">Apple Maps</span>
               </a>
             </div>
-          )}
+          </div>
 
-          {/* Interactive Google Map */}
+          {/* Map Render Mode Selector + Interactive Map / Embed Iframe */}
           <div className="rounded-2xl overflow-hidden border border-slate-300 shadow-xs bg-slate-100">
-            <div className="px-3 py-1.5 bg-slate-100 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 font-semibold">
-              <span>Mapa Interactivo (Mueve el mapa, arrastra el pin o toca para ubicar)</span>
-              <div className="flex items-center gap-2">
-                {controlMeta?.customerGpsCapturedBy && (
-                  <span className="text-[10px] text-emerald-700 font-bold">
-                    Por: {controlMeta.customerGpsCapturedBy}
-                  </span>
-                )}
-                {coords && (
-                  <button
-                    type="button"
-                    onClick={handleRecenterOnPin}
-                    className="px-2 py-0.5 rounded-md bg-white hover:bg-emerald-50 border border-slate-300 text-[10px] font-extrabold text-emerald-800 cursor-pointer flex items-center gap-1"
-                    title="Centrar vista del mapa en el pin del cliente"
-                  >
-                    <Crosshair className="w-3 h-3" />
-                    <span>Centrar Pin</span>
-                  </button>
-                )}
+            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                <span>Vista del Mapa</span>
+              </div>
+              <div className="flex items-center gap-1 bg-slate-200/80 p-0.5 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setMapRenderMode('interactive')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-extrabold transition-all cursor-pointer ${
+                    mapRenderMode === 'interactive'
+                      ? 'bg-white text-emerald-950 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  🗺️ Interactivo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMapRenderMode('iframe')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-extrabold transition-all cursor-pointer ${
+                    mapRenderMode === 'iframe'
+                      ? 'bg-white text-emerald-950 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  🌐 Vista Web (Iframe)
+                </button>
               </div>
             </div>
-            <div className="relative" style={{ width: '100%', height: '300px', touchAction: 'none' }}>
-              {mapsApiKey ? (
+
+            <div className="relative" style={{ width: '100%', height: '280px', touchAction: 'auto' }}>
+              {mapRenderMode === 'iframe' ? (
+                <iframe
+                  title="Mapa de Ubicación del Cliente"
+                  src={embedMapUrl}
+                  width="100%"
+                  height="280"
+                  style={{ border: 0 }}
+                  allowFullScreen={true}
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+              ) : mapsApiKey ? (
                 <APIProvider
                   apiKey={mapsApiKey}
                   libraries={['marker']}
                   language="es"
                   region="HN"
                 >
-                  <MapLoadStatusGuard coords={coords} />
+                  <MapLoadStatusGuard coords={coords} onSwitchToIframe={() => setMapRenderMode('iframe')} />
                   <GoogleMap
                     mapId="DEMO_MAP_ID"
                     defaultCenter={initialCenterRef.current}
@@ -534,7 +601,7 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
                     clickableIcons={false}
                     onClick={handleMapClick}
                     internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
-                    style={{ width: '100%', height: '300px' }}
+                    style={{ width: '100%', height: '280px' }}
                   >
                     <MapPanController panTarget={panTarget} />
                     {coords && (
@@ -542,7 +609,7 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
                         position={coords}
                         draggable={true}
                         onDragEnd={handleMarkerDragEnd}
-                        title={sale.customerName || 'Ubicación del Cliente (Arrastra para ajustar)'}
+                        title={sale.customerName || 'Ubicación del Cliente'}
                       >
                         <Pin
                           background="#059669"
@@ -555,14 +622,34 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
                   </GoogleMap>
                 </APIProvider>
               ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center text-slate-500 text-xs">
-                  <MapPin className="w-8 h-8 text-emerald-600 mb-1" />
-                  <p className="font-bold text-slate-700">
+                <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-white space-y-2">
+                  <p className="text-xs font-bold text-slate-700">
                     {coords
                       ? `Coordenadas listas: ${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`
-                      : 'Presiona "Obtener Ubicación GPS Aquí" para capturar las coordenadas.'}
+                      : 'Presiona "Obtener Ubicación GPS Aquí"'}
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => setMapRenderMode('iframe')}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold text-xs"
+                  >
+                    Cargar Mapa Web Confiable
+                  </button>
                 </div>
+              )}
+            </div>
+
+            <div className="px-3 py-1.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500">
+              <span>{mapRenderMode === 'interactive' ? 'Toca o arrastra el pin en el mapa' : 'Vista web móvil garantizada'}</span>
+              {coords && mapRenderMode === 'interactive' && (
+                <button
+                  type="button"
+                  onClick={handleRecenterOnPin}
+                  className="font-bold text-emerald-700 hover:text-emerald-900 cursor-pointer flex items-center gap-1"
+                >
+                  <Crosshair className="w-3 h-3" />
+                  <span>Centrar</span>
+                </button>
               )}
             </div>
           </div>
@@ -571,7 +658,7 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
           <div className="space-y-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                Dirección / Colonia / Calle del Cliente (Detectada por GPS o editable) *
+                Dirección / Colonia / Calle del Cliente *
               </label>
               <textarea
                 rows={2}
@@ -579,20 +666,20 @@ export const CustomerGpsLocationModal: React.FC<CustomerGpsLocationModalProps> =
                 placeholder="Ej. Col. Kennedy, Calle Principal, Tegucigalpa..."
                 value={addressOrRouteInput}
                 onChange={(e) => setAddressOrRouteInput(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                Referencia Visual de la Casa / Local (Opcional para el Cobrador)
+                Referencia Visual de la Casa / Local (Opcional)
               </label>
               <input
                 type="text"
-                placeholder="Ej. Casa de dos plantas color verde, portón negro frente a pulpería..."
+                placeholder="Ej. Casa de dos plantas color verde, portón negro..."
                 value={referenceNotes}
                 onChange={(e) => setReferenceNotes(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
           </div>

@@ -7,7 +7,11 @@ import {
   InvoiceTemplateConfig,
   getEffectiveInvoiceTemplate,
 } from '../types';
-import { setCachedStoreSettings } from '../firebase/firestoreService';
+import {
+  setCachedStoreSettings,
+  HASHED_PASSWORD_MASK,
+  isMaskedOrHashedPassword,
+} from '../firebase/firestoreService';
 import { uploadStoreLogo } from '../firebase/storageService';
 import { PrinterConnectionManager } from './PrintFormatModal';
 import { StoreLocationsEditor } from './StoreLocationsEditor';
@@ -102,7 +106,12 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
       ? currentSettings.receiptFooterText
       : '¡Gracias por su compra! Vuelva pronto.'
   );
-  const [accessPassword, setAccessPassword] = useState(currentSettings.accessPassword || defaultPassword);
+  const isCurrentPassProtected = isMaskedOrHashedPassword(currentSettings.accessPassword);
+  const [accessPassword, setAccessPassword] = useState(() =>
+    isMaskedOrHashedPassword(currentSettings.accessPassword)
+      ? ''
+      : currentSettings.accessPassword || defaultPassword
+  );
   const [showAccessPassword, setShowAccessPassword] = useState(false);
   const [showLocationsInCatalog, setShowLocationsInCatalog] = useState<boolean>(
     currentSettings.showLocationsInCatalog !== false
@@ -155,7 +164,11 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
         ? currentSettings.receiptFooterText
         : '¡Gracias por su compra! Vuelva pronto.'
     );
-    setAccessPassword(currentSettings.accessPassword || defaultPassword);
+    setAccessPassword(
+      isMaskedOrHashedPassword(currentSettings.accessPassword)
+        ? ''
+        : currentSettings.accessPassword || defaultPassword
+    );
     setShowLocationsInCatalog(currentSettings.showLocationsInCatalog !== false);
     setStoreLocations(Array.isArray(currentSettings.storeLocations) ? currentSettings.storeLocations : []);
     setBankAccounts(Array.isArray(currentSettings.bankAccounts) ? currentSettings.bankAccounts : []);
@@ -186,7 +199,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
         defaultPrinterFormat,
         receiptFooterText: nextFooter.trim(),
         invoiceTemplate: nextTemplate,
-        accessPassword: accessPassword.trim() || defaultPassword,
+        accessPassword:
+          accessPassword.trim() || (isCurrentPassProtected ? HASHED_PASSWORD_MASK : defaultPassword),
         showLocationsInCatalog,
         storeLocations,
         bankAccounts: effectiveBanks,
@@ -254,7 +268,9 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
       (currentSettings.receiptFooterText !== undefined
         ? currentSettings.receiptFooterText
         : '¡Gracias por su compra! Vuelva pronto.') ||
-    accessPassword !== (currentSettings.accessPassword || defaultPassword) ||
+    (isCurrentPassProtected
+      ? accessPassword.trim().length > 0
+      : accessPassword !== (currentSettings.accessPassword || defaultPassword)) ||
     showLocationsInCatalog !== (currentSettings.showLocationsInCatalog !== false) ||
     JSON.stringify(storeLocations) !== JSON.stringify(currentSettings.storeLocations || []) ||
     JSON.stringify(bankAccounts) !== JSON.stringify(currentSettings.bankAccounts || []) ||
@@ -347,12 +363,12 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
       return;
     }
 
-    if (!accessPassword.trim()) {
+    if (!isCurrentPassProtected && !accessPassword.trim()) {
       if (showToast) showToast('Por favor ingresa una contraseña para el acceso a la app', 'warning');
       return;
     }
 
-    if (accessPassword.trim().length < 4) {
+    if (accessPassword.trim().length > 0 && accessPassword.trim().length < 4) {
       if (showToast) showToast('La contraseña debe tener un mínimo de 4 caracteres', 'warning');
       return;
     }
@@ -362,6 +378,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
       const effectiveBanks = mergeBankAccountsWithPendingDraft(bankAccounts, pendingBankDraft);
       setBankAccounts(effectiveBanks);
       setPendingBankDraft(null);
+      const effectiveAccessPassword =
+        accessPassword.trim() || (isCurrentPassProtected ? HASHED_PASSWORD_MASK : defaultPassword);
       const updatedSettings: StoreSettings = {
         ...currentSettings,
         storeName: storeName.trim(),
@@ -373,7 +391,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
         defaultPrinterFormat,
         receiptFooterText: receiptFooterText.trim(),
         invoiceTemplate,
-        accessPassword: accessPassword.trim(),
+        accessPassword: effectiveAccessPassword,
         showLocationsInCatalog,
         storeLocations,
         bankAccounts: effectiveBanks,
@@ -389,6 +407,7 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
       }
 
       await onSaveSettings(updatedSettings);
+      setAccessPassword('');
       if (showToast) {
         showToast('¡Configuración de la tienda guardada y sincronizada!', 'success');
       }
@@ -1149,7 +1168,9 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   defaultPrinterFormat,
                   receiptFooterText: nextFooter.trim(),
                   invoiceTemplate: nextTemplate,
-                  accessPassword: accessPassword.trim() || defaultPassword,
+                  accessPassword:
+                    accessPassword.trim() ||
+                    (isCurrentPassProtected ? HASHED_PASSWORD_MASK : defaultPassword),
                   showLocationsInCatalog,
                   storeLocations,
                   bankAccounts: effectiveBanks,
@@ -1181,7 +1202,9 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   defaultPrinterFormat,
                   receiptFooterText: receiptFooterText.trim(),
                   invoiceTemplate,
-                  accessPassword: accessPassword.trim() || defaultPassword,
+                  accessPassword:
+                    accessPassword.trim() ||
+                    (isCurrentPassProtected ? HASHED_PASSWORD_MASK : defaultPassword),
                   showLocationsInCatalog,
                   storeLocations,
                   bankAccounts: nextBanks,
@@ -1222,7 +1245,12 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   </div>
                 </div>
 
-                {accessPassword === defaultPassword ? (
+                {isCurrentPassProtected ? (
+                  <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-200">
+                    <Lock className="w-3.5 h-3.5 text-emerald-500" />
+                    Protegida con Hash scrypt
+                  </span>
+                ) : accessPassword === defaultPassword ? (
                   <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold border border-slate-200">
                     Clave Predeterminada
                   </span>
@@ -1236,7 +1264,8 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
-                  Contraseña de Acceso <span className="text-rose-500">*</span>
+                  {isCurrentPassProtected ? 'Cambiar Contraseña de Acceso (Opcional)' : 'Contraseña de Acceso'}{' '}
+                  {!isCurrentPassProtected && <span className="text-rose-500">*</span>}
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -1246,9 +1275,13 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                     type={showAccessPassword ? 'text' : 'password'}
                     value={accessPassword}
                     onChange={(e) => setAccessPassword(e.target.value)}
-                    placeholder="Ingresa la contraseña para ingresar a la app"
+                    placeholder={
+                      isCurrentPassProtected
+                        ? '•••••••• (Dejar en blanco para conservar la actual, o escribe nueva clave)'
+                        : 'Ingresa la contraseña para ingresar a la app'
+                    }
                     maxLength={60}
-                    required
+                    required={!isCurrentPassProtected}
                     className="w-full pl-10 pr-12 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-semibold text-slate-800 placeholder-slate-400 shadow-sm transition-all text-sm"
                   />
                   <button
@@ -1268,14 +1301,14 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
 
                 <div className="flex flex-wrap items-center justify-between gap-2 mt-2.5">
                   <p className="text-xs text-slate-400 font-medium">
-                    Mínimo 4 caracteres. Ya no se mostrará en la pantalla de inicio por seguridad.
+                    Mínimo 4 caracteres. Cifrada con scrypt en el servidor y oculta por seguridad.
                   </p>
-                  {accessPassword !== defaultPassword && (
+                  {(isCurrentPassProtected || accessPassword !== defaultPassword) && (
                     <button
                       type="button"
                       onClick={() => {
                         setAccessPassword(defaultPassword);
-                        if (showToast) showToast(`Contraseña reestablecida a ${defaultPassword} (haz clic en Guardar)`, 'info');
+                        if (showToast) showToast(`Contraseña preparada a ${defaultPassword} (haz clic en Guardar)`, 'info');
                       }}
                       className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
                     >
