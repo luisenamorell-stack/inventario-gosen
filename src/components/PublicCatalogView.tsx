@@ -38,7 +38,7 @@ import {
 import { CatalogBankAccountCard } from './StoreBankAccountsEditor';
 import { getCachedStoreSettings } from '../firebase/firestoreService';
 import { useCatalogBrandPalette } from '../utils/catalogThemeEngine';
-import { getProductColors, resolveColorSwatch } from '../utils/productColorUtils';
+import { getProductColors, getProductColorStock, resolveColorSwatch } from '../utils/productColorUtils';
 
 interface CartItem {
   product: Product;
@@ -821,6 +821,7 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                       <div className="flex flex-wrap items-center gap-1 pt-1.5">
                         {productColors.map((colName) => {
                           const sw = resolveColorSwatch(colName);
+                          const colQty = getProductColorStock(product, colName);
                           const isColActive =
                             productColors.length > 1 && activeCardColor === colName;
                           return (
@@ -851,7 +852,10 @@ export const PublicCatalogView: React.FC<PublicCatalogViewProps> = ({
                                   borderColor: sw.borderHex,
                                 }}
                               />
-                              <span>{colName}</span>
+                              <span>
+                                {colName}
+                                {colQty !== undefined ? ` (${colQty})` : ''}
+                              </span>
                             </button>
                           );
                         })}

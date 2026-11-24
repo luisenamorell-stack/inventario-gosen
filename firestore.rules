@@ -31,6 +31,7 @@ service cloud.firestore {
              (!('discountValue' in data) || data.discountValue == null || (data.discountValue is number || data.discountValue is int)) &&
              (data.stock is number || data.stock is int) &&
              (!('warehouseStocks' in data) || data.warehouseStocks == null || data.warehouseStocks is map) &&
+             (!('colorStocks' in data) || data.colorStocks == null || data.colorStocks is map) &&
              (!('img' in data) || data.img == null || (data.img is string && data.img.size() <= 1048576)) &&
              (!('img2' in data) || data.img2 == null || (data.img2 is string && data.img2.size() <= 1048576));
     }
@@ -175,7 +176,7 @@ service cloud.firestore {
       allow update: if isValidId(productId) && (
         isValidProduct(incoming()) ||
         (
-          incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'warehouseStocks', 'updatedAt']) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'warehouseStocks', 'colorStocks', 'updatedAt']) &&
           (incoming().stock is number || incoming().stock is int)
         )
       );

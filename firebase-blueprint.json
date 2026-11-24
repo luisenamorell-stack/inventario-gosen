@@ -20,6 +20,7 @@
         "discountValue": { "type": "number" },
         "stock": { "type": "integer" },
         "warehouseStocks": { "type": "object" },
+        "colorStocks": { "type": "object" },
         "img": { "type": "string", "maxLength": 1048576 },
         "img2": { "type": "string", "maxLength": 1048576 }
       },

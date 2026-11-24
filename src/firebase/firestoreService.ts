@@ -60,6 +60,7 @@ import {
   RestaurantOrderType,
   KitchenCommandStatus
 } from '../types';
+import { applyColorStockDelta, normalizeColorStocks } from '../utils/productColorUtils';
 import { INITIAL_INVENTORY, INITIAL_SUPPLIERS } from '../data/mockData';
 import { db, auth } from './config';
 import { scrypt } from 'scrypt-js';
@@ -1696,6 +1697,7 @@ function parseInventorySnapshotDocs(snapshot: any, slug: string, fromServer = tr
         data.warehouseStocks && typeof data.warehouseStocks === 'object'
           ? data.warehouseStocks
           : undefined,
+      colorStocks: normalizeColorStocks(parsedColors || [], data.colorStocks),
       img: data.img || '',
       img2: data.img2 || undefined,
     });
@@ -1766,6 +1768,11 @@ export async function flushPendingInventoryToFirestore(
         if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
           payload.warehouseStocks = product.warehouseStocks;
         }
+        const normalizedCS = normalizeColorStocks(
+          Array.isArray(product.colors) ? product.colors : [],
+          product.colorStocks
+        );
+        payload.colorStocks = normalizedCS ?? null;
 
         batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
         pushedCodes.push(cleanCode);
@@ -2481,6 +2488,11 @@ export async function saveProductToFirestore(
     if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
       payload.warehouseStocks = product.warehouseStocks;
     }
+    const cleanColorsForStock = Array.isArray(product.colors)
+      ? product.colors.map((c) => String(c || '').trim()).filter(Boolean)
+      : [];
+    const normalizedCS = normalizeColorStocks(cleanColorsForStock, product.colorStocks);
+    payload.colorStocks = normalizedCS ?? null;
     return stripUndefinedDeep(payload);
   };
 
@@ -2690,6 +2702,13 @@ export async function bulkSaveProductsToFirestore(
         }
         if (product.warehouseStocks && typeof product.warehouseStocks === 'object') {
           payload.warehouseStocks = product.warehouseStocks;
+        }
+        const bulkColors = Array.isArray(product.colors)
+          ? product.colors.map((c) => String(c || '').trim()).filter(Boolean)
+          : [];
+        const normalizedBulkCS = normalizeColorStocks(bulkColors, product.colorStocks);
+        if (normalizedBulkCS) {
+          payload.colorStocks = normalizedBulkCS;
         }
 
         batch.set(docRef, stripUndefinedDeep(payload), { merge: true });
@@ -3079,14 +3098,45 @@ export async function seedInitialDataIfEmpty(companyId = getActiveCompanyId()): 
 // ----------------- PING / HEALTH CHECK -----------------
 
 export async function pingFirestore(): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return {
+      ok: false,
+      latencyMs: 0,
+      error: 'El dispositivo no tiene conexión a internet.',
+    };
+  }
+
   const start = Date.now();
+  const testDocRef = doc(db, 'test', 'connection');
+  const timeoutMs = 12000;
+
+  const withTimeout = <T>(promise: Promise<T>): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Tiempo de espera agotado al conectar con Firestore.')), timeoutMs)
+      ),
+    ]);
+
   try {
-    const testDocRef = doc(db, 'test', 'connection');
-    await setDoc(testDocRef, { ping: Date.now() }, { merge: true });
-    await getDocFromServer(testDocRef);
+    // Overwrite without { merge: true } so only ['ping'] exists and matches firestore.rules strictly
+    await withTimeout(setDoc(testDocRef, { ping: Date.now() }));
+    await withTimeout(getDocFromServer(testDocRef));
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err: any) {
-    return { ok: false, latencyMs: Date.now() - start, error: err?.message || String(err) };
+    // Fallback check: verify whether server read works even if write was rejected or throttled
+    try {
+      await withTimeout(getDocFromServer(testDocRef));
+      return { ok: true, latencyMs: Date.now() - start };
+    } catch (readErr: any) {
+      const rawMsg = readErr?.message || err?.message || String(err);
+      const friendlyMsg = rawMsg.includes('offline')
+        ? 'Cliente sin conexión con el servidor de Firestore.'
+        : rawMsg.includes('permission') || rawMsg.includes('PERMISSION_DENIED')
+        ? 'Permisos insuficientes en las reglas de Firestore (/test/connection).'
+        : rawMsg;
+      return { ok: false, latencyMs: Date.now() - start, error: friendlyMsg };
+    }
   }
 }
 
@@ -3827,6 +3877,7 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
           : undefined,
       ...(data.isHistoricalPreApp ? { isHistoricalPreApp: true } : {}),
       ...(data.skipInventoryDeduction ? { skipInventoryDeduction: true } : {}),
+      ...(data.isCreditPricingPending ? { isCreditPricingPending: true } : {}),
       warrantyInfo:
         data.warrantyInfo && typeof data.warrantyInfo === 'object'
           ? {
@@ -4259,12 +4310,18 @@ export async function recordSaleInFirestore(
     amountPaid: paidVal,
     change: Number(saleData.change) || 0,
     balanceDue: computedBalanceDue,
-    creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
+    creditStatus: isCredit
+      ? saleData.isCreditPricingPending || computedBalanceDue > 0.01
+        ? 'pending'
+        : 'paid'
+      : 'paid',
     creditDueDate: String(saleData.creditDueDate || '').trim().slice(0, 50),
     creditPayments: Array.isArray(saleData.creditPayments) ? saleData.creditPayments : [],
     creditContract: saleData.creditContract ? saleData.creditContract : undefined,
     isHistoricalPreApp: saleData.isHistoricalPreApp ? true : undefined,
-    skipInventoryDeduction: saleData.skipInventoryDeduction ? true : undefined,
+    skipInventoryDeduction:
+      saleData.skipInventoryDeduction || saleData.isHistoricalPreApp ? true : undefined,
+    isCreditPricingPending: saleData.isCreditPricingPending ? true : undefined,
     warrantyInfo: saleData.warrantyInfo ? saleData.warrantyInfo : undefined,
     customerName: String(saleData.customerName || 'Consumidor Final').trim().slice(0, 200),
     customerPhone: String(saleData.customerPhone || '').trim().slice(0, 50),
@@ -4328,7 +4385,7 @@ export async function recordSaleInFirestore(
   }
 
   // 2. Deduct stock in inventory (and in the chosen warehouse per item) unless skipped for pre-app historical sales
-  if (!saleData.skipInventoryDeduction) {
+  if (!saleData.skipInventoryDeduction && !saleData.isHistoricalPreApp) {
     try {
       const storeWhData = getCachedStoreWarehouses(slug);
       const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
@@ -4380,12 +4437,14 @@ export async function recordSaleInFirestore(
           itemWhId,
           activeWhList
         );
+        const newColorStocks = applyColorStockDelta(currentProd, item.selectedColor, -qty);
 
         const updatedProd: Product | undefined = currentProd
           ? {
               ...currentProd,
               stock: newStock,
               ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+              ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
             }
           : undefined;
         if (updatedProd) {
@@ -4401,6 +4460,7 @@ export async function recordSaleInFirestore(
           cost: Number(currentProd?.cost ?? item.cost) || 0,
           stock: newStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
         };
 
         const altRef =
@@ -4470,7 +4530,8 @@ export async function recordCreditPaymentInFirestore(
   const updatedPayments = [...existingPayments, cleanAbone];
   const newAmountPaid = Math.min(sale.total, (Number(sale.amountPaid) || 0) + Number(cleanAbone.amount));
   const newBalanceDue = Math.max(0, Number((sale.total - newAmountPaid).toFixed(2)));
-  const newCreditStatus: 'pending' | 'paid' = newBalanceDue <= 0.01 ? 'paid' : 'pending';
+  const newCreditStatus: 'pending' | 'paid' =
+    sale.isCreditPricingPending || newBalanceDue > 0.01 ? 'pending' : 'paid';
 
   const updatedSale: SaleRecord = {
     ...sale,
@@ -4596,13 +4657,27 @@ export async function updateSaleInFirestore(
     amountPaid: paidVal,
     change: Math.max(0, Number(updatedSale.change) || 0),
     balanceDue: computedBalanceDue,
-    creditStatus: isCredit ? (computedBalanceDue <= 0.01 ? 'paid' : 'pending') : 'paid',
+    creditStatus: isCredit
+      ? updatedSale.isCreditPricingPending || computedBalanceDue > 0.01
+        ? 'pending'
+        : 'paid'
+      : 'paid',
     creditDueDate: String(updatedSale.creditDueDate || '').trim().slice(0, 50),
     creditPayments: Array.isArray(updatedSale.creditPayments) ? updatedSale.creditPayments : [],
     creditContract:
       updatedSale.creditContract !== undefined
         ? updatedSale.creditContract
         : originalSale.creditContract,
+    isHistoricalPreApp:
+      updatedSale.isHistoricalPreApp ?? originalSale.isHistoricalPreApp ? true : undefined,
+    skipInventoryDeduction:
+      updatedSale.skipInventoryDeduction ||
+      originalSale.skipInventoryDeduction ||
+      updatedSale.isHistoricalPreApp ||
+      originalSale.isHistoricalPreApp
+        ? true
+        : undefined,
+    isCreditPricingPending: updatedSale.isCreditPricingPending ? true : false,
     warrantyInfo:
       updatedSale.warrantyInfo !== undefined
         ? updatedSale.warrantyInfo
@@ -4657,27 +4732,38 @@ export async function updateSaleInFirestore(
 
     const deltaMap = new Map<
       string,
-      { codeKey: string; warehouseId?: string; delta: number; item?: any }
+      { codeKey: string; warehouseId?: string; selectedColor?: string; delta: number; item?: any }
     >();
     const addDelta = (codeKey: string, whId: string | undefined, qtyDelta: number, item?: any) => {
-      const mk = `${codeKey}__${whId || '__default__'}`;
+      const selCol = item?.selectedColor ? String(item.selectedColor).trim() : '';
+      const mk = `${codeKey}__${whId || '__default__'}__${selCol.toLowerCase()}`;
       const existing = deltaMap.get(mk);
       if (existing) {
         existing.delta += qtyDelta;
         if (!existing.item && item) existing.item = item;
       } else {
-        deltaMap.set(mk, { codeKey, warehouseId: whId, delta: qtyDelta, item });
+        deltaMap.set(mk, { codeKey, warehouseId: whId, selectedColor: selCol || undefined, delta: qtyDelta, item });
       }
     };
 
-    if (originalSale.status !== 'cancelled' && !originalSale.skipInventoryDeduction) {
+    if (
+      originalSale.status !== 'cancelled' &&
+      !originalSale.skipInventoryDeduction &&
+      !originalSale.isHistoricalPreApp
+    ) {
       for (const it of originalSale.items || []) {
         const k = it.code.trim().toLowerCase();
         if (k) addDelta(k, it.warehouseId || originalSale.warehouseId, Number(it.quantity) || 0, it);
       }
     }
 
-    if (payload.status !== 'cancelled' && !updatedSale.skipInventoryDeduction && !originalSale.skipInventoryDeduction) {
+    if (
+      payload.status !== 'cancelled' &&
+      !updatedSale.skipInventoryDeduction &&
+      !originalSale.skipInventoryDeduction &&
+      !updatedSale.isHistoricalPreApp &&
+      !originalSale.isHistoricalPreApp
+    ) {
       for (const it of cleanItems) {
         const k = it.code.trim().toLowerCase();
         if (k) addDelta(k, it.warehouseId || fallbackWhId, -(Number(it.quantity) || 0), it);
@@ -4708,12 +4794,18 @@ export async function updateSaleInFirestore(
         entry.warehouseId,
         activeWhList
       );
+      const newColorStocks = applyColorStockDelta(
+        currentProd,
+        entry.selectedColor,
+        entry.delta
+      );
 
       if (currentProd) {
         workingByCode.set(entry.codeKey, {
           ...currentProd,
           stock: adjustedStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
         });
       }
 
@@ -4728,6 +4820,7 @@ export async function updateSaleInFirestore(
           cost: Number(currentProd?.cost ?? fallbackItem?.cost) || 0,
           stock: adjustedStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
         },
       });
     }
@@ -4784,7 +4877,7 @@ export async function cancelSaleInFirestore(
     }
   }
 
-  if (!sale.skipInventoryDeduction) {
+  if (!sale.skipInventoryDeduction && !sale.isHistoricalPreApp) {
     try {
       const storeWhData = getCachedStoreWarehouses(slug);
       const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
@@ -4813,12 +4906,18 @@ export async function cancelSaleInFirestore(
           item.warehouseId || sale.warehouseId,
           activeWhList
         );
+        const newColorStocks = applyColorStockDelta(
+          currentProd,
+          item.selectedColor,
+          Number(item.quantity) || 1
+        );
 
         if (currentProd) {
           workingByCode.set(codeKey, {
             ...currentProd,
             stock: restoredStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
           });
         }
 
@@ -4833,6 +4932,7 @@ export async function cancelSaleInFirestore(
             cost: Number(currentProd?.cost ?? item.cost) || 0,
             stock: restoredStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
           },
         });
       }
@@ -4888,7 +4988,7 @@ export async function restoreCancelledSaleInFirestore(
     }
   }
 
-  if (!sale.skipInventoryDeduction) {
+  if (!sale.skipInventoryDeduction && !sale.isHistoricalPreApp) {
     try {
       const storeWhData = getCachedStoreWarehouses(slug);
       const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
@@ -4917,12 +5017,18 @@ export async function restoreCancelledSaleInFirestore(
           item.warehouseId || sale.warehouseId,
           activeWhList
         );
+        const newColorStocks = applyColorStockDelta(
+          currentProd,
+          item.selectedColor,
+          -(Number(item.quantity) || 1)
+        );
 
         if (currentProd) {
           workingByCode.set(codeKey, {
             ...currentProd,
             stock: deductedStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
           });
         }
 
@@ -4937,6 +5043,7 @@ export async function restoreCancelledSaleInFirestore(
             cost: Number(currentProd?.cost ?? item.cost) || 0,
             stock: deductedStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
           },
         });
       }
@@ -5445,6 +5552,7 @@ function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: s
           canCancelSales: Boolean(raw.salesPermissions.canCancelSales),
           canViewCostsAndProfits: Boolean(raw.salesPermissions.canViewCostsAndProfits),
           canUseCreditCalculator: Boolean(raw.salesPermissions.canUseCreditCalculator),
+          canViewPriceCheckerCost: Boolean(raw.salesPermissions.canViewPriceCheckerCost),
           isRouteCollector: Boolean(raw.salesPermissions.isRouteCollector),
           routeCollectorScope:
             raw.salesPermissions.routeCollectorScope === 'assigned' ? 'assigned' : 'all',
@@ -5455,6 +5563,7 @@ function sanitizeUserAccountDoc(raw: any, fallbackSlug = 'gosen', fallbackId?: s
           canCancelSales: false,
           canViewCostsAndProfits: false,
           canUseCreditCalculator: false,
+          canViewPriceCheckerCost: false,
           isRouteCollector: false,
           routeCollectorScope: 'all',
           ...(cleanWhIds ? { allowedWarehouseIds: cleanWhIds } : {}),
@@ -5662,6 +5771,7 @@ export async function saveUserToFirestore(
       canCancelSales: Boolean(user.salesPermissions?.canCancelSales),
       canViewCostsAndProfits: Boolean(user.salesPermissions?.canViewCostsAndProfits),
       canUseCreditCalculator: Boolean(user.salesPermissions?.canUseCreditCalculator),
+      canViewPriceCheckerCost: Boolean(user.salesPermissions?.canViewPriceCheckerCost),
       isRouteCollector: Boolean(user.salesPermissions?.isRouteCollector),
       routeCollectorScope:
         user.salesPermissions?.routeCollectorScope === 'assigned' ? 'assigned' : 'all',
@@ -8150,6 +8260,7 @@ export async function resolveClientLoginAcrossAllTenants(params: {
           canCancelSales: false,
           canViewCostsAndProfits: false,
           canUseCreditCalculator: false,
+          canViewPriceCheckerCost: false,
         },
         createdAt: Date.now(),
       };

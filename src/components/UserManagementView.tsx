@@ -188,6 +188,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [canCancelSales, setCanCancelSales] = useState<boolean>(false);
   const [canViewCostsAndProfits, setCanViewCostsAndProfits] = useState<boolean>(false);
   const [canUseCreditCalculator, setCanUseCreditCalculator] = useState<boolean>(false);
+  const [canViewPriceCheckerCost, setCanViewPriceCheckerCost] = useState<boolean>(false);
   const [isRouteCollector, setIsRouteCollector] = useState<boolean>(false);
   const [routeCollectorScope, setRouteCollectorScope] = useState<'all' | 'assigned'>('all');
   const [restrictWarehouses, setRestrictWarehouses] = useState<boolean>(false);
@@ -218,6 +219,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     setCanCancelSales(false);
     setCanViewCostsAndProfits(false);
     setCanUseCreditCalculator(false);
+    setCanViewPriceCheckerCost(false);
     setIsRouteCollector(false);
     setRouteCollectorScope('all');
     setRestrictWarehouses(false);
@@ -239,6 +241,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     setCanCancelSales(Boolean(user.salesPermissions?.canCancelSales));
     setCanViewCostsAndProfits(Boolean(user.salesPermissions?.canViewCostsAndProfits));
     setCanUseCreditCalculator(Boolean(user.salesPermissions?.canUseCreditCalculator));
+    setCanViewPriceCheckerCost(Boolean(user.salesPermissions?.canViewPriceCheckerCost));
     setIsRouteCollector(Boolean(user.salesPermissions?.isRouteCollector));
     setRouteCollectorScope(
       user.salesPermissions?.routeCollectorScope === 'assigned' ? 'assigned' : 'all'
@@ -353,6 +356,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
           canCancelSales,
           canViewCostsAndProfits,
           canUseCreditCalculator,
+          canViewPriceCheckerCost,
           isRouteCollector,
           routeCollectorScope,
           allowedWarehouseIds: effectiveAllowedWhIds,
@@ -561,22 +565,42 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                         </div>
                       </div>
 
-                      {u.role !== 'admin' && effectiveStoreCreditCalcEnabled && u.allowedTabs?.includes('price-checker') && (
-                        <div className="pt-1">
+                      {u.role !== 'admin' && u.allowedTabs?.includes('price-checker') && (
+                        <div className="pt-1 flex flex-wrap gap-1.5">
                           <span
                             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                              u.salesPermissions?.canUseCreditCalculator
-                                ? 'bg-amber-50 text-amber-900 border-amber-300'
-                                : 'bg-slate-100 text-slate-500 border-slate-200'
+                              u.salesPermissions?.canViewPriceCheckerCost
+                                ? 'bg-teal-50 text-teal-900 border-teal-300'
+                                : 'bg-slate-100 text-slate-600 border-slate-200'
                             }`}
                           >
-                            <Calculator className="w-3 h-3 shrink-0" />
+                            {u.salesPermissions?.canViewPriceCheckerCost ? (
+                              <Eye className="w-3 h-3 shrink-0" />
+                            ) : (
+                              <Lock className="w-3 h-3 shrink-0" />
+                            )}
                             <span>
-                              {u.salesPermissions?.canUseCreditCalculator
-                                ? 'Calculadora Crédito & Ganancias: Permitida'
-                                : '🔒 Calculadora Crédito: Bloqueada'}
+                              {u.salesPermissions?.canViewPriceCheckerCost
+                                ? 'Precio Costo (Consultar): Visible'
+                                : 'Precio Costo (Consultar): Oculto'}
                             </span>
                           </span>
+                          {effectiveStoreCreditCalcEnabled && (
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                u.salesPermissions?.canUseCreditCalculator
+                                  ? 'bg-amber-50 text-amber-900 border-amber-300'
+                                  : 'bg-slate-100 text-slate-500 border-slate-200'
+                              }`}
+                            >
+                              <Calculator className="w-3 h-3 shrink-0" />
+                              <span>
+                                {u.salesPermissions?.canUseCreditCalculator
+                                  ? 'Calculadora Crédito & Ganancias: Permitida'
+                                  : '🔒 Calculadora Crédito: Bloqueada'}
+                              </span>
+                            </span>
+                          )}
                         </div>
                       )}
 
@@ -891,37 +915,66 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                     })}
                   </div>
 
-                  {/* Credit Price & Profit Calculator Permission (Shown when 'price-checker' is enabled) */}
+                  {/* Price Checker Granular Permissions (Shown when 'price-checker' is enabled) */}
                   {allowedTabs.includes('price-checker') && (
-                    <div className="mt-3 p-3.5 rounded-2xl border border-amber-200 bg-amber-50/70 space-y-2">
-                      <div className="flex items-start gap-2.5">
-                        <Calculator className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                        <div className="min-w-0 flex-1">
-                          <h4 className="text-xs sm:text-sm font-extrabold text-slate-900">
-                            Calculadora de Crédito, Ganancias y Pase a POS (Verificador ≥ L. 4,000)
-                          </h4>
-                          {effectiveStoreCreditCalcEnabled ? (
-                            <label className="mt-2 flex items-start gap-3 p-2.5 rounded-xl bg-white border border-amber-200 hover:border-amber-300 cursor-pointer transition-colors">
+                    <div className="mt-3 space-y-2.5">
+                      <div className="p-3.5 rounded-2xl border border-teal-200 bg-teal-50/70 space-y-2">
+                        <div className="flex items-start gap-2.5">
+                          <Tag className="w-4 h-4 text-teal-700 shrink-0 mt-0.5" />
+                          <div className="min-w-0 flex-1">
+                            <h4 className="text-xs sm:text-sm font-extrabold text-slate-900">
+                              Visibilidad de Precio Costo en Consultar Precio
+                            </h4>
+                            <label className="mt-2 flex items-start gap-3 p-2.5 rounded-xl bg-white border border-teal-200 hover:border-teal-300 cursor-pointer transition-colors">
                               <input
                                 type="checkbox"
-                                checked={canUseCreditCalculator}
-                                onChange={(e) => setCanUseCreditCalculator(e.target.checked)}
-                                className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer shrink-0"
+                                checked={canViewPriceCheckerCost}
+                                onChange={(e) => setCanViewPriceCheckerCost(e.target.checked)}
+                                className="mt-0.5 rounded text-teal-600 focus:ring-teal-500 w-4 h-4 cursor-pointer shrink-0"
                               />
                               <div className="text-xs">
                                 <span className="font-bold text-slate-900 block">
-                                  Permitir usar la Calculadora de Crédito, Ganancias y Enviar a POS
+                                  Mostrar Precio Costo del artículo en Consultar Precio
                                 </span>
                                 <span className="text-[11px] text-slate-500 block mt-0.5">
-                                  Si lo marcas, este colaborador podrá ver precios al crédito desde L. 4,000, ver la ganancia respecto al costo y enviar cotizaciones directo al POS para facturar.
+                                  Si lo marcas, este usuario verá el <strong>Precio Costo</strong> junto al Precio de Contado al escanear o buscar un artículo. Si lo dejas desmarcado, solo verá el precio de venta.
                                 </span>
                               </div>
                             </label>
-                          ) : (
-                            <p className="text-[11px] text-amber-900 bg-amber-100/80 border border-amber-200 rounded-xl px-3 py-2 mt-1.5 font-medium">
-                              Herramienta deshabilitada para esta tienda desde el Panel de Configuración SaaS. Cuando el Administrador SaaS active este permiso para la tienda, podrás elegir aquí qué colaboradores pueden utilizarla.
-                            </p>
-                          )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl border border-amber-200 bg-amber-50/70 space-y-2">
+                        <div className="flex items-start gap-2.5">
+                          <Calculator className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                          <div className="min-w-0 flex-1">
+                            <h4 className="text-xs sm:text-sm font-extrabold text-slate-900">
+                              Calculadora de Crédito, Ganancias y Pase a POS (Verificador ≥ L. 4,000)
+                            </h4>
+                            {effectiveStoreCreditCalcEnabled ? (
+                              <label className="mt-2 flex items-start gap-3 p-2.5 rounded-xl bg-white border border-amber-200 hover:border-amber-300 cursor-pointer transition-colors">
+                                <input
+                                  type="checkbox"
+                                  checked={canUseCreditCalculator}
+                                  onChange={(e) => setCanUseCreditCalculator(e.target.checked)}
+                                  className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer shrink-0"
+                                />
+                                <div className="text-xs">
+                                  <span className="font-bold text-slate-900 block">
+                                    Permitir usar la Calculadora de Crédito, Ganancias y Enviar a POS
+                                  </span>
+                                  <span className="text-[11px] text-slate-500 block mt-0.5">
+                                    Si lo marcas, este colaborador podrá ver precios al crédito desde L. 4,000, ver la ganancia respecto al costo y enviar cotizaciones directo al POS para facturar.
+                                  </span>
+                                </div>
+                              </label>
+                            ) : (
+                              <p className="text-[11px] text-amber-900 bg-amber-100/80 border border-amber-200 rounded-xl px-3 py-2 mt-1.5 font-medium">
+                                Herramienta deshabilitada para esta tienda desde el Panel de Configuración SaaS. Cuando el Administrador SaaS active este permiso para la tienda, podrás elegir aquí qué colaboradores pueden utilizarla.
+                              </p>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>

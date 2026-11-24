@@ -42,6 +42,7 @@ import {
   FileText,
   MessageCircle,
   Loader2,
+  Eye,
 } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeScannerState } from 'html5-qrcode';
 
@@ -51,6 +52,7 @@ interface PriceCheckerTabProps {
   storeSettings?: StoreSettings;
   hasWarehousesModule?: boolean;
   canUseCreditCalculator?: boolean;
+  canViewCostPrice?: boolean;
   canSendToPos?: boolean;
   onSendToPosCredit?: (handoff: PriceCheckerCreditHandoff) => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -84,6 +86,7 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
   storeSettings,
   hasWarehousesModule = true,
   canUseCreditCalculator = false,
+  canViewCostPrice = false,
   canSendToPos = false,
   onSendToPosCredit,
   showToast,
@@ -598,6 +601,11 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                                 </p>
                               );
                             })()}
+                          {canViewCostPrice && (Number(item.cost) || 0) > 0 && (
+                            <p className="text-[10px] font-bold text-slate-600 tabular-nums whitespace-nowrap mt-0.5">
+                              Costo: L&nbsp;{Number(item.cost).toFixed(2)}
+                            </p>
+                          )}
                           <p
                             className={`text-[11px] font-semibold tabular-nums mt-0.5 ${
                               stockNum > 0 ? 'text-emerald-600' : 'text-rose-500'
@@ -819,6 +827,43 @@ export const PriceCheckerTab: React.FC<PriceCheckerTabProps> = ({
                         L&nbsp;{finalPrice.toFixed(2)}
                       </p>
                     </div>
+
+                    {canViewCostPrice && (
+                      <div className="rounded-2xl p-4 sm:p-5 border border-slate-200 bg-slate-50/95 flex flex-col items-center justify-center shadow-inner">
+                        <div className="flex items-center justify-center gap-1.5 mb-1 flex-wrap">
+                          <Eye className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                          <p className="text-xs font-bold uppercase tracking-wide text-slate-600">
+                            Precio Costo
+                          </p>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700">
+                            Uso Interno
+                          </span>
+                        </div>
+
+                        {unitCost > 0 ? (
+                          <>
+                            <p className="text-4xl sm:text-5xl font-black tracking-tight tabular-nums whitespace-nowrap text-slate-900">
+                              L&nbsp;{unitCost.toFixed(2)}
+                            </p>
+                            {finalPrice > 0 && (
+                              <p
+                                className={`text-xs font-bold tabular-nums mt-1.5 ${
+                                  finalPrice - unitCost >= 0 ? 'text-emerald-700' : 'text-rose-600'
+                                }`}
+                              >
+                                Ganancia contado: {finalPrice - unitCost >= 0 ? '+' : '-'}L&nbsp;
+                                {Math.abs(finalPrice - unitCost).toFixed(2)} (
+                                {(((finalPrice - unitCost) / unitCost) * 100).toFixed(1)}% s/costo)
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-xl sm:text-2xl font-bold text-slate-400">
+                            Sin costo registrado
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {canUseCreditCalculator && isCreditEligible ? (
                       <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4 sm:p-5 text-left space-y-4">

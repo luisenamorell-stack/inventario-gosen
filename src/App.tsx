@@ -176,6 +176,7 @@ import {
   HASHED_PASSWORD_MASK,
   isMaskedOrHashedPassword,
 } from './firebase/firestoreService';
+import { applyColorStockDelta } from './utils/productColorUtils';
 import {
   Database,
   Wifi,
@@ -1596,6 +1597,10 @@ export const App: React.FC = () => {
         matchedUser?.salesPermissions?.canUseCreditCalculator ??
           userSession.salesPermissions?.canUseCreditCalculator
       ),
+      canViewPriceCheckerCost: Boolean(
+        matchedUser?.salesPermissions?.canViewPriceCheckerCost ??
+          userSession.salesPermissions?.canViewPriceCheckerCost
+      ),
       allowedWarehouseIds:
         matchedUser?.salesPermissions?.allowedWarehouseIds ||
         matchedUser?.allowedWarehouseIds ||
@@ -1615,6 +1620,8 @@ export const App: React.FC = () => {
       userSession.salesPermissions?.routeCollectorScope !== nextSalesPerms.routeCollectorScope ||
       Boolean(userSession.salesPermissions?.canUseCreditCalculator) !==
         nextSalesPerms.canUseCreditCalculator ||
+      Boolean(userSession.salesPermissions?.canViewPriceCheckerCost) !==
+        nextSalesPerms.canViewPriceCheckerCost ||
       Boolean(userSession.salesPermissions?.canViewCostsAndProfits) !==
         nextSalesPerms.canViewCostsAndProfits ||
       Boolean(userSession.salesPermissions?.canCancelSales) !== nextSalesPerms.canCancelSales ||
@@ -2349,7 +2356,7 @@ export const App: React.FC = () => {
       baseInventory.forEach((p) => workingByCode.set(p.code.trim().toLowerCase(), p));
       const updatedByCode = new Map<string, Product>();
 
-      if (!saleData.skipInventoryDeduction) {
+      if (!saleData.skipInventoryDeduction && !saleData.isHistoricalPreApp) {
         for (const soldItem of saleData.items || []) {
           const key = (soldItem.code || '').trim().toLowerCase();
           if (!key) continue;
@@ -2365,10 +2372,16 @@ export const App: React.FC = () => {
             itemTargetWhId,
             warehousesData.warehouses
           );
+          const newColorStocks = applyColorStockDelta(
+            currentProd,
+            soldItem.selectedColor,
+            -(Number(soldItem.quantity) || 1)
+          );
           const updatedProd: Product = {
             ...currentProd,
             stock: newStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
           };
           workingByCode.set(key, updatedProd);
           updatedByCode.set(key, updatedProd);
@@ -2426,7 +2439,7 @@ export const App: React.FC = () => {
       baseInventory.forEach((p) => workingByCode.set(p.code.trim().toLowerCase(), p));
       const updatedByCode = new Map<string, Product>();
 
-      if (!sale.skipInventoryDeduction) {
+      if (!sale.skipInventoryDeduction && !sale.isHistoricalPreApp) {
         for (const soldItem of sale.items || []) {
           const key = (soldItem.code || '').trim().toLowerCase();
           if (!key) continue;
@@ -2442,10 +2455,16 @@ export const App: React.FC = () => {
             itemTargetWhId,
             warehousesData.warehouses
           );
+          const newColorStocks = applyColorStockDelta(
+            currentProd,
+            soldItem.selectedColor,
+            Number(soldItem.quantity) || 1
+          );
           const updatedProd: Product = {
             ...currentProd,
             stock: newStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+            ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
           };
           workingByCode.set(key, updatedProd);
           updatedByCode.set(key, updatedProd);
@@ -2497,29 +2516,67 @@ export const App: React.FC = () => {
       const baseInventory = inventory;
       const savedSale = await updateSaleInFirestore(originalSale, updatedSale, baseInventory, activeCompanyId);
 
-      // Update local inventory stock per (code, warehouseId) if item quantities or status changed
-      const deltaByCodeAndWh = new Map<string, { codeKey: string; warehouseId?: string; delta: number }>();
-      const addWhDelta = (codeKey: string, whId: string | undefined, qtyDelta: number) => {
-        const mapKey = `${codeKey}__${whId || '__default__'}`;
+      // Update local inventory stock per (code, warehouseId, selectedColor) if item quantities or status changed
+      const deltaByCodeAndWh = new Map<
+        string,
+        { codeKey: string; warehouseId?: string; selectedColor?: string; delta: number }
+      >();
+      const addWhDelta = (
+        codeKey: string,
+        whId: string | undefined,
+        qtyDelta: number,
+        selectedColor?: string
+      ) => {
+        const cleanCol = selectedColor ? selectedColor.trim() : '';
+        const mapKey = `${codeKey}__${whId || '__default__'}__${cleanCol.toLowerCase()}`;
         const prev = deltaByCodeAndWh.get(mapKey);
         if (prev) {
           prev.delta += qtyDelta;
         } else {
-          deltaByCodeAndWh.set(mapKey, { codeKey, warehouseId: whId, delta: qtyDelta });
+          deltaByCodeAndWh.set(mapKey, {
+            codeKey,
+            warehouseId: whId,
+            selectedColor: cleanCol || undefined,
+            delta: qtyDelta,
+          });
         }
       };
 
-      if (originalSale.status !== 'cancelled' && !originalSale.skipInventoryDeduction) {
+      if (
+        originalSale.status !== 'cancelled' &&
+        !originalSale.skipInventoryDeduction &&
+        !originalSale.isHistoricalPreApp
+      ) {
         for (const it of originalSale.items || []) {
           const k = it.code.trim().toLowerCase();
-          if (k) addWhDelta(k, it.warehouseId || originalSale.warehouseId, Number(it.quantity) || 0);
+          if (k) {
+            addWhDelta(
+              k,
+              it.warehouseId || originalSale.warehouseId,
+              Number(it.quantity) || 0,
+              it.selectedColor
+            );
+          }
         }
       }
 
-      if (savedSale.status !== 'cancelled' && !savedSale.skipInventoryDeduction) {
+      if (
+        savedSale.status !== 'cancelled' &&
+        !savedSale.skipInventoryDeduction &&
+        !originalSale.skipInventoryDeduction &&
+        !savedSale.isHistoricalPreApp &&
+        !originalSale.isHistoricalPreApp
+      ) {
         for (const it of savedSale.items || []) {
           const k = it.code.trim().toLowerCase();
-          if (k) addWhDelta(k, it.warehouseId || updatedSale.warehouseId || originalSale.warehouseId, -(Number(it.quantity) || 0));
+          if (k) {
+            addWhDelta(
+              k,
+              it.warehouseId || updatedSale.warehouseId || originalSale.warehouseId,
+              -(Number(it.quantity) || 0),
+              it.selectedColor
+            );
+          }
         }
       }
 
@@ -2537,10 +2594,16 @@ export const App: React.FC = () => {
           entry.warehouseId,
           warehousesData.warehouses
         );
+        const newColorStocks = applyColorStockDelta(
+          prod,
+          entry.selectedColor,
+          entry.delta
+        );
         const updatedProd: Product = {
           ...prod,
           stock: newStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+          ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
         };
         workingByCode.set(entry.codeKey, updatedProd);
         updatedByCode.set(entry.codeKey, updatedProd);
@@ -3408,6 +3471,12 @@ export const App: React.FC = () => {
         matchedCollabForCreditCalc?.salesPermissions?.canUseCreditCalculator ||
         userSession.salesPermissions?.canUseCreditCalculator)
   );
+  const canViewPriceCheckerCost = Boolean(
+    isSuperAdminSession ||
+      userSession.role === 'admin' ||
+      matchedCollabForCreditCalc?.salesPermissions?.canViewPriceCheckerCost ||
+      userSession.salesPermissions?.canViewPriceCheckerCost
+  );
 
   // If the current activeTab was disabled by the SaaS Administrator, switch to the first allowed module
   const activeTabToRender: ActiveTab =
@@ -3844,6 +3913,7 @@ export const App: React.FC = () => {
                       onRecordCreditPayment={handleRecordCreditPayment}
                       onSaveStoreSettings={handleSaveStoreSettings}
                       onSaveUser={handleSaveUser}
+                      onSaveProduct={handleSaveProduct}
                       onOpenRestaurant={
                         allowedTabsList.includes('restaurant')
                           ? () => handleTabChange('restaurant')
@@ -3942,6 +4012,7 @@ export const App: React.FC = () => {
                 storeSettings={storeSettings}
                 hasWarehousesModule={companyAllowedModules.includes('warehouses')}
                 canUseCreditCalculator={canUsePriceCheckerCreditCalc}
+                canViewCostPrice={canViewPriceCheckerCost}
                 canSendToPos={isSuperAdminSession || allowedTabsList.includes('sales')}
                 onSendToPosCredit={(handoff) => {
                   setPendingPriceCheckerCreditHandoff(handoff);

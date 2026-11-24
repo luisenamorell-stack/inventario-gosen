@@ -153,3 +153,113 @@ export function getProductImages(product?: Product | null): string[] {
   }
   return list;
 }
+
+/**
+ * Normalizes a colorStocks map against the canonical color names array.
+ * Returns undefined if there are no colors or no per-color stock entries.
+ */
+export function normalizeColorStocks(
+  colors: string[],
+  rawColorStocks?: Record<string, unknown> | null
+): Record<string, number> | undefined {
+  if (!Array.isArray(colors) || colors.length === 0) return undefined;
+  if (!rawColorStocks || typeof rawColorStocks !== 'object') return undefined;
+
+  const lookupLower = new Map<string, number>();
+  for (const [k, v] of Object.entries(rawColorStocks)) {
+    const cleanKey = String(k || '').trim().toLowerCase();
+    if (!cleanKey) continue;
+    const qty = Math.max(0, Math.round(Number(v) || 0));
+    lookupLower.set(cleanKey, qty);
+  }
+
+  if (lookupLower.size === 0) return undefined;
+
+  const normalized: Record<string, number> = {};
+  for (const colorName of colors) {
+    const trimmed = String(colorName || '').trim();
+    if (!trimmed) continue;
+    const lower = trimmed.toLowerCase();
+    if (lookupLower.has(lower)) {
+      normalized[trimmed] = lookupLower.get(lower)!;
+    } else {
+      normalized[trimmed] = 0;
+    }
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+/**
+ * Returns the specific stock count for a given color if per-color stock tracking is enabled,
+ * or undefined if the product does not track per-color quantities.
+ */
+export function getProductColorStock(
+  product: Product | null | undefined,
+  colorName: string
+): number | undefined {
+  if (!product?.colorStocks || typeof product.colorStocks !== 'object') return undefined;
+  const targetLower = String(colorName || '').trim().toLowerCase();
+  if (!targetLower) return undefined;
+
+  for (const [k, v] of Object.entries(product.colorStocks)) {
+    if (String(k || '').trim().toLowerCase() === targetLower) {
+      return Math.max(0, Math.round(Number(v) || 0));
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Checks if a product actively tracks per-color stock quantities.
+ */
+export function hasPerColorStocks(product?: Product | null): boolean {
+  if (!product?.colorStocks || typeof product.colorStocks !== 'object') return false;
+  return Object.keys(product.colorStocks).length > 0;
+}
+
+/**
+ * Sums all non-negative quantities in a colorStocks map.
+ */
+export function sumColorStocks(colorStocks?: Record<string, number> | null): number {
+  if (!colorStocks || typeof colorStocks !== 'object') return 0;
+  return Object.values(colorStocks).reduce(
+    (sum, qty) => sum + Math.max(0, Math.round(Number(qty) || 0)),
+    0
+  );
+}
+
+/**
+ * Adjusts a specific color's stock count by `delta` (negative on sale, positive on cancel/restock).
+ * Returns the updated colorStocks map, or undefined if the product does not track per-color stocks.
+ */
+export function applyColorStockDelta(
+  product: Product | undefined,
+  selectedColor: string | undefined,
+  delta: number
+): Record<string, number> | undefined {
+  if (!product?.colorStocks || typeof product.colorStocks !== 'object') return undefined;
+  const entries = Object.entries(product.colorStocks);
+  if (entries.length === 0) return undefined;
+
+  const nextMap: Record<string, number> = {};
+  for (const [k, v] of entries) {
+    nextMap[k] = Math.max(0, Math.round(Number(v) || 0));
+  }
+
+  const targetLower = String(selectedColor || '').trim().toLowerCase();
+  if (!targetLower || delta === 0) {
+    return nextMap;
+  }
+
+  const matchedKey = Object.keys(nextMap).find(
+    (k) => k.trim().toLowerCase() === targetLower
+  );
+
+  if (matchedKey) {
+    nextMap[matchedKey] = Math.max(0, Math.round((nextMap[matchedKey] || 0) + delta));
+  }
+
+  return nextMap;
+}
+

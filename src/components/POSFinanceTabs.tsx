@@ -103,6 +103,8 @@ interface POSFinanceTabsProps {
   onSavePOSFinanceData: (updated: POSFinanceStoreData) => Promise<void>;
   onRecordCreditPayment: (sale: SaleRecord, abone: CreditPaymentAbone) => Promise<SaleRecord>;
   onRecordSale?: (saleData: Omit<SaleRecord, 'id'>) => Promise<SaleRecord | void>;
+  onUpdateSale?: (originalSale: SaleRecord, updatedSale: SaleRecord) => Promise<void>;
+  onSaveProduct?: (product: Product, oldCode?: string) => Promise<void>;
   onSaveUser?: (user: UserAccount) => Promise<void>;
   onViewSaleTicket: (sale: SaleRecord) => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -119,6 +121,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   onSavePOSFinanceData,
   onRecordCreditPayment,
   onRecordSale,
+  onUpdateSale,
+  onSaveProduct,
   onSaveUser,
   onViewSaleTicket,
   showToast,
@@ -405,6 +409,13 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [selectedSaleForControl, setSelectedSaleForControl] = useState<SaleRecord | null>(null);
   const [selectedSaleForContract, setSelectedSaleForContract] = useState<SaleRecord | null>(null);
   const [ctrlCustomCost, setCtrlCustomCost] = useState<string>('');
+  const [ctrlItemName, setCtrlItemName] = useState<string>('');
+  const [ctrlItemCode, setCtrlItemCode] = useState<string>('');
+  const [ctrlLinkedProductId, setCtrlLinkedProductId] = useState<string>('');
+  const [ctrlProductSearch, setCtrlProductSearch] = useState<string>('');
+  const [ctrlCreditSalePrice, setCtrlCreditSalePrice] = useState<string>('');
+  const [ctrlLeavePricingPending, setCtrlLeavePricingPending] = useState<boolean>(false);
+  const [ctrlAlsoSaveToInventory, setCtrlAlsoSaveToInventory] = useState<boolean>(false);
   const [ctrlNextPaymentDate, setCtrlNextPaymentDate] = useState<string>('');
   const [ctrlFrequency, setCtrlFrequency] = useState<
     'weekly' | 'biweekly' | 'monthly' | 'daily' | 'custom'
@@ -543,7 +554,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [newDebtCustomerPhone, setNewDebtCustomerPhone] = useState<string>('');
   const [newDebtCustomerAddress, setNewDebtCustomerAddress] = useState<string>('');
   const [newDebtProductId, setNewDebtProductId] = useState<string>('');
+  const [newDebtProductSearch, setNewDebtProductSearch] = useState<string>('');
   const [newDebtCustomItemName, setNewDebtCustomItemName] = useState<string>('');
+  const [newDebtCustomCode, setNewDebtCustomCode] = useState<string>('');
+  const [newDebtCustomCategory, setNewDebtCustomCategory] = useState<string>('General');
+  const [newDebtAlsoCreateInInventory, setNewDebtAlsoCreateInInventory] = useState<boolean>(false);
+  const [newDebtDeferPricing, setNewDebtDeferPricing] = useState<boolean>(false);
   const [newDebtTotalAmount, setNewDebtTotalAmount] = useState<string>('');
   const [newDebtInitialAbono, setNewDebtInitialAbono] = useState<string>('0');
   const [newDebtInstallmentAmount, setNewDebtInstallmentAmount] = useState<string>('');
@@ -647,7 +663,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       sale.balanceDue !== undefined
         ? Math.max(0, Number(sale.balanceDue))
         : Math.max(0, totalSale - paid);
-    const isPaid = balanceDue <= 0.01 || sale.creditStatus === 'paid';
+    const isPricingPending = Boolean(sale.isCreditPricingPending || controlMeta?.isPricingPending);
+    const isPaid = !isPricingPending && (balanceDue <= 0.01 || sale.creditStatus === 'paid');
 
     const costRecovered = Math.min(totalCost, paid);
     const costRemainingToRecover = Math.max(0, totalCost - paid);
@@ -698,6 +715,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       expectedTotalProfit,
       paid,
       balanceDue,
+      isPricingPending,
       isPaid,
       costRecovered,
       costRemainingToRecover,
@@ -942,10 +960,54 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     }
   };
 
+  const filteredInventoryForControl = useMemo(() => {
+    const q = ctrlProductSearch.trim().toLowerCase();
+    if (!q) return inventory;
+    return inventory.filter(
+      (p) =>
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.code || '').toLowerCase().includes(q) ||
+        (p.category || '').toLowerCase().includes(q)
+    );
+  }, [inventory, ctrlProductSearch]);
+
+  const filteredInventoryForDebt = useMemo(() => {
+    const q = newDebtProductSearch.trim().toLowerCase();
+    if (!q) return inventory;
+    return inventory.filter(
+      (p) =>
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.code || '').toLowerCase().includes(q) ||
+        (p.category || '').toLowerCase().includes(q)
+    );
+  }, [inventory, newDebtProductSearch]);
+
   const openControlModalForSale = (sale: SaleRecord) => {
     const a = getSaleCreditAnalytics(sale);
+    const firstItem = sale.items?.[0];
+    const matchedInv = firstItem
+      ? inventory.find(
+          (p) =>
+            (firstItem.productId && p.id === firstItem.productId) ||
+            (firstItem.code &&
+              firstItem.code.trim().toUpperCase() !== 'CREDITO' &&
+              p.code.trim().toLowerCase() === firstItem.code.trim().toLowerCase())
+        )
+      : undefined;
+
     setSelectedSaleForControl(sale);
-    setCtrlCustomCost(a.totalCost.toFixed(2));
+    setCtrlCustomCost(
+      a.totalCost > 0 ? a.totalCost.toFixed(2) : a.isPricingPending ? '' : '0.00'
+    );
+    setCtrlItemName(firstItem?.name || '');
+    setCtrlItemCode(firstItem?.code || '');
+    setCtrlLinkedProductId(matchedInv?.id || '');
+    setCtrlProductSearch('');
+    setCtrlCreditSalePrice(
+      a.totalSale > 0 ? a.totalSale.toFixed(2) : a.isPricingPending ? '' : '0.00'
+    );
+    setCtrlLeavePricingPending(Boolean(a.isPricingPending));
+    setCtrlAlsoSaveToInventory(false);
     setCtrlNextPaymentDate(a.effectiveNextDate || '');
     setCtrlFrequency(
       a.controlMeta?.paymentFrequency || routeCollectorConfig.defaultPaymentFrequency || 'weekly'
@@ -964,12 +1026,25 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const handleSaveCreditAccountControl = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSaleForControl) return;
+
+    const cleanItemName = ctrlItemName.trim();
+    const parsedSalePrice = Math.max(0, parseFloat(ctrlCreditSalePrice) || 0);
+    const parsedCostRaw = parseFloat(ctrlCustomCost);
+    const parsedCost = !Number.isNaN(parsedCostRaw) && parsedCostRaw >= 0 ? parsedCostRaw : 0;
+
+    if (isAdminSession && !ctrlLeavePricingPending && parsedSalePrice <= 0) {
+      showToast(
+        'Ingresa el Precio de Venta al Crédito (L.) o marca la casilla para dejarlo pendiente.',
+        'warning'
+      );
+      return;
+    }
+
     setIsSavingControl(true);
     try {
       const existingMeta = creditAccountControls[selectedSaleForControl.id] || {
         saleId: selectedSaleForControl.id,
       };
-      const parsedCost = parseFloat(ctrlCustomCost);
       const parsedInstallment = parseFloat(ctrlInstallmentAmount);
       const cleanAssignedUname = normalizeCollectorIdentifier(ctrlAssignedCollectorUsername);
       const matchedCollector = collaboratorUsers.find(
@@ -978,10 +1053,57 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           normalizeCollectorIdentifier(u.name) === cleanAssignedUname
       );
 
+      let linkedProduct = ctrlLinkedProductId
+        ? inventory.find((p) => p.id === ctrlLinkedProductId)
+        : undefined;
+
+      // Optionally save or update this article in Inventory ONLY for new (non-historical) credits
+      if (
+        isAdminSession &&
+        !selectedSaleForControl.isHistoricalPreApp &&
+        ctrlAlsoSaveToInventory &&
+        onSaveProduct &&
+        cleanItemName
+      ) {
+        if (linkedProduct) {
+          const updatedProd: Product = {
+            ...linkedProduct,
+            name: cleanItemName,
+            cost: parsedCost > 0 ? parsedCost : linkedProduct.cost,
+            ...(parsedSalePrice > 0 ? { creditPrice: parsedSalePrice } : {}),
+          };
+          await onSaveProduct(updatedProd, linkedProduct.code);
+          linkedProduct = updatedProd;
+        } else {
+          const generatedCode =
+            ctrlItemCode.trim() && ctrlItemCode.trim().toUpperCase() !== 'CREDITO'
+              ? ctrlItemCode.trim()
+              : `ART-${String(Date.now()).slice(-6)}`;
+          const newProd: Product = {
+            id: generatedCode,
+            companyId: storeSettings.companyId || 'gosen',
+            code: generatedCode,
+            name: cleanItemName,
+            category: 'General',
+            cost: parsedCost,
+            price: parsedSalePrice,
+            ...(parsedSalePrice > 0 ? { creditPrice: parsedSalePrice } : {}),
+            stock: 0,
+          };
+          await onSaveProduct(newProd);
+          linkedProduct = newProd;
+        }
+      }
+
+      const effectivePendingFlag = Boolean(
+        ctrlLeavePricingPending && parsedSalePrice <= 0
+      );
+
       const updatedMeta: CreditAccountControlMeta = {
         ...existingMeta,
         saleId: selectedSaleForControl.id,
-        customTotalCost: !Number.isNaN(parsedCost) && parsedCost >= 0 ? parsedCost : undefined,
+        customTotalCost: parsedCost,
+        isPricingPending: effectivePendingFlag,
         nextPaymentDate: ctrlNextPaymentDate.trim() || undefined,
         paymentFrequency: ctrlFrequency,
         installmentAmount:
@@ -993,6 +1115,95 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         assignedCollectorName: matchedCollector?.name || undefined,
         customerAddressOrRoute: ctrlCustomerAddressOrRoute.trim() || undefined,
       };
+
+      // Update SaleRecord items, cost, and credit sale price when edited by Admin
+      if (isAdminSession && onUpdateSale) {
+        const origItems = Array.isArray(selectedSaleForControl.items)
+          ? selectedSaleForControl.items
+          : [];
+        const firstOrig = origItems[0];
+        const origName = firstOrig?.name || '';
+        const origCost = Number(firstOrig?.cost) || 0;
+        const origTotal = Number(selectedSaleForControl.total) || 0;
+        const origPending = Boolean(selectedSaleForControl.isCreditPricingPending);
+
+        const cleanItemCode = ctrlItemCode.trim();
+        const itemOrPriceChanged =
+          (cleanItemName && cleanItemName !== origName) ||
+          (cleanItemCode && cleanItemCode !== (firstOrig?.code || '')) ||
+          Math.abs(parsedSalePrice - origTotal) > 0.009 ||
+          Math.abs(parsedCost - origCost) > 0.009 ||
+          effectivePendingFlag !== origPending ||
+          Boolean(linkedProduct && linkedProduct.code !== firstOrig?.code);
+
+        if (itemOrPriceChanged) {
+          let nextItems = origItems.map((it) => ({ ...it }));
+          if (nextItems.length === 0) {
+            nextItems = [
+              {
+                productId: linkedProduct?.id || `custom_${Date.now()}`,
+                code: linkedProduct?.code || cleanItemCode || 'CREDITO',
+                name: cleanItemName || 'Artículo Financiado al Crédito',
+                category: linkedProduct?.category || 'Crédito',
+                cost: parsedCost,
+                price: parsedSalePrice,
+                creditPrice: parsedSalePrice,
+                unitDiscount: 0,
+                quantity: 1,
+                subtotal: parsedSalePrice,
+              },
+            ];
+          } else if (nextItems.length === 1) {
+            const qty = Math.max(1, Number(nextItems[0].quantity) || 1);
+            const unitCredit = Number((parsedSalePrice / qty).toFixed(2));
+            const unitCost = Number((parsedCost / qty).toFixed(2));
+            const canSafelyUpdateCode =
+              Boolean(selectedSaleForControl.skipInventoryDeduction) ||
+              !nextItems[0].code ||
+              nextItems[0].code.toUpperCase() === 'CREDITO';
+            nextItems[0] = {
+              ...nextItems[0],
+              productId: linkedProduct?.id || nextItems[0].productId,
+              code: canSafelyUpdateCode
+                ? linkedProduct?.code || cleanItemCode || nextItems[0].code || 'CREDITO'
+                : nextItems[0].code || 'CREDITO',
+              name: cleanItemName || nextItems[0].name,
+              category: linkedProduct?.category || nextItems[0].category || 'Crédito',
+              cost: unitCost,
+              price: unitCredit,
+              creditPrice: unitCredit,
+              subtotal: parsedSalePrice,
+            };
+          } else {
+            nextItems[0] = {
+              ...nextItems[0],
+              ...(cleanItemName ? { name: cleanItemName } : {}),
+              cost: parsedCost,
+            };
+          }
+
+          const paidSoFar = Math.max(0, Number(selectedSaleForControl.amountPaid) || 0);
+          const nextBalance = Math.max(0, Number((parsedSalePrice - paidSoFar).toFixed(2)));
+          const updatedSale: SaleRecord = {
+            ...selectedSaleForControl,
+            items: nextItems,
+            subtotal: parsedSalePrice,
+            discount: 0,
+            tax: 0,
+            total: parsedSalePrice,
+            balanceDue: nextBalance,
+            creditStatus: effectivePendingFlag || nextBalance > 0.01 ? 'pending' : 'paid',
+            isCreditPricingPending: effectivePendingFlag,
+            ...(selectedSaleForControl.skipInventoryDeduction ||
+            selectedSaleForControl.isHistoricalPreApp
+              ? { skipInventoryDeduction: true }
+              : {}),
+            lastEditedBy: currentUserName,
+            lastEditedAt: new Date().toLocaleString('es-HN'),
+          };
+          await onUpdateSale(selectedSaleForControl, updatedSale);
+        }
+      }
 
       const currentEnabled = new Set(
         (routeCollectorConfig.enabledCollectorUsernames || []).map((u) =>
@@ -1044,9 +1255,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       });
 
       showToast(
-        `Configuración de cobro y ruta guardada para ${selectedSaleForControl.customerName || 'Cliente'}${
-          matchedCollector ? ` (Cobrador asignado: ${matchedCollector.name})` : ''
-        }`,
+        `Cuenta de ${selectedSaleForControl.customerName || 'Cliente'} actualizada correctamente${
+          matchedCollector ? ` (Cobrador: ${matchedCollector.name})` : ''
+        }.`,
         'success'
       );
       setSelectedSaleForControl(null);
@@ -1318,6 +1529,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     setNewDebtOriginalSaleDate(addDaysToIso(-30));
     setNewDebtCustomSaleNumber('');
     setNewDebtCustomCost('');
+    setNewDebtProductSearch('');
+    setNewDebtCustomCode('');
+    setNewDebtCustomCategory('General');
+    setNewDebtAlsoCreateInInventory(false);
+    setNewDebtDeferPricing(false);
     setNewDebtDeductStock(mode === 'new');
     setNewDebtHistoricalAbonosMode('detailed');
     setNewDebtHistoricalAbonos([
@@ -1396,8 +1612,18 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       return;
     }
     const totalAmt = Math.max(0, parseFloat(newDebtTotalAmount) || 0);
-    if (totalAmt <= 0) {
-      showToast('Ingresa el monto total de la deuda / artículo al crédito.', 'warning');
+    const isDeferringPricing = Boolean(isAdminSession && newDebtDeferPricing && totalAmt <= 0);
+    if (!isDeferringPricing && totalAmt <= 0) {
+      showToast(
+        'Ingresa el Precio de Venta al Crédito o marca la casilla para definir los precios después.',
+        'warning'
+      );
+      return;
+    }
+
+    const matchedProductInitial = inventory.find((p) => p.id === newDebtProductId);
+    if (!newDebtCustomItemName.trim() && !matchedProductInitial) {
+      showToast('Ingresa el nombre o descripción del artículo del crédito.', 'warning');
       return;
     }
 
@@ -1479,7 +1705,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     const totalPaidAmount = Number(
       initialPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0).toFixed(2)
     );
-    if (totalPaidAmount >= totalAmt - 0.01) {
+    if (!isDeferringPricing && totalPaidAmount >= totalAmt - 0.01) {
       showToast(
         'La suma de prima y abonos previos iguala o supera el valor total. El saldo pendiente debe ser mayor a L. 0.00.',
         'warning'
@@ -1488,7 +1714,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
     }
     const balance = Number(Math.max(0, totalAmt - totalPaidAmount).toFixed(2));
 
-    const matchedProduct = inventory.find((p) => p.id === newDebtProductId);
+    let matchedProduct = matchedProductInitial;
     const articleTitle =
       newDebtCustomItemName.trim() ||
       (matchedProduct ? matchedProduct.name : 'Artículo Financiado al Crédito');
@@ -1503,6 +1729,25 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
     setIsCreatingDebt(true);
     try {
+      // If the Admin chose to also save this missing article into Inventory (only for NEW credits, never historical)
+      if (!isHistorical && !matchedProduct && newDebtAlsoCreateInInventory && onSaveProduct) {
+        const generatedCode =
+          newDebtCustomCode.trim() || `ART-${String(Date.now()).slice(-6)}`;
+        const createdProduct: Product = {
+          id: generatedCode,
+          companyId: storeSettings.companyId || 'gosen',
+          code: generatedCode,
+          name: articleTitle,
+          category: newDebtCustomCategory.trim() || 'General',
+          cost: effectiveCost,
+          price: totalAmt,
+          ...(totalAmt > 0 ? { creditPrice: totalAmt } : {}),
+          stock: 0,
+        };
+        await onSaveProduct(createdProduct);
+        matchedProduct = createdProduct;
+      }
+
       const saleId = `sale_crd_${Date.now()}`;
       const cleanCustomNum = newDebtCustomSaleNumber.trim().slice(0, 40);
       const saleNumber =
@@ -1514,7 +1759,10 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       const effectiveFirstDate =
         newDebtNextPaymentDate.trim() || calculateNextDateByFrequency(newDebtFrequency);
 
-      const shouldSkipStock = isHistorical ? !newDebtDeductStock : !matchedProduct || !newDebtDeductStock;
+      // Existing/historical credits MUST NEVER add to or subtract from current inventory; only NEW credits deduct stock
+      const shouldSkipStock = isHistorical
+        ? true
+        : !matchedProduct || !newDebtDeductStock;
 
       const newCreditSaleData: Omit<SaleRecord, 'id'> = {
         saleNumber,
@@ -1524,9 +1772,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         items: [
           {
             productId: matchedProduct?.id || `custom_${Date.now()}`,
-            code: matchedProduct?.code || 'CREDITO',
+            code: matchedProduct?.code || (newDebtCustomCode.trim() || 'CREDITO'),
             name: articleTitle,
-            category: matchedProduct?.category || 'Crédito',
+            category: matchedProduct?.category || newDebtCustomCategory.trim() || 'Crédito',
             cost: effectiveCost,
             price: totalAmt,
             creditPrice: totalAmt,
@@ -1560,6 +1808,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         creditDueDate: effectiveFirstDate,
         creditStatus: 'pending',
         creditPayments: initialPayments,
+        ...(isDeferringPricing ? { isCreditPricingPending: true } : {}),
         ...(isHistorical ? { isHistoricalPreApp: true } : {}),
         ...(shouldSkipStock ? { skipInventoryDeduction: true } : {}),
       };
@@ -1580,6 +1829,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       const newControlMeta: CreditAccountControlMeta = {
         saleId: recordedSaleId,
         customTotalCost: effectiveCost,
+        ...(isDeferringPricing ? { isPricingPending: true } : {}),
         nextPaymentDate: effectiveFirstDate,
         paymentFrequency: newDebtFrequency,
         installmentAmount:
@@ -1650,7 +1900,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       });
 
       showToast(
-        isHistorical
+        isDeferringPricing
+          ? `¡Artículo "${articleTitle}" registrado para ${cleanCust}! Podrás agregar el Precio Costo y Precio de Venta al Crédito cuando desees desde "Editar Artículo / Precios".`
+          : isHistorical
           ? `¡Cuenta histórica de ${cleanCust} ingresada! Ya abonado: L. ${totalPaidAmount.toFixed(2)} • Saldo pendiente: L. ${balance.toFixed(2)}`
           : `¡Cuenta por cobrar creada para ${cleanCust}! Saldo: L. ${balance.toFixed(2)} • Próximo cobro: ${effectiveFirstDate}`,
         'success'
@@ -1661,7 +1913,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       setNewDebtCustomerAddress('');
       setNewDebtGpsCoords(null);
       setNewDebtProductId('');
+      setNewDebtProductSearch('');
       setNewDebtCustomItemName('');
+      setNewDebtCustomCode('');
+      setNewDebtCustomCategory('General');
+      setNewDebtAlsoCreateInInventory(false);
+      setNewDebtDeferPricing(false);
       setNewDebtTotalAmount('');
       setNewDebtCustomCost('');
       setNewDebtCustomSaleNumber('');
@@ -4762,6 +5019,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   alertStatus,
                   controlMeta,
                   noticeCount,
+                  isPricingPending,
                 } = analytics;
                 const abonos = sale.creditPayments || [];
 
@@ -4861,6 +5119,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                 📜 Cuenta Histórica
                               </span>
                             )}
+                            {isPricingPending && (
+                              <span className="px-2 py-0.5 rounded-md bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-black">
+                                ⏳ Falta Precio Costo / Crédito
+                              </span>
+                            )}
                             {controlMeta?.assignedCollectorName && (
                               <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-900 text-[10px] font-bold">
                                 🛵 {controlMeta.assignedCollectorName}
@@ -4947,13 +5210,17 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           </span>
                           <span
                             className={`text-lg sm:text-xl font-black block tabular-nums ${
-                              isPaid ? 'text-emerald-600' : 'text-amber-700'
+                              isPricingPending && totalSale <= 0
+                                ? 'text-amber-600'
+                                : isPaid
+                                ? 'text-emerald-600'
+                                : 'text-amber-700'
                             }`}
                           >
-                            L. {bal.toFixed(2)}
+                            {isPricingPending && totalSale <= 0 ? 'Por definir' : `L. ${bal.toFixed(2)}`}
                           </span>
                           <span className="text-[11px] text-slate-500 block tabular-nums">
-                            Total: L. {totalSale.toFixed(2)} · Abonado: L. {paid.toFixed(2)}
+                            Total: {isPricingPending && totalSale <= 0 ? 'Por definir' : `L. ${totalSale.toFixed(2)}`} · Abonado: L. {paid.toFixed(2)}
                           </span>
                         </div>
                       </div>
@@ -5025,25 +5292,49 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             <button
                               type="button"
                               onClick={() => openControlModalForSale(sale)}
-                              className="text-[11px] font-bold text-slate-700 hover:text-slate-900 underline flex items-center gap-1 cursor-pointer"
-                              title="Editar el Precio Costo, Cobrador de Ruta y Fecha de este artículo/cuenta"
+                              className={`text-[11px] font-bold flex items-center gap-1 cursor-pointer ${
+                                isPricingPending
+                                  ? 'px-2 py-0.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-2xs'
+                                  : 'text-slate-700 hover:text-slate-900 underline'
+                              }`}
+                              title="Editar Artículo, Precio Costo, Precio de Venta al Crédito, Cobrador y Fecha"
                             >
                               <Pencil className="w-3 h-3" />
-                              <span>Configurar Cuenta</span>
+                              <span>
+                                {isPricingPending
+                                  ? 'Agregar Costo / Precio Crédito'
+                                  : 'Editar Artículo / Precios'}
+                              </span>
                             </button>
                           </div>
 
                           <div className="grid grid-cols-3 gap-2 text-center bg-white/90 rounded-lg p-2 border border-slate-200/80 text-[11px]">
                             <div>
                               <span className="text-slate-500 block">Precio Venta</span>
-                              <span className="font-black text-slate-900 tabular-nums">
-                                L. {totalSale.toFixed(2)}
+                              <span
+                                className={`font-black tabular-nums ${
+                                  isPricingPending && totalSale <= 0
+                                    ? 'text-amber-700'
+                                    : 'text-slate-900'
+                                }`}
+                              >
+                                {isPricingPending && totalSale <= 0
+                                  ? 'Por definir'
+                                  : `L. ${totalSale.toFixed(2)}`}
                               </span>
                             </div>
                             <div className="border-x border-slate-100">
                               <span className="text-slate-500 block">Precio Costo</span>
-                              <span className="font-black text-slate-800 tabular-nums">
-                                L. {totalCost.toFixed(2)}
+                              <span
+                                className={`font-black tabular-nums ${
+                                  isPricingPending && totalCost <= 0
+                                    ? 'text-amber-700'
+                                    : 'text-slate-800'
+                                }`}
+                              >
+                                {isPricingPending && totalCost <= 0
+                                  ? 'Por definir'
+                                  : `L. ${totalCost.toFixed(2)}`}
                               </span>
                             </div>
                             <div>
@@ -5051,7 +5342,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                 Ganancia Total
                               </span>
                               <span className="font-black text-emerald-700 tabular-nums">
-                                L. {expectedTotalProfit.toFixed(2)}
+                                {isPricingPending && totalSale <= 0
+                                  ? 'Por definir'
+                                  : `L. ${expectedTotalProfit.toFixed(2)}`}
                               </span>
                             </div>
                           </div>
@@ -5304,9 +5597,29 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
                       {/* Items summary */}
                       <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                          Artículo(s) en Deuda:
-                        </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                            Artículo(s) en Deuda:
+                          </span>
+                          {isAdminSession && (
+                            <button
+                              type="button"
+                              onClick={() => openControlModalForSale(sale)}
+                              className={`text-[10px] font-black flex items-center gap-1 cursor-pointer ${
+                                isPricingPending
+                                  ? 'px-2 py-0.5 rounded-md bg-amber-600 text-white hover:bg-amber-700'
+                                  : 'text-indigo-700 hover:text-indigo-900 hover:underline'
+                              }`}
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>
+                                {isPricingPending
+                                  ? 'Agregar Costo y Precio'
+                                  : 'Editar Artículo / Precios'}
+                              </span>
+                            </button>
+                          )}
+                        </div>
                         {(sale.items || []).map((it, idx) => (
                           <div
                             key={idx}
@@ -5315,7 +5628,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             <span>
                               <strong>{it.quantity}x</strong> {it.name}
                             </span>
-                            <span className="font-semibold">L. {it.subtotal.toFixed(2)}</span>
+                            <span className="font-semibold">
+                              {isPricingPending && it.subtotal <= 0
+                                ? 'Precio por definir'
+                                : `L. ${it.subtotal.toFixed(2)}`}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -5757,7 +6074,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 </div>
 
                 <div className="p-4 sm:p-5 overflow-y-auto scroll-container flex-1 space-y-5">
-                  <form onSubmit={handleSaveCreditAccountControl} className="space-y-4">
+                  <form
+                    id="credit-control-form"
+                    onSubmit={handleSaveCreditAccountControl}
+                    className="space-y-4"
+                  >
                     {/* Section A: Assign Route Collector & Customer Route Address */}
                     <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3">
                       <span className="text-xs font-black text-amber-950 block">
@@ -5810,12 +6131,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       </div>
                     </div>
 
-                    {/* Section B: Cost & Profit Configuration (Admin only) */}
+                    {/* Section B: Article, Cost & Credit Sale Price Configuration (Admin) */}
                     {canViewCostsAndProfits && (
                       <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-3">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="text-xs font-black text-slate-900">
-                            2. Precio Costo vs. Ganancia de la Cuenta
+                            2. Artículo, Precio Costo y Precio de Venta al Crédito
                           </span>
                           <button
                             type="button"
@@ -5831,33 +6152,204 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           </button>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {isAdminSession && (
+                          <div className="p-2.5 rounded-xl bg-white border border-emerald-200/80 space-y-2.5">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                                  Buscar / Vincular de Inventario (Opcional)
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Buscar por nombre o código..."
+                                  value={ctrlProductSearch}
+                                  onChange={(e) => setCtrlProductSearch(e.target.value)}
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                                  Seleccionar Artículo ({filteredInventoryForControl.length})
+                                </label>
+                                <select
+                                  value={ctrlLinkedProductId}
+                                  onChange={(e) => {
+                                    const pid = e.target.value;
+                                    setCtrlLinkedProductId(pid);
+                                    const prod = inventory.find((p) => p.id === pid);
+                                    if (prod) {
+                                      setCtrlItemName(prod.name);
+                                      setCtrlItemCode(prod.code);
+                                      if (Number(prod.cost) > 0) {
+                                        setCtrlCustomCost(String(Number(prod.cost)));
+                                      }
+                                      const suggestedCredit =
+                                        prod.creditPrice && prod.creditPrice > 0
+                                          ? prod.creditPrice
+                                          : prod.price;
+                                      if (suggestedCredit > 0) {
+                                        setCtrlCreditSalePrice(String(suggestedCredit));
+                                        setCtrlLeavePricingPending(false);
+                                      }
+                                    }
+                                  }}
+                                  className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                                >
+                                  <option value="">-- Artículo manual / sin vincular --</option>
+                                  {filteredInventoryForControl.map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.name} ({p.code}) — Costo: L. {Number(p.cost || 0).toFixed(2)} / Créd: L.{' '}
+                                      {Number(p.creditPrice || p.price || 0).toFixed(2)}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                  Nombre / Descripción del Artículo
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Ej. Juego de Sala, Refrigeradora..."
+                                  value={ctrlItemName}
+                                  onChange={(e) => setCtrlItemName(e.target.value)}
+                                  className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                  Código (Opcional)
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Ej. ART-001"
+                                  value={ctrlItemCode}
+                                  onChange={(e) => setCtrlItemCode(e.target.value)}
+                                  className="w-full px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-xs font-mono font-bold text-slate-900"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {isAdminSession && (
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                Precio de Venta al Crédito (L.)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                placeholder="0.00"
+                                value={ctrlCreditSalePrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCtrlCreditSalePrice(val);
+                                  if ((parseFloat(val) || 0) > 0) {
+                                    setCtrlLeavePricingPending(false);
+                                  }
+                                }}
+                                className="w-full px-3 py-2 rounded-xl bg-white border border-amber-400 text-sm font-black text-slate-900 tabular-nums"
+                              />
+                            </div>
+                          )}
+
                           <div>
                             <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                              Precio Costo Total de la Venta (L.)
+                              Precio Costo Total (L.)
                             </label>
                             <input
                               type="number"
                               step="0.01"
                               min="0"
+                              placeholder="0.00"
                               value={ctrlCustomCost}
                               onChange={(e) => setCtrlCustomCost(e.target.value)}
                               className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-black text-slate-900 tabular-nums"
                             />
                           </div>
+
                           <div className="p-2.5 rounded-xl bg-white border border-emerald-200 flex flex-col justify-center">
                             <span className="text-[10px] font-bold uppercase text-slate-400">
-                              Ganancia Total al Liquidar
+                              Ganancia / Nuevo Saldo
                             </span>
-                            <span className="text-base font-black text-emerald-700 tabular-nums">
-                              L.{' '}
-                              {Math.max(
+                            {(() => {
+                              const previewSalePrice = isAdminSession
+                                ? Math.max(0, parseFloat(ctrlCreditSalePrice) || 0)
+                                : controlModalAnalytics.totalSale;
+                              const previewCost = Math.max(0, parseFloat(ctrlCustomCost) || 0);
+                              const previewProfit = Math.max(0, previewSalePrice - previewCost);
+                              const previewPaid = Math.max(
                                 0,
-                                controlModalAnalytics.totalSale - (parseFloat(ctrlCustomCost) || 0)
-                              ).toFixed(2)}
-                            </span>
+                                Number(selectedSaleForControl.amountPaid) || 0
+                              );
+                              const previewBalance = Math.max(0, previewSalePrice - previewPaid);
+                              return ctrlLeavePricingPending && previewSalePrice <= 0 ? (
+                                <span className="text-xs font-black text-amber-700">
+                                  Pendiente de definir precios
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="text-sm font-black text-emerald-700 tabular-nums">
+                                    Ganancia: L. {previewProfit.toFixed(2)}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-slate-600 tabular-nums">
+                                    Saldo actual: L. {previewBalance.toFixed(2)}
+                                  </span>
+                                </>
+                              );
+                            })()}
                           </div>
                         </div>
+
+                        {isAdminSession && (
+                          <div className="space-y-2 pt-1">
+                            <label className="flex items-start gap-2 cursor-pointer text-[11px] font-semibold text-amber-900">
+                              <input
+                                type="checkbox"
+                                checked={ctrlLeavePricingPending}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setCtrlLeavePricingPending(checked);
+                                  if (checked) {
+                                    setCtrlCreditSalePrice('');
+                                  }
+                                }}
+                                className="mt-0.5 rounded border-amber-400 text-amber-600"
+                              />
+                              <span>
+                                Mantener Precio Costo y Precio de Venta al Crédito pendientes por definir
+                              </span>
+                            </label>
+
+                            {selectedSaleForControl.isHistoricalPreApp ? (
+                              <p className="text-[11px] font-semibold text-indigo-900 bg-indigo-50 border border-indigo-200 rounded-lg px-2.5 py-1.5">
+                                📜 Crédito ya existente: este artículo y sus precios no suman ni restan del Inventario actual.
+                              </p>
+                            ) : (
+                              onSaveProduct && (
+                                <label className="flex items-start gap-2 cursor-pointer text-[11px] font-semibold text-emerald-900">
+                                  <input
+                                    type="checkbox"
+                                    checked={ctrlAlsoSaveToInventory}
+                                    onChange={(e) => setCtrlAlsoSaveToInventory(e.target.checked)}
+                                    className="mt-0.5 rounded border-emerald-400 text-emerald-600"
+                                  />
+                                  <span>
+                                    {ctrlLinkedProductId
+                                      ? 'Actualizar también el Precio Costo y Precio Crédito de este artículo en Inventario'
+                                      : 'Guardar también este artículo nuevo y sus precios en mi Inventario (con stock 0)'}
+                                  </span>
+                                </label>
+                              )
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -6890,17 +7382,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           />
                         </div>
                       </div>
-                      <label className="flex items-start gap-2 cursor-pointer text-xs">
-                        <input
-                          type="checkbox"
-                          checked={!newDebtDeductStock}
-                          onChange={(e) => setNewDebtDeductStock(!e.target.checked)}
-                          className="mt-0.5 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <span className="text-[11px] text-indigo-950 font-semibold">
-                          No descontar del inventario actual (recomendado si la mercancía ya fue entregada al cliente antes de tener la app).
-                        </span>
-                      </label>
+                      <div className="px-2.5 py-2 rounded-lg bg-white/90 border border-indigo-200 text-[11px] text-indigo-950 font-semibold">
+                        🛡️ Los artículos de créditos ya existentes no suman ni restan unidades de tu Inventario actual (solo los créditos nuevos afectan tu inventario).
+                      </div>
                     </div>
                   )}
 
@@ -6940,10 +7424,24 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   </div>
 
                   <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Seleccionar Artículo del Inventario (Opcional)
-                      </label>
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="block text-xs font-bold text-slate-700">
+                          Buscar / Seleccionar Artículo del Inventario (Opcional)
+                        </label>
+                        {!newDebtProductId && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 text-[10px] font-black">
+                            Artículo manual / no ingresado
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Buscar en todo el inventario por nombre, código o categoría..."
+                        value={newDebtProductSearch}
+                        onChange={(e) => setNewDebtProductSearch(e.target.value)}
+                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-xs"
+                      />
                       <select
                         value={newDebtProductId}
                         onChange={(e) => {
@@ -6952,16 +7450,31 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           const prod = inventory.find((p) => p.id === pid);
                           if (prod) {
                             setNewDebtCustomItemName(prod.name);
+                            setNewDebtCustomCode(prod.code);
+                            setNewDebtCustomCategory(prod.category || 'General');
                             setNewDebtTotalAmount(
-                              String(prod.creditPrice && prod.creditPrice > 0 ? prod.creditPrice : prod.price)
+                              String(
+                                prod.creditPrice && prod.creditPrice > 0
+                                  ? prod.creditPrice
+                                  : prod.price
+                              )
                             );
                             setNewDebtCustomCost(String(Number(prod.cost) || 0));
+                            setNewDebtAlsoCreateInInventory(false);
+                            if (
+                              (prod.creditPrice && prod.creditPrice > 0) ||
+                              prod.price > 0
+                            ) {
+                              setNewDebtDeferPricing(false);
+                            }
                           }
                         }}
                         className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-900"
                       >
-                        <option value="">-- Elegir artículo o escribir abajo --</option>
-                        {inventory.slice(0, 300).map((p) => (
+                        <option value="">
+                          -- Artículo NO ingresado en inventario (Crear abajo) --
+                        </option>
+                        {filteredInventoryForDebt.map((p) => (
                           <option key={p.id} value={p.id}>
                             {p.name} ({p.code}) — Contado: L. {p.price.toFixed(2)}
                             {p.creditPrice ? ` / Crédito: L. ${p.creditPrice.toFixed(2)}` : ''}
@@ -6972,7 +7485,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Descripción del Artículo / Concepto de la Deuda *
+                        Nombre / Descripción del Artículo *
                       </label>
                       <input
                         type="text"
@@ -6984,23 +7497,128 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       />
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {newDebtMode === 'new' && !newDebtProductId && onSaveProduct && isAdminSession && (
+                      <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-2">
+                        <label className="flex items-start gap-2 cursor-pointer text-[11px] font-bold text-indigo-950">
+                          <input
+                            type="checkbox"
+                            checked={newDebtAlsoCreateInInventory}
+                            onChange={(e) => setNewDebtAlsoCreateInInventory(e.target.checked)}
+                            className="mt-0.5 rounded border-indigo-300 text-indigo-600"
+                          />
+                          <span>
+                            También guardar este artículo nuevo en mi Inventario (con stock 0; sus precios se pueden editar después)
+                          </span>
+                        </label>
+                        {newDebtAlsoCreateInInventory && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                                Código del Artículo (Opcional)
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Se genera automático si queda vacío"
+                                value={newDebtCustomCode}
+                                onChange={(e) => setNewDebtCustomCode(e.target.value)}
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-indigo-200 text-xs font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                                Categoría
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="General"
+                                value={newDebtCustomCategory}
+                                onChange={(e) => setNewDebtCustomCategory(e.target.value)}
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-indigo-200 text-xs"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {newDebtMode === 'new' && newDebtProductId && (
+                      <label className="flex items-start gap-2 p-2 rounded-xl bg-emerald-50 border border-emerald-200 cursor-pointer text-[11px] font-bold text-emerald-950">
+                        <input
+                          type="checkbox"
+                          checked={newDebtDeductStock}
+                          onChange={(e) => setNewDebtDeductStock(e.target.checked)}
+                          className="mt-0.5 rounded border-emerald-400 text-emerald-600"
+                        />
+                        <span>
+                          Descontar 1 unidad de este artículo del Inventario actual (Crédito Nuevo)
+                        </span>
+                      </label>
+                    )}
+
+                    {isAdminSession && (
+                      <label className="flex items-start gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={newDebtDeferPricing}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setNewDebtDeferPricing(checked);
+                            if (checked) {
+                              setNewDebtTotalAmount('');
+                            }
+                          }}
+                          className="mt-0.5 rounded border-amber-400 text-amber-600"
+                        />
+                        <span className="text-[11px] text-amber-950 font-bold leading-snug">
+                          Definir Precio Costo y Precio de Venta al Crédito después (solo crear el artículo ahora y editar precios luego)
+                        </span>
+                      </label>
+                    )}
+
+                    <div
+                      className={`grid grid-cols-1 ${
+                        newDebtMode === 'new' ? 'sm:grid-cols-2 md:grid-cols-4' : 'sm:grid-cols-3'
+                      } gap-3`}
+                    >
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Valor Total al Crédito (L.) *
+                          Precio de Venta al Crédito (L.){' '}
+                          {newDebtDeferPricing ? '(Después)' : '*'}
                         </label>
                         <input
                           type="number"
                           step="0.01"
-                          min="1"
-                          required
-                          placeholder="0.00"
+                          min={newDebtDeferPricing ? '0' : '1'}
+                          required={!newDebtDeferPricing}
+                          placeholder={newDebtDeferPricing ? 'Por definir luego' : '0.00'}
                           value={newDebtTotalAmount}
-                          onChange={(e) => setNewDebtTotalAmount(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setNewDebtTotalAmount(val);
+                            if ((parseFloat(val) || 0) > 0) {
+                              setNewDebtDeferPricing(false);
+                            }
+                          }}
                           className="w-full px-3 py-2 rounded-xl bg-white border border-amber-400 text-sm font-black text-slate-900"
                         />
                       </div>
-                      {newDebtMode === 'new' ? (
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Precio Costo (L., opcional)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder={newDebtDeferPricing ? 'Por definir luego' : '0.00'}
+                          value={newDebtCustomCost}
+                          onChange={(e) => setNewDebtCustomCost(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-bold text-slate-900"
+                        />
+                      </div>
+
+                      {newDebtMode === 'new' && (
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-1">
                             Prima / Abono Inicial (L.)
@@ -7015,22 +7633,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-bold text-slate-900"
                           />
                         </div>
-                      ) : (
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            Precio Costo (L., opcional)
-                          </label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            placeholder="0.00"
-                            value={newDebtCustomCost}
-                            onChange={(e) => setNewDebtCustomCost(e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-bold text-slate-900"
-                          />
-                        </div>
                       )}
+
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-1">
                           Cuota por Cobro (L.)
@@ -7281,9 +7885,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       {/* Live Summary Box */}
                       <div className="p-3 rounded-xl bg-white border border-slate-200 text-xs space-y-1 tabular-nums">
                         <div className="flex items-center justify-between text-slate-600">
-                          <span>Valor Total al Crédito:</span>
+                          <span>Precio de Venta al Crédito:</span>
                           <span className="font-bold text-slate-900">
-                            L. {createDebtLiveBreakdown.totalAmt.toFixed(2)}
+                            {newDebtDeferPricing && createDebtLiveBreakdown.totalAmt <= 0
+                              ? 'Por definir después'
+                              : `L. ${createDebtLiveBreakdown.totalAmt.toFixed(2)}`}
                           </span>
                         </div>
                         <div className="flex items-center justify-between text-emerald-700">
@@ -7298,12 +7904,16 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           <span className="text-slate-900">(=) Saldo Pendiente Actual por Cobrar:</span>
                           <span
                             className={
-                              createDebtLiveBreakdown.balanceDue > 0.01
+                              newDebtDeferPricing && createDebtLiveBreakdown.totalAmt <= 0
+                                ? 'text-amber-700'
+                                : createDebtLiveBreakdown.balanceDue > 0.01
                                 ? 'text-amber-700'
                                 : 'text-rose-600'
                             }
                           >
-                            L. {createDebtLiveBreakdown.balanceDue.toFixed(2)}
+                            {newDebtDeferPricing && createDebtLiveBreakdown.totalAmt <= 0
+                              ? 'Por definir después'
+                              : `L. ${createDebtLiveBreakdown.balanceDue.toFixed(2)}`}
                           </span>
                         </div>
                         <p className="text-[10px] text-slate-500 pt-1">

@@ -392,6 +392,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   canCancelSales: true,
                   canViewCostsAndProfits: true,
                   canUseCreditCalculator: true,
+                  canViewPriceCheckerCost: true,
                 }
               : {
                   canEditSales:
@@ -407,6 +408,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       ? collab.salesPermissions.canViewCostsAndProfits
                       : effectiveRole === 'admin',
                   canUseCreditCalculator: Boolean(collab?.salesPermissions?.canUseCreditCalculator),
+                  canViewPriceCheckerCost:
+                    collab?.salesPermissions?.canViewPriceCheckerCost !== undefined
+                      ? Boolean(collab.salesPermissions.canViewPriceCheckerCost)
+                      : effectiveRole === 'admin',
                   isRouteCollector: Boolean(collab?.salesPermissions?.isRouteCollector),
                   routeCollectorScope:
                     collab?.salesPermissions?.routeCollectorScope === 'assigned'

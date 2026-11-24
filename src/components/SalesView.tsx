@@ -62,7 +62,7 @@ import { PrintFormatModal, PrinterConnectionManager } from './PrintFormatModal';
 import { InvoiceTemplateEditor } from './InvoiceTemplateEditor';
 import { CreditContractViewAndEditor } from './CreditContractModal';
 import { AdaptiveImage } from './AdaptiveImage';
-import { getProductColors, resolveColorSwatch } from '../utils/productColorUtils';
+import { getProductColors, getProductColorStock, resolveColorSwatch } from '../utils/productColorUtils';
 import {
   cleanCategoryName,
   matchesCategoryFilter,
@@ -171,6 +171,7 @@ interface SalesViewProps {
   onCancelSale: (sale: SaleRecord) => Promise<void>;
   onSaveStoreSettings?: (settings: StoreSettings) => Promise<void>;
   onSaveUser?: (user: UserAccount) => Promise<void>;
+  onSaveProduct?: (product: Product, oldCode?: string) => Promise<void>;
   onOpenRestaurant?: () => void;
   pendingCreditHandoff?: PriceCheckerCreditHandoff | null;
   onConsumeCreditHandoff?: () => void;
@@ -196,6 +197,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   onCancelSale,
   onSaveStoreSettings,
   onSaveUser,
+  onSaveProduct,
   onOpenRestaurant,
   pendingCreditHandoff,
   onConsumeCreditHandoff,
@@ -1123,6 +1125,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
         };
         return updated;
       } else {
+        const prodColors = getProductColors(product);
+        const firstAvailableColor =
+          prodColors.find((col) => {
+            const cQty = getProductColorStock(product, col);
+            return cQty === undefined || cQty > 0;
+          }) || prodColors[0];
         return [
           ...prevCart,
           {
@@ -1131,6 +1139,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
             name: product.name,
             category: product.category,
             size: product.size,
+            selectedColor: firstAvailableColor,
             originalPrice: basePrice,
             cashPrice: effectiveUnitPrice,
             creditPrice:
@@ -1148,6 +1157,14 @@ export const SalesView: React.FC<SalesViewProps> = ({
         ];
       }
     });
+  };
+
+  const updateCartItemColor = (code: string, colorName: string) => {
+    setCart((prev) =>
+      prev.map((item) =>
+        item.code === code ? { ...item, selectedColor: colorName || undefined } : item
+      )
+    );
   };
 
   // Update item quantity in cart (checks the item's own warehouse stock)
@@ -3887,6 +3904,8 @@ export const SalesView: React.FC<SalesViewProps> = ({
             return sale;
           }}
           onRecordSale={onRecordSale}
+          onUpdateSale={onUpdateSale}
+          onSaveProduct={onSaveProduct}
           onSaveUser={onSaveUser}
           onViewSaleTicket={(sale) => {
             setCompletedSale(sale);
@@ -4170,10 +4189,15 @@ export const SalesView: React.FC<SalesViewProps> = ({
                               <div className="flex flex-wrap items-center gap-1 pt-0.5">
                                 {getProductColors(product).map((colName) => {
                                   const sw = resolveColorSwatch(colName);
+                                  const colQty = getProductColorStock(product, colName);
                                   return (
                                     <span
                                       key={colName}
-                                      className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-slate-100 border border-slate-200 text-[9px] font-bold text-slate-700"
+                                      className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full border text-[9px] font-bold ${
+                                        colQty === 0
+                                          ? 'bg-rose-50/80 border-rose-200 text-rose-700'
+                                          : 'bg-slate-100 border-slate-200 text-slate-700'
+                                      }`}
                                     >
                                       <span
                                         className="w-2 h-2 rounded-full shrink-0 border"
@@ -4183,6 +4207,9 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                         }}
                                       />
                                       <span>{colName}</span>
+                                      {colQty !== undefined && (
+                                        <span className="font-black tabular-nums">({colQty})</span>
+                                      )}
                                     </span>
                                   );
                                 })}
@@ -4492,6 +4519,40 @@ export const SalesView: React.FC<SalesViewProps> = ({
                                 {item.size}
                               </span>
                             )}
+                            {(() => {
+                              const itemColors = productInStore ? getProductColors(productInStore) : [];
+                              if (itemColors.length === 0) return null;
+                              if (itemColors.length === 1) {
+                                const sw = resolveColorSwatch(itemColors[0]);
+                                return (
+                                  <span className="inline-flex items-center gap-1 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded text-[10px] font-semibold text-slate-700">
+                                    <span
+                                      className="w-2 h-2 rounded-full shrink-0 border"
+                                      style={{ background: sw.hex, borderColor: sw.borderHex }}
+                                    />
+                                    <span>{itemColors[0]}</span>
+                                  </span>
+                                );
+                              }
+                              return (
+                                <select
+                                  value={item.selectedColor || itemColors[0]}
+                                  onChange={(e) => updateCartItemColor(item.code, e.target.value)}
+                                  className="bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-700 outline-none focus:border-emerald-500 cursor-pointer"
+                                  title="Color vendido"
+                                >
+                                  {itemColors.map((cName) => {
+                                    const cQty = getProductColorStock(productInStore, cName);
+                                    return (
+                                      <option key={cName} value={cName}>
+                                        {cName}
+                                        {cQty !== undefined ? ` (${cQty})` : ''}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              );
+                            })()}
                           </div>
                         </div>
 

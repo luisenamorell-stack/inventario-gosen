@@ -1967,6 +1967,7 @@ app.post('/api/auth/login', async (req, res) => {
               canCancelSales: false,
               canViewCostsAndProfits: false,
               canUseCreditCalculator: false,
+              canViewPriceCheckerCost: false,
             },
           },
           logoUrl: compObj?.logoUrl || storeMatch.tenant.settings?.logoUrl,
@@ -2065,6 +2066,10 @@ app.post('/api/auth/login', async (req, res) => {
                 ? u.salesPermissions.canViewCostsAndProfits
                 : effectiveRole === 'admin',
             canUseCreditCalculator: Boolean(u.salesPermissions?.canUseCreditCalculator),
+            canViewPriceCheckerCost:
+              u.salesPermissions?.canViewPriceCheckerCost !== undefined
+                ? Boolean(u.salesPermissions.canViewPriceCheckerCost)
+                : effectiveRole === 'admin',
             isRouteCollector: Boolean(u.salesPermissions?.isRouteCollector),
             routeCollectorScope:
               u.salesPermissions?.routeCollectorScope === 'assigned' ? 'assigned' : 'all',
@@ -2404,6 +2409,8 @@ app.get('/api/public/catalog', (req, res) => {
     size: p.size || '',
     color: p.color || '',
     colors: Array.isArray(p.colors) ? p.colors : undefined,
+    colorStocks:
+      p.colorStocks && typeof p.colorStocks === 'object' ? p.colorStocks : undefined,
     price: Number(p.price) || 0,
     discount: p.discount !== undefined ? Number(p.discount) : undefined,
     discountType: p.discountType,
@@ -2591,6 +2598,13 @@ app.post('/api/cloud-sync/inventory', requireAuthSession, (req, res) => {
           safeItem.warehouseStocks ||
           existing.warehouseStocks ||
           undefined;
+        const bestColorStocks = shouldPreferIncoming
+          ? safeItem.colorStocks !== undefined
+            ? safeItem.colorStocks
+            : existing.colorStocks
+          : existing.colorStocks !== undefined
+          ? existing.colorStocks
+          : safeItem.colorStocks;
 
         const mergedItem = {
           ...existing,
@@ -2606,6 +2620,7 @@ app.post('/api/cloud-sync/inventory', requireAuthSession, (req, res) => {
           price: Number(winner.price ?? existing.price) || 0,
           stock: Number(winner.stock ?? existing.stock) || 0,
           ...(bestWarehouseStocks ? { warehouseStocks: bestWarehouseStocks } : {}),
+          ...(bestColorStocks ? { colorStocks: bestColorStocks } : {}),
           img: bestImg,
           updatedAt: Math.max(incomingTs, existingTs, 1),
         };
@@ -2617,7 +2632,9 @@ app.post('/api/cloud-sync/inventory', requireAuthSession, (req, res) => {
           mergedItem.stock !== existing.stock ||
           mergedItem.img !== existing.img ||
           JSON.stringify(mergedItem.warehouseStocks || {}) !==
-            JSON.stringify(existing.warehouseStocks || {})
+            JSON.stringify(existing.warehouseStocks || {}) ||
+          JSON.stringify(mergedItem.colorStocks || {}) !==
+            JSON.stringify(existing.colorStocks || {})
         ) {
           changed = true;
         }

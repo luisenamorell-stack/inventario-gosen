@@ -16,6 +16,7 @@ export interface Product {
   discountValue?: number;
   stock: number;
   warehouseStocks?: Record<string, number>;
+  colorStocks?: Record<string, number>;
   img?: string;
   img2?: string;
 }
@@ -326,6 +327,7 @@ export interface CollaboratorSalesPermissions {
   canCancelSales?: boolean;
   canViewCostsAndProfits?: boolean;
   canUseCreditCalculator?: boolean;
+  canViewPriceCheckerCost?: boolean;
   allowedWarehouseIds?: string[];
   isRouteCollector?: boolean;
   routeCollectorScope?: 'all' | 'assigned';
@@ -428,6 +430,7 @@ export interface SaleItem {
   name: string;
   category?: string;
   size?: string;
+  selectedColor?: string;
   originalPrice?: number;
   cashPrice?: number;
   creditPrice?: number;
@@ -569,6 +572,7 @@ export interface SaleRecord {
   creditContract?: CreditContractData;
   isHistoricalPreApp?: boolean;
   skipInventoryDeduction?: boolean;
+  isCreditPricingPending?: boolean;
   warrantyInfo?: SaleWarrantyInfo;
   customerName?: string;
   customerPhone?: string;
@@ -727,6 +731,7 @@ export interface CreditAccountControlMeta {
   customerGpsFormattedAddress?: string;
   customerGpsPlusCode?: string;
   autoAdvanceNextDate?: boolean;
+  isPricingPending?: boolean;
   creditContract?: CreditContractData;
   lastNoticeAt?: number;
   lastNoticeTimestamp?: number;
