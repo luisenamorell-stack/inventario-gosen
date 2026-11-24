@@ -1112,17 +1112,26 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       const updatedMeta: CreditAccountControlMeta = {
         ...existingMeta,
         saleId: selectedSaleForControl.id,
-        customTotalCost: parsedCost,
-        isPricingPending: effectivePendingFlag,
+        customTotalCost: canViewCostsAndProfits
+          ? parsedCost
+          : existingMeta.customTotalCost,
+        isPricingPending: canViewCostsAndProfits
+          ? effectivePendingFlag
+          : existingMeta.isPricingPending,
         nextPaymentDate: ctrlNextPaymentDate.trim() || undefined,
         paymentFrequency: ctrlFrequency,
         installmentAmount:
           !Number.isNaN(parsedInstallment) && parsedInstallment > 0 ? parsedInstallment : undefined,
         collectionNotes: ctrlNotes.trim() || undefined,
-        assignedCollectorId: matchedCollector?.id || undefined,
-        assignedCollectorUsername:
-          matchedCollector?.username || (cleanAssignedUname || undefined),
-        assignedCollectorName: matchedCollector?.name || undefined,
+        assignedCollectorId: isAdminSession
+          ? matchedCollector?.id || undefined
+          : existingMeta.assignedCollectorId,
+        assignedCollectorUsername: isAdminSession
+          ? matchedCollector?.username || (cleanAssignedUname || undefined)
+          : existingMeta.assignedCollectorUsername,
+        assignedCollectorName: isAdminSession
+          ? matchedCollector?.name || undefined
+          : existingMeta.assignedCollectorName,
         customerAddressOrRoute: ctrlCustomerAddressOrRoute.trim() || undefined,
       };
 
@@ -1220,13 +1229,13 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           normalizeCollectorIdentifier(u)
         )
       );
-      if (cleanAssignedUname) {
+      if (isAdminSession && cleanAssignedUname) {
         currentEnabled.add(
           normalizeCollectorIdentifier(matchedCollector?.username || cleanAssignedUname)
         );
       }
 
-      if (matchedCollector && onSaveUser) {
+      if (isAdminSession && matchedCollector && onSaveUser) {
         await onSaveUser({
           ...matchedCollector,
           allowedTabs: matchedCollector.allowedTabs?.includes('sales')
@@ -4605,7 +4614,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     Control de Clientes por Cobrar, Abonos y Alertas de Ruta
                   </h2>
                   <p className="text-[11px] text-slate-300">
-                    Registra abonos en ruta, consulta saldos pendientes, programa el siguiente cobro y envía alertas al Administrador.
+                    Registra abonos en ruta, envía avisos por WhatsApp (Preventivo, Toca Hoy, Vencido y Estado de Cuenta), programa cobros, registra visitas y envía alertas al Administrador.
                   </p>
                 </div>
               </div>
@@ -4920,10 +4929,19 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         <button
                           type="button"
                           onClick={() => handleSendCreditReminderWhatsApp(sale, templateToUse)}
-                          className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center justify-center cursor-pointer"
-                          title="Enviar recordatorio por WhatsApp al cliente"
+                          className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                          title="Enviar aviso rápido por WhatsApp al cliente"
                         >
                           <WhatsAppIcon className="w-3.5 h-3.5 fill-white shrink-0" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openControlModalForSale(sale)}
+                          className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                          title="Abrir los 4 avisos por WhatsApp, bitácora de visitas y programación"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                          <span>Avisos</span>
                         </button>
                       </div>
                     </div>
@@ -5571,13 +5589,20 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           </div>
 
                           <div className="text-slate-500">
-                            {noticeCount > 0 ? (
-                              <span>
-                                Avisos: <strong className="text-slate-800">{noticeCount}</strong>
-                              </span>
-                            ) : (
-                              <span>0 avisos</span>
-                            )}
+                            <button
+                              type="button"
+                              onClick={() => openControlModalForSale(sale)}
+                              className="hover:underline cursor-pointer"
+                              title="Ver bitácora de avisos y programar cobros"
+                            >
+                              {noticeCount > 0 ? (
+                                <span>
+                                  Avisos: <strong className="text-slate-800">{noticeCount}</strong>
+                                </span>
+                              ) : (
+                                <span>0 avisos</span>
+                              )}
+                            </button>
                           </div>
                         </div>
 
@@ -5588,92 +5613,121 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         )}
 
                         {!isPaid && (
-                          <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedSaleForQuickSchedule(sale);
-                                setQuickScheduleFrequency(
-                                  controlMeta?.paymentFrequency ||
-                                    routeCollectorConfig.defaultPaymentFrequency ||
-                                    'weekly'
-                                );
-                                setQuickScheduleDate(
-                                  calculateNextDateByFrequency(
-                                    controlMeta?.paymentFrequency,
-                                    effectiveNextDate
-                                  )
-                                );
-                                setQuickScheduleNote('');
-                              }}
-                              className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-amber-300 text-amber-950 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                            >
-                              <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                              <span>Programar Siguiente Cobro</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setSelectedSaleForGpsModal(sale)}
-                              className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
-                              title="Capturar la dirección exacta del cliente estando en el lugar usando el GPS del teléfono"
-                            >
-                              <MapPin className="w-3.5 h-3.5" />
-                              <span>
-                                {typeof controlMeta?.customerGpsLat === 'number'
-                                  ? '📍 Actualizar GPS Cliente'
-                                  : '📍 Agregar Dirección con GPS'}
+                          <div className="space-y-2 pt-1">
+                            {/* Direct 4 WhatsApp Collection Notice Buttons (Admin & Assigned Collector) */}
+                            <div className="p-2 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-1.5">
+                              <span className="text-[10px] font-black uppercase tracking-wide text-emerald-950 flex items-center gap-1">
+                                <WhatsAppIcon className="w-3 h-3 fill-emerald-700 shrink-0" />
+                                <span>Enviar Aviso de Cobro por WhatsApp:</span>
                               </span>
-                            </button>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleSendCreditReminderWhatsApp(sale, 'preventive')
+                                  }
+                                  className="px-2 py-1.5 rounded-lg bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-[10px] text-center cursor-pointer leading-tight"
+                                >
+                                  Recordatorio Preventivo
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleSendCreditReminderWhatsApp(sale, 'due_today')
+                                  }
+                                  className="px-2 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-bold text-[10px] text-center cursor-pointer leading-tight"
+                                >
+                                  Hoy Toca Abono
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleSendCreditReminderWhatsApp(sale, 'overdue')
+                                  }
+                                  className="px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-900 font-bold text-[10px] text-center cursor-pointer leading-tight"
+                                >
+                                  Cobro Vencido
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleSendCreditReminderWhatsApp(sale, 'statement')
+                                  }
+                                  className="px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-900 font-bold text-[10px] text-center cursor-pointer leading-tight"
+                                >
+                                  Estado de Cuenta
+                                </button>
+                              </div>
+                            </div>
 
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedSaleForCollectorAlert(sale);
-                                setCollectorAlertType('customer_absent');
-                                setCollectorAlertMessage('');
-                                setCollectorAlertNextDate('');
-                              }}
-                              className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                            >
-                              <Bell className="w-3.5 h-3.5 text-rose-600" />
-                              <span>Enviar Alerta al Admin</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleSendCreditReminderWhatsApp(
-                                  sale,
-                                  alertStatus === 'overdue'
-                                    ? 'overdue'
-                                    : alertStatus === 'due_today'
-                                    ? 'due_today'
-                                    : 'preventive'
-                                )
-                              }
-                              className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                            >
-                              <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
-                              <span>
-                                {alertStatus === 'overdue'
-                                  ? 'WhatsApp Atraso'
-                                  : alertStatus === 'due_today'
-                                  ? 'WhatsApp Toca Hoy'
-                                  : 'Recordatorio'}
-                              </span>
-                            </button>
-
-                            {isAdminSession && (
+                            <div className="flex flex-wrap items-center gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => openControlModalForSale(sale)}
-                                className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                                onClick={() => {
+                                  setSelectedSaleForQuickSchedule(sale);
+                                  setQuickScheduleFrequency(
+                                    controlMeta?.paymentFrequency ||
+                                      routeCollectorConfig.defaultPaymentFrequency ||
+                                      'weekly'
+                                  );
+                                  setQuickScheduleDate(
+                                    calculateNextDateByFrequency(
+                                      controlMeta?.paymentFrequency,
+                                      effectiveNextDate
+                                    )
+                                  );
+                                  setQuickScheduleNote('');
+                                }}
+                                className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-amber-300 text-amber-950 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
                               >
-                                <Settings className="w-3.5 h-3.5 text-slate-500" />
-                                <span>Configurar / Asignar</span>
+                                <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                                <span>Programar Siguiente Cobro</span>
                               </button>
-                            )}
+
+                              <button
+                                type="button"
+                                onClick={() => setSelectedSaleForGpsModal(sale)}
+                                className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
+                                title="Capturar la dirección exacta del cliente estando en el lugar usando el GPS del teléfono"
+                              >
+                                <MapPin className="w-3.5 h-3.5" />
+                                <span>
+                                  {typeof controlMeta?.customerGpsLat === 'number'
+                                    ? '📍 Actualizar GPS Cliente'
+                                    : '📍 Agregar Dirección con GPS'}
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedSaleForCollectorAlert(sale);
+                                  setCollectorAlertType('customer_absent');
+                                  setCollectorAlertMessage('');
+                                  setCollectorAlertNextDate('');
+                                }}
+                                className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                              >
+                                <Bell className="w-3.5 h-3.5 text-rose-600" />
+                                <span>Enviar Alerta al Admin</span>
+                              </button>
+
+                              {(isAdminSession || isCurrentUserRouteCollector) && (
+                                <button
+                                  type="button"
+                                  onClick={() => openControlModalForSale(sale)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                                  title="Configurar ruta, notas, avisos WhatsApp y bitácora de visitas"
+                                >
+                                  <Settings className="w-3.5 h-3.5 text-slate-500" />
+                                  <span>
+                                    {isAdminSession
+                                      ? 'Configurar / Asignar'
+                                      : 'Avisos, Ruta y Bitácora'}
+                                  </span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -6186,8 +6240,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           </label>
                           <select
                             value={ctrlAssignedCollectorUsername}
+                            disabled={!isAdminSession}
                             onChange={(e) => setCtrlAssignedCollectorUsername(e.target.value)}
-                            className="w-full px-2.5 py-2 rounded-xl bg-white border border-amber-300 text-xs font-bold text-slate-900"
+                            className="w-full px-2.5 py-2 rounded-xl bg-white disabled:bg-slate-100 disabled:text-slate-600 border border-amber-300 text-xs font-bold text-slate-900"
                           >
                             <option value="">-- Todos / Sin cobrador específico --</option>
                             {collaboratorUsers.map((col) => (
