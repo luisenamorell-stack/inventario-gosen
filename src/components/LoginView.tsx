@@ -534,6 +534,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 }}
                 placeholder="Ingresa tu contraseña"
                 autoFocus
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck="false"
+                inputMode="text"
                 disabled={loader.isActive || isVerifying || remainingLockSeconds > 0}
                 autoComplete="current-password"
                 className="w-full pl-10 pr-10 py-3.5 bg-slate-950 border border-slate-800 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all text-sm font-semibold tracking-wider"

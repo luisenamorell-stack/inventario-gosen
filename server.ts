@@ -208,34 +208,36 @@ function verifyPassword(
   storedSecret: unknown,
   options?: { allowUpperFallback?: boolean; allowLowerFallback?: boolean }
 ): boolean {
-  const cleanCandidate = String(candidateInput || '').trim();
+  const raw = String(candidateInput || '');
+  // Clean zero-width spaces, non-breaking spaces, BOM and whitespace typical in mobile inputs
+  const cleanCandidate = raw.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
   const stored = String(storedSecret || '').trim();
   if (!cleanCandidate || !stored || stored === HASHED_PASSWORD_MASK) return false;
 
   if (isHashedPassword(stored)) {
     const [, saltHex, hashHex] = stored.split('$');
     if (timingSafeHexScryptMatch(cleanCandidate, saltHex, hashHex)) return true;
-    if (options?.allowUpperFallback) {
-      const upper = cleanCandidate.toUpperCase();
-      if (upper !== cleanCandidate && timingSafeHexScryptMatch(upper, saltHex, hashHex)) return true;
-    }
-    if (options?.allowLowerFallback) {
-      const lower = cleanCandidate.toLowerCase();
-      if (lower !== cleanCandidate && timingSafeHexScryptMatch(lower, saltHex, hashHex)) return true;
-    }
+    const upper = cleanCandidate.toUpperCase();
+    if (upper !== cleanCandidate && timingSafeHexScryptMatch(upper, saltHex, hashHex)) return true;
+    const lower = cleanCandidate.toLowerCase();
+    if (lower !== cleanCandidate && timingSafeHexScryptMatch(lower, saltHex, hashHex)) return true;
     return false;
   }
 
-  // Legacy plaintext compatibility with constant-time comparison -> upgraded on success
+  // Legacy plaintext compatibility with robust case-insensitive comparison
   const safeStrEqual = (a: string, b: string) => {
-    const ba = Buffer.from(a, 'utf-8');
-    const bb = Buffer.from(b, 'utf-8');
-    if (ba.length !== bb.length) return false;
-    return crypto.timingSafeEqual(ba, bb);
+    try {
+      const ba = Buffer.from(a, 'utf-8');
+      const bb = Buffer.from(b, 'utf-8');
+      if (ba.length !== bb.length) return false;
+      return crypto.timingSafeEqual(ba, bb);
+    } catch {
+      return a === b;
+    }
   };
   if (safeStrEqual(cleanCandidate, stored)) return true;
-  if (options?.allowUpperFallback && safeStrEqual(cleanCandidate.toUpperCase(), stored.toUpperCase())) return true;
-  if (options?.allowLowerFallback && safeStrEqual(cleanCandidate.toLowerCase(), stored.toLowerCase())) return true;
+  if (safeStrEqual(cleanCandidate.toUpperCase(), stored.toUpperCase())) return true;
+  if (safeStrEqual(cleanCandidate.toLowerCase(), stored.toLowerCase())) return true;
   return false;
 }
 
