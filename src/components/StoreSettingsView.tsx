@@ -912,11 +912,11 @@ export const StoreSettingsView: React.FC<StoreSettingsViewProps> = ({
                   <div className="relative group">
                     <div className="w-20 h-20 rounded-2xl bg-slate-900 border-2 border-emerald-500/50 shadow-xl overflow-hidden p-1.5 flex items-center justify-center">
                       <img
-                        src="/pwa-512x512.png?v=miapphn3"
+                        src="/pwa-512x512.png?v=miapphn4"
                         alt="MIAPPHN"
                         className="w-full h-full object-contain rounded-xl"
                         onError={(e) => {
-                          (e.target as HTMLImageElement).src = '/pwa-192x192.png?v=miapphn3';
+                          (e.target as HTMLImageElement).src = '/pwa-192x192.png?v=miapphn4';
                         }}
                       />
                     </div>

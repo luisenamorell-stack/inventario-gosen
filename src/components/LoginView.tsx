@@ -3,6 +3,7 @@ import { StoreSettings, UserAccount, UserSession, CompanyTenant } from '../types
 import {
   normalizeCompanySlug,
   setBackendSessionAuthenticated,
+  setAuthToken,
 } from '../firebase/firestoreService';
 import {
   Lock,
@@ -209,14 +210,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    const cleanInput = password.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+    const cleanInput = password
+      .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+      .normalize('NFC')
+      .trim();
+    const cleanUser = usernameInput
+      .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+      .normalize('NFC')
+      .trim()
+      .toLowerCase();
 
     if (!cleanInput) {
       setError('Ingresa tu contraseña de acceso para continuar.');
       return;
     }
 
-    if (loginMode === 'collaborator' && !usernameInput.trim()) {
+    if (loginMode === 'collaborator' && !cleanUser) {
       setError('Ingresa tu nombre de usuario de colaborador.');
       return;
     }
@@ -243,13 +252,29 @@ export const LoginView: React.FC<LoginViewProps> = ({
           body: JSON.stringify({
             mode: loginMode,
             password: cleanInput,
-            username: loginMode === 'collaborator' ? usernameInput.trim() : undefined,
+            username: loginMode === 'collaborator' ? cleanUser : undefined,
             companyId: hasUrlEmpresa ? normalizedSlug : undefined,
             remember: rememberMe,
           }),
         });
       } finally {
         clearTimeout(timeoutId);
+      }
+
+      const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+      if (!contentType.includes('application/json')) {
+        const rawBody = await res.text().catch(() => '');
+        const lowerBody = rawBody.toLowerCase();
+        const isGoogleProxy =
+          (res.url || '').includes('accounts.google.com') ||
+          lowerBody.includes('accounts.google.com') ||
+          lowerBody.includes('servicelogin');
+        setError(
+          isGoogleProxy
+            ? 'Este navegador móvil requiere iniciar sesión con la cuenta de Google autorizada, o abrir el enlace público publicado.'
+            : `El servidor de autenticación no respondió correctamente (HTTP ${res.status}). Verifica que estés entrando desde el enlace activo actualizado.`
+        );
+        return;
       }
 
       const data = await res.json().catch(() => ({}));
@@ -274,6 +299,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
 
       if (!res.ok || !data?.ok || !data?.session) {
+        if (res.status >= 500) {
+          setError(data?.error || 'Error temporal en el servidor de autenticación. Intenta de nuevo.');
+          return;
+        }
         registerFailedAttempt(
           data?.error ||
             (loginMode === 'collaborator'
@@ -284,9 +313,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
 
       if (data?.authToken) {
-        try {
-          localStorage.setItem('stockmaster_auth_token', String(data.authToken));
-        } catch {}
+        setAuthToken(String(data.authToken));
       }
 
       const serverSession = data.session as UserSession;
@@ -320,15 +347,19 @@ export const LoginView: React.FC<LoginViewProps> = ({
           : serverSession.companyName || matchedSlug.toUpperCase(),
         data.logoUrl
       );
-    } catch {
-      setError('No se pudo conectar con el servidor de autenticación. Verifica tu conexión e intenta de nuevo.');
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        setError('Tiempo de espera agotado al verificar tu contraseña. Revisa tu conexión móvil e intenta de nuevo.');
+      } else {
+        setError('No se pudo conectar con el servidor de autenticación. Verifica tu conexión móvil e intenta de nuevo.');
+      }
     } finally {
       setIsVerifying(false);
     }
   };
 
   return (
-    <div className="min-h-screen w-full bg-slate-950 flex flex-col items-center justify-center p-4 relative overflow-hidden select-none">
+    <div className="min-h-full w-full bg-slate-950 flex flex-col items-center justify-center px-4 py-6 sm:p-6 relative overflow-x-hidden select-text">
       {/* Subtle ambient background */}
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
 
@@ -500,18 +531,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </div>
                 <input
                   id="login-username"
+                  name="username"
                   type="text"
                   placeholder="Tu nombre de usuario"
                   value={usernameInput}
                   disabled={loader.isActive || isVerifying || remainingLockSeconds > 0}
                   onChange={(e) => {
-                    setUsernameInput(e.target.value.toLowerCase());
+                    setUsernameInput(e.target.value);
                     if (error) setError(null);
                   }}
                   autoCapitalize="none"
                   autoCorrect="off"
-                  spellCheck="false"
+                  spellCheck={false}
                   autoComplete="username"
+                  enterKeyHint="next"
                   className="w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm font-semibold"
                 />
               </div>
@@ -535,6 +568,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
               <input
                 id="login-password"
+                name="password"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => {
@@ -542,11 +576,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   if (error) setError(null);
                 }}
                 placeholder="Ingresa tu contraseña"
-                autoFocus
+                autoFocus={typeof window !== 'undefined' && window.innerWidth >= 768}
                 autoCapitalize="none"
                 autoCorrect="off"
-                spellCheck="false"
+                spellCheck={false}
                 inputMode="text"
+                enterKeyHint="go"
                 disabled={loader.isActive || isVerifying || remainingLockSeconds > 0}
                 autoComplete="current-password"
                 className="w-full pl-10 pr-10 py-3.5 bg-slate-950 border border-slate-800 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all text-sm font-semibold tracking-wider"
@@ -555,7 +590,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 tabIndex={-1}
-                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-200 transition-colors cursor-pointer touch-manipulation"
                 aria-label={showPassword ? 'Ocultar contraseña' : 'Ver contraseña'}
               >
                 {showPassword ? (
@@ -598,7 +633,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <button
             type="submit"
             disabled={loader.isActive || isVerifying || remainingLockSeconds > 0}
-            className="w-full py-3.5 px-4 text-slate-950 font-black text-sm rounded-2xl bg-emerald-400 hover:bg-emerald-300 transition-all duration-150 flex items-center justify-center gap-2 shadow-lg cursor-pointer disabled:opacity-50"
+            className="w-full py-3.5 px-4 text-slate-950 font-black text-sm rounded-2xl bg-emerald-400 hover:bg-emerald-300 transition-all duration-150 flex items-center justify-center gap-2 shadow-lg cursor-pointer touch-manipulation disabled:opacity-50"
           >
             <span>
               {remainingLockSeconds > 0
@@ -620,7 +655,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 setLoginMode('collaborator');
                 setError(null);
               }}
-              className="text-xs text-slate-400 hover:text-emerald-400 font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+              className="text-xs text-slate-400 hover:text-emerald-400 font-semibold transition-colors cursor-pointer touch-manipulation py-1 flex items-center justify-center gap-1.5"
             >
               <Users className="w-3.5 h-3.5 text-slate-400" />
               <span>Ingresar con usuario de colaborador</span>
@@ -632,7 +667,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 setLoginMode('store_pass');
                 setError(null);
               }}
-              className="text-xs text-emerald-400 hover:text-emerald-300 font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+              className="text-xs text-emerald-400 hover:text-emerald-300 font-bold transition-colors cursor-pointer touch-manipulation py-1 flex items-center justify-center gap-1.5"
             >
               <Lock className="w-3.5 h-3.5 text-emerald-400" />
               <span>Ingresar solo con contraseña de acceso</span>

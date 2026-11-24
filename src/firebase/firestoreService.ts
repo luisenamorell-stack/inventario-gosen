@@ -1818,17 +1818,55 @@ export function isMaskedOrHashedPassword(val: unknown): boolean {
   return clean === HASHED_PASSWORD_MASK || clean === '••••••••' || clean.startsWith('scrypt$');
 }
 
+let inMemoryAuthToken: string | null = null;
+
+export function setAuthToken(token: string | null): void {
+  const clean = token ? String(token).trim() : '';
+  inMemoryAuthToken = clean || null;
+  try {
+    if (clean) {
+      localStorage.setItem('stockmaster_auth_token', clean);
+    } else {
+      localStorage.removeItem('stockmaster_auth_token');
+    }
+  } catch {}
+  try {
+    if (clean) {
+      sessionStorage.setItem('stockmaster_auth_token', clean);
+    } else {
+      sessionStorage.removeItem('stockmaster_auth_token');
+    }
+  } catch {}
+}
+
+export function getAuthToken(): string | null {
+  if (inMemoryAuthToken) return inMemoryAuthToken;
+  try {
+    const lsToken = localStorage.getItem('stockmaster_auth_token');
+    if (lsToken) {
+      inMemoryAuthToken = lsToken;
+      return lsToken;
+    }
+  } catch {}
+  try {
+    const ssToken = sessionStorage.getItem('stockmaster_auth_token');
+    if (ssToken) {
+      inMemoryAuthToken = ssToken;
+      return ssToken;
+    }
+  } catch {}
+  return null;
+}
+
 export function getAuthHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(extraHeaders || {}),
   };
-  try {
-    const token = localStorage.getItem('stockmaster_auth_token');
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-  } catch {}
+  const token = getAuthToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
   return headers;
 }
 

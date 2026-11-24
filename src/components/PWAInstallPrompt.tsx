@@ -46,7 +46,7 @@ export const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({
     (isGosen ? 'Tienda Gosén' : companyId.toUpperCase());
 
   const [previewIconUrl, setPreviewIconUrl] = useState<string>(
-    '/pwa-512x512.png?v=miapphn3'
+    '/pwa-512x512.png?v=miapphn4'
   );
 
   useEffect(() => {
@@ -153,7 +153,7 @@ export const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({
               alt="MIAPPHN"
               className="w-full h-full object-contain rounded-xl"
               onError={(e) => {
-                (e.target as HTMLImageElement).src = '/pwa-192x192.png?v=miapphn3';
+                (e.target as HTMLImageElement).src = '/pwa-192x192.png?v=miapphn4';
               }}
             />
           </div>

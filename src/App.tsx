@@ -171,6 +171,7 @@ import {
   pushProductSaveToBackendHub,
   setBackendSessionAuthenticated,
   getAuthHeaders,
+  setAuthToken,
   fetchPublicCatalogFromHub,
   HASHED_PASSWORD_MASK,
   isMaskedOrHashedPassword,
@@ -410,9 +411,7 @@ export const App: React.FC = () => {
 
         if (data.authenticated && data.session) {
           if (data.authToken) {
-            try {
-              localStorage.setItem('stockmaster_auth_token', String(data.authToken));
-            } catch {}
+            setAuthToken(String(data.authToken));
           }
           setBackendSessionAuthenticated(true);
           const serverSess = data.session;
@@ -500,11 +499,11 @@ export const App: React.FC = () => {
           setBackendSessionAuthenticated(false);
           setUserSession(null);
           setIsAuthenticated(false);
+          setAuthToken(null);
           try {
             localStorage.removeItem('stockmaster_user_session');
             sessionStorage.removeItem('stockmaster_user_session');
             localStorage.removeItem('stockmaster_saas_owner_unlocked');
-            localStorage.removeItem('stockmaster_auth_token');
           } catch {}
         }
       } catch {
@@ -776,9 +775,7 @@ export const App: React.FC = () => {
         return false;
       }
       if (data?.authToken) {
-        try {
-          localStorage.setItem('stockmaster_auth_token', String(data.authToken));
-        } catch {}
+        setAuthToken(String(data.authToken));
       }
     } catch {
       return false;
@@ -817,9 +814,7 @@ export const App: React.FC = () => {
       });
       const data = await res.json().catch(() => null);
       if (data?.authToken) {
-        try {
-          localStorage.setItem('stockmaster_auth_token', String(data.authToken));
-        } catch {}
+        setAuthToken(String(data.authToken));
       }
     } catch {}
     try {
@@ -883,11 +878,11 @@ export const App: React.FC = () => {
 
     setUserSession(null);
     setIsAuthenticated(false);
+    setAuthToken(null);
     try {
       localStorage.removeItem('stockmaster_user_session');
       sessionStorage.removeItem('stockmaster_user_session');
       localStorage.removeItem('stockmaster_saas_owner_unlocked');
-      localStorage.removeItem('stockmaster_auth_token');
       const params = new URLSearchParams(window.location.search);
       const urlCompany = params.get('empresa') || params.get('tienda') || params.get('cliente');
       if (!urlCompany && wasSuperAdmin) {
@@ -1888,9 +1883,7 @@ export const App: React.FC = () => {
         return;
       }
       if (data?.authToken) {
-        try {
-          localStorage.setItem('stockmaster_auth_token', String(data.authToken));
-        } catch {}
+        setAuthToken(String(data.authToken));
       }
     } catch {
       showToast('Error al sincronizar el cambio de empresa con el servidor.', 'error');
@@ -3086,7 +3079,7 @@ export const App: React.FC = () => {
   // Login Screen if not authenticated
   if (!isAuthenticated || !userSession) {
     return (
-      <div className="fixed inset-0 w-full h-full overflow-y-auto bg-slate-950 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]">
+      <div className="fixed inset-0 w-full h-full overflow-y-auto overscroll-contain bg-slate-950 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]">
         {showSplash && (
           <SplashScreen
             storeSettings={storeSettings}

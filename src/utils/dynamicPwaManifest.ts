@@ -132,19 +132,19 @@ export async function generateTenantAppIconDataUrl(
   _isGosen: boolean,
   size = 512
 ): Promise<string> {
-  if (size <= 180) return '/apple-touch-icon.png?v=miapphn3';
-  if (size <= 192) return '/pwa-192x192.png?v=miapphn3';
-  return '/pwa-512x512.png?v=miapphn3';
+  if (size <= 180) return '/apple-touch-icon.png?v=miapphn4';
+  if (size <= 192) return '/pwa-192x192.png?v=miapphn4';
+  return '/pwa-512x512.png?v=miapphn4';
 }
 
 export function generateMiAppHNCashRegisterIconDataUrl(size = 512): string {
-  if (typeof document === 'undefined') return '/pwa-512x512.png?v=miapphn3';
+  if (typeof document === 'undefined') return '/pwa-512x512.png?v=miapphn4';
 
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return '/pwa-512x512.png?v=miapphn3';
+  if (!ctx) return '/pwa-512x512.png?v=miapphn4';
 
   // 1. Emerald rounded square gradient matching MIAPPHN official logo
   const grad = ctx.createLinearGradient(0, 0, size, size);
@@ -270,10 +270,10 @@ export async function syncDynamicPwaBranding(
   // Always use the official MIAPPHN static PNG paths with cache-buster so Android WebAPK
   // builders fetch crisp HTTP(S) PNG icons with the official MIAPPHN logo.
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const appleIcon180 = `${origin}/apple-touch-icon.png?v=miapphn3`;
-  const icon192 = `${origin}/pwa-192x192.png?v=miapphn3`;
-  const icon512 = `${origin}/pwa-512x512.png?v=miapphn3`;
-  const iconMaskable512 = `${origin}/pwa-maskable-512x512.png?v=miapphn3`;
+  const appleIcon180 = `${origin}/apple-touch-icon.png?v=miapphn4`;
+  const icon192 = `${origin}/pwa-192x192.png?v=miapphn4`;
+  const icon512 = `${origin}/pwa-512x512.png?v=miapphn4`;
+  const iconMaskable512 = `${origin}/pwa-maskable-512x512.png?v=miapphn4`;
 
   if (typeof document !== 'undefined') {
     const pageTitle = options?.isSalesLandingMode
@@ -295,7 +295,7 @@ export async function syncDynamicPwaBranding(
       'link[rel="icon"], link[rel="shortcut icon"]'
     );
     iconLinks.forEach((link) => {
-      link.href = '/favicon.png?v=miapphn3';
+      link.href = '/favicon.png?v=miapphn4';
     });
 
     // Update Apple Touch Icons to official MIAPPHN icon
@@ -303,7 +303,7 @@ export async function syncDynamicPwaBranding(
       'link[rel="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]'
     );
     existingAppleIcons.forEach((el) => {
-      el.href = '/apple-touch-icon.png?v=miapphn3';
+      el.href = '/apple-touch-icon.png?v=miapphn4';
     });
 
     // Build Web App Manifest with official MIAPPHN logo and branding
@@ -351,7 +351,7 @@ export async function syncDynamicPwaBranding(
 
     if ('caches' in window) {
       try {
-        const cache = await caches.open('miapphn-pwa-v12');
+        const cache = await caches.open('miapphn-pwa-v13');
         await cache.put(
           new Request('/manifest.json'),
           new Response(manifestJsonString, {
@@ -363,7 +363,7 @@ export async function syncDynamicPwaBranding(
       }
     }
 
-    // Keep <link rel="manifest"> pointing to the standard HTTP /manifest.json?v=miapphn3
+    // Keep <link rel="manifest"> pointing to the standard HTTP /manifest.json?v=miapphn4
     // so Android Chrome creates a true native WebAPK with the official MIAPPHN icon.
     let manifestLink = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
     if (!manifestLink) {
@@ -371,13 +371,13 @@ export async function syncDynamicPwaBranding(
       manifestLink.rel = 'manifest';
       document.head.appendChild(manifestLink);
     }
-    manifestLink.href = '/manifest.json?v=miapphn3';
+    manifestLink.href = '/manifest.json?v=miapphn4';
   }
 
   return {
-    icon192: '/pwa-192x192.png?v=miapphn3',
-    icon512: '/pwa-512x512.png?v=miapphn3',
-    appleIcon180: '/apple-touch-icon.png?v=miapphn3',
+    icon192: '/pwa-192x192.png?v=miapphn4',
+    icon512: '/pwa-512x512.png?v=miapphn4',
+    appleIcon180: '/apple-touch-icon.png?v=miapphn4',
     startUrl: fullStartUrl,
     storeName,
   };

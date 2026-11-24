@@ -209,9 +209,12 @@ function verifyPassword(
   options?: { allowUpperFallback?: boolean; allowLowerFallback?: boolean }
 ): boolean {
   const raw = String(candidateInput || '');
-  // Clean zero-width spaces, non-breaking spaces, BOM and whitespace typical in mobile inputs
-  const cleanCandidate = raw.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
-  const stored = String(storedSecret || '').trim();
+  // Clean zero-width spaces, non-breaking spaces, BOM and normalize Unicode for mobile keyboards
+  const cleanCandidate = raw
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+    .normalize('NFC')
+    .trim();
+  const stored = String(storedSecret || '').normalize('NFC').trim();
   if (!cleanCandidate || !stored || stored === HASHED_PASSWORD_MASK) return false;
 
   if (isHashedPassword(stored)) {
@@ -1558,6 +1561,7 @@ async function hydrateAuthFromFirestoreRest(force = false): Promise<void> {
         }
       }
 
+      const fsUserIdsBySlug = new Map<string, Set<string>>();
       for (const rawDoc of userDocs) {
         const parsed = parseFirestoreRestDoc(rawDoc);
         if (!parsed) continue;
@@ -1565,6 +1569,11 @@ async function hydrateAuthFromFirestoreRest(force = false): Promise<void> {
           parsed.data.companyId || (parsed.id.includes('__') ? parsed.id.split('__')[0] : 'gosen')
         );
         if (!isSafeRecordKey(slug) || !isSafeRecordKey(parsed.id)) continue;
+        if (!fsUserIdsBySlug.has(slug)) {
+          fsUserIdsBySlug.set(slug, new Set<string>());
+        }
+        fsUserIdsBySlug.get(slug)!.add(parsed.id);
+
         const tenant = getTenantStore(slug);
         const existing = tenant.users[parsed.id];
         const fsPass = String(parsed.data.password || '').trim();
@@ -1602,6 +1611,20 @@ async function hydrateAuthFromFirestoreRest(force = false): Promise<void> {
               password: nextPass,
             };
             changed = true;
+          }
+        }
+      }
+
+      // Prune stale deleted Firestore user accounts from server cache when live Firestore list is available
+      if (userDocs.length > 0) {
+        for (const [slug, fsIds] of fsUserIdsBySlug.entries()) {
+          const tenant = syncDbMemory.tenants[slug];
+          if (!tenant || !tenant.users) continue;
+          for (const existingId of Object.keys(tenant.users)) {
+            if (existingId.includes('__usr_') && !fsIds.has(existingId)) {
+              delete tenant.users[existingId];
+              changed = true;
+            }
           }
         }
       }
@@ -1697,15 +1720,21 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const { mode = 'store_pass', password, username, companyId, remember = true } = req.body || {};
-    const cleanPass = String(password || '').replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+    const cleanPass = String(password || '')
+      .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+      .normalize('NFC')
+      .trim();
     const cleanUser = String(username || '')
-      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+      .replace(/[\u200B-\u200D\uFEFF\u00A0\u202F]/g, '')
+      .normalize('NFC')
       .trim()
       .toLowerCase()
       .replace(/^@+/, '')
       .replace(/\s+/g, ' ');
     const hasPreferred = Boolean(companyId && String(companyId).trim());
     const preferredSlug = hasPreferred ? normalizeServerCompanySlug(String(companyId)) : '';
+    const ua = String(req.headers['user-agent'] || '').slice(0, 80);
+    console.info(`[AUTH][login_attempt] ip=${ip} mode=${mode} pref=${preferredSlug || '-'} user=${cleanUser || '-'} ua="${ua}"`);
 
     if (!cleanPass || cleanPass.length > 150) {
       return res.status(400).json({ ok: false, error: 'Ingresa tu contraseña de acceso.' });
