@@ -433,6 +433,7 @@ function requireAuthSession(
     });
     return res.status(401).json({
       ok: false,
+      code: 'SESSION_REQUIRED',
       error: 'Sesión requerida o expirada. Inicia sesión nuevamente.',
     });
   }
@@ -1014,6 +1015,7 @@ interface ServerTenantStore {
   explicitDeletedCodes: string[];
   deletedCodes: string[];
   deletedIds: string[];
+  deletedSaleIds?: string[];
   suppliers: Record<string, any>;
   purchases: Record<string, any>;
   sales: Record<string, any>;
@@ -1136,6 +1138,7 @@ function getTenantStore(companyId?: string): ServerTenantStore {
       explicitDeletedCodes: [],
       deletedCodes: [],
       deletedIds: [],
+      deletedSaleIds: [],
       suppliers: {},
       purchases: {},
       sales: {},
@@ -1146,6 +1149,9 @@ function getTenantStore(companyId?: string): ServerTenantStore {
       restaurant: null,
       updatedAt: 0,
     };
+  }
+  if (!Array.isArray(syncDbMemory.tenants[slug].deletedSaleIds)) {
+    syncDbMemory.tenants[slug].deletedSaleIds = [];
   }
   return syncDbMemory.tenants[slug];
 }
@@ -2294,24 +2300,42 @@ app.post('/api/auth/verify-admin-pin', requireAuthSession, async (req, res) => {
     let comp = syncDbMemory.companies[requestedSlug];
     let tenant = getTenantStore(requestedSlug);
 
+    const hasRealSecret = (val: unknown): boolean => {
+      const s = String(val || '').trim();
+      return Boolean(s && s !== HASHED_PASSWORD_MASK && s !== '••••••••');
+    };
+
     const checkMatch = (): boolean => {
-      if (session.sa && verifySaasMasterKey(candidate)) {
+      if ((session.sa || session.role === 'admin') && verifySaasMasterKey(candidate)) {
         return true;
       }
-      if (comp?.adminPassword && verifyPassword(candidate, comp.adminPassword, { allowUpperFallback: true })) {
+      if (
+        hasRealSecret(comp?.adminPassword) &&
+        verifyPassword(candidate, comp.adminPassword, { allowUpperFallback: true, allowLowerFallback: true })
+      ) {
         return true;
       }
-      if (tenant.settings?.accessPassword && verifyPassword(candidate, tenant.settings.accessPassword, { allowUpperFallback: true })) {
+      if (
+        hasRealSecret(tenant.settings?.accessPassword) &&
+        verifyPassword(candidate, tenant.settings.accessPassword, { allowUpperFallback: true, allowLowerFallback: true })
+      ) {
         return true;
       }
-      if (requestedSlug === 'tiendagyg' && !comp?.adminPassword && !tenant.settings?.accessPassword && candidate.toUpperCase() === 'GYG2026') {
-        return true;
-      }
-      if (requestedSlug === 'gosen' && !comp?.adminPassword && !tenant.settings?.accessPassword && (candidate.toUpperCase() === 'GOSEN2026' || candidate.toUpperCase() === 'ADMIN2026')) {
-        return true;
+      if (!hasRealSecret(comp?.adminPassword) && !hasRealSecret(tenant.settings?.accessPassword)) {
+        if (requestedSlug === 'tiendagyg' && candidate.toUpperCase() === 'GYG2026') {
+          return true;
+        }
+        if (requestedSlug === 'gosen' && (candidate.toUpperCase() === 'GOSEN2026' || candidate.toUpperCase() === 'ADMIN2026')) {
+          return true;
+        }
       }
       for (const u of Object.values(tenant.users || {})) {
-        if (u && u.role === 'admin' && u.isActive !== false && verifyPassword(candidate, u.password, { allowLowerFallback: true })) {
+        if (
+          u &&
+          u.role === 'admin' &&
+          u.isActive !== false &&
+          verifyPassword(candidate, u.password, { allowUpperFallback: true, allowLowerFallback: true })
+        ) {
           return true;
         }
       }
@@ -2320,7 +2344,7 @@ app.post('/api/auth/verify-admin-pin', requireAuthSession, async (req, res) => {
 
     let matched = checkMatch();
     if (!matched) {
-      await hydrateAuthFromFirestoreRest();
+      await hydrateAuthFromFirestoreRest(true);
       comp = syncDbMemory.companies[requestedSlug];
       tenant = getTenantStore(requestedSlug);
       matched = checkMatch();
@@ -2807,8 +2831,13 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       changed = true;
     }
     if (deleteSaleId) {
-      delete tenant.sales[String(deleteSaleId)];
-      changed = true;
+      const delId = String(deleteSaleId).trim();
+      if (delId && isSafeRecordKey(delId)) {
+        delete tenant.sales[delId];
+        const nextDeleted = Array.from(new Set([...(tenant.deletedSaleIds || []), delId])).slice(-500);
+        tenant.deletedSaleIds = nextDeleted;
+        changed = true;
+      }
     }
     if (deleteUserId) {
       if (!isAdminOrSa) {
@@ -2827,11 +2856,22 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       changed = true;
     }
 
+    const deletedSaleSet = new Set(
+      (tenant.deletedSaleIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+    );
+    for (const delId of deletedSaleSet) {
+      if (tenant.sales[delId]) {
+        delete tenant.sales[delId];
+        changed = true;
+      }
+    }
+
     const mergeRecordList = (
       targetMap: Record<string, any>,
       incomingList: any[] | undefined,
       idField = 'id',
-      isUsersCollection = false
+      isUsersCollection = false,
+      blockedIds?: Set<string>
     ) => {
       if (!Array.isArray(incomingList)) return;
       for (const rawItem of incomingList) {
@@ -2839,6 +2879,7 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
         const item = stripUnsafeKeys(rawItem);
         const id = String(item[idField] || item.code || item.invoiceNumber || item.saleNumber || '').trim();
         if (!id || !isSafeRecordKey(id)) continue;
+        if (blockedIds && blockedIds.has(id)) continue;
         const prev = targetMap[id];
         const incTs = Number(item.updatedAt || item.timestamp || 0);
         const prevTs = Number(prev?.updatedAt || prev?.timestamp || 0);
@@ -2855,7 +2896,7 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
 
     mergeRecordList(tenant.suppliers, suppliers);
     mergeRecordList(tenant.purchases, purchases);
-    mergeRecordList(tenant.sales, sales);
+    mergeRecordList(tenant.sales, sales, 'id', false, deletedSaleSet);
 
     if (Array.isArray(users) && users.length > 0) {
       if (isAdminOrSa) {

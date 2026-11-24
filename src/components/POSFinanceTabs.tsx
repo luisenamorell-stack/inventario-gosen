@@ -1967,6 +1967,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       return;
     }
 
+    const targetCompanyId =
+      userSession?.companyId || storeSettings.companyId || posFinanceData.companyId || 'gosen';
+
     setIsDeletingAccount(true);
     setDeleteAuthError('');
     try {
@@ -1977,25 +1980,28 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           credentials: 'include',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body: JSON.stringify({
-            companyId: storeSettings.companyId || 'gosen',
+            companyId: targetCompanyId,
             pin: candidatePin,
           }),
         });
         const ct = String(res.headers.get('content-type') || '').toLowerCase();
-        if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
-          authorized = await verifyAdminPinViaFirestore(
-            storeSettings.companyId || 'gosen',
-            candidatePin
-          );
+        if (res.status === 404 || res.status === 405 || res.status >= 500 || !ct.includes('application/json')) {
+          authorized = await verifyAdminPinViaFirestore(targetCompanyId, candidatePin);
         } else {
           const data = await res.json().catch(() => ({}));
-          authorized = Boolean(res.ok && data?.authorized);
+          if (res.ok && data?.authorized) {
+            authorized = true;
+          } else if (
+            res.status === 403 ||
+            (res.status === 401 && (data?.code === 'SESSION_REQUIRED' || data?.authorized === undefined))
+          ) {
+            authorized = await verifyAdminPinViaFirestore(targetCompanyId, candidatePin);
+          } else {
+            authorized = false;
+          }
         }
       } catch {
-        authorized = await verifyAdminPinViaFirestore(
-          storeSettings.companyId || 'gosen',
-          candidatePin
-        );
+        authorized = await verifyAdminPinViaFirestore(targetCompanyId, candidatePin);
       }
 
       if (!authorized) {
@@ -2015,7 +2021,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
         `Cuenta ${deletedNum} (${deletedCust}) eliminada permanentemente.`,
         'success'
       );
-    } catch {
+    } catch (err: any) {
+      console.error('Error al eliminar cuenta por cobrar:', err);
       setDeleteAuthError('Ocurrió un error al eliminar la cuenta. Intenta de nuevo.');
       showToast('Error al intentar eliminar la cuenta.', 'error');
     } finally {

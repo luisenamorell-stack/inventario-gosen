@@ -1451,9 +1451,43 @@ export function setCachedSuppliers(items: Supplier[], companyId = getActiveCompa
 }
 
 const GYG_CACHE_ALIASES = ['tiendagyg', 'comercialgyg', 'comercial-gyg', 'comercial_gyg', 'gyg'];
+const DELETED_SALES_TOMBSTONE_PREFIX = 'stockmaster_deleted_sales_v1__';
+const memoryDeletedSaleIds = new Map<string, Set<string>>();
+
+export function getLocallyDeletedSaleIds(companyId = getActiveCompanyId()): Set<string> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const combined = new Set<string>(memoryDeletedSaleIds.get(slug) || []);
+  try {
+    const raw = localStorage.getItem(`${DELETED_SALES_TOMBSTONE_PREFIX}${slug}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        for (const id of parsed) {
+          const clean = String(id || '').trim();
+          if (clean) combined.add(clean);
+        }
+      }
+    }
+  } catch {}
+  return combined;
+}
+
+export function markSaleDeletedLocally(saleId: string, companyId = getActiveCompanyId()): void {
+  const cleanId = String(saleId || '').trim();
+  if (!cleanId) return;
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const nextSet = getLocallyDeletedSaleIds(slug);
+  nextSet.add(cleanId);
+  memoryDeletedSaleIds.set(slug, nextSet);
+  try {
+    const bounded = Array.from(nextSet).slice(-500);
+    localStorage.setItem(`${DELETED_SALES_TOMBSTONE_PREFIX}${slug}`, JSON.stringify(bounded));
+  } catch {}
+}
 
 export function getCachedSales(companyId = getActiveCompanyId()): SaleRecord[] | null {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const deletedIds = getLocallyDeletedSaleIds(slug);
   const keysToRead = isGyGAlias(slug)
     ? Array.from(new Set([slug, ...GYG_CACHE_ALIASES]))
     : [slug];
@@ -1462,7 +1496,7 @@ export function getCachedSales(companyId = getActiveCompanyId()): SaleRecord[] |
   const mergeList = (list: SaleRecord[] | null | undefined) => {
     if (!Array.isArray(list)) return;
     for (const item of list) {
-      if (!item || !item.id) continue;
+      if (!item || !item.id || deletedIds.has(item.id)) continue;
       if (!belongsToCompany(item.companyId, slug, item.id)) continue;
       const existing = byId.get(item.id);
       if (!existing) {
@@ -1511,8 +1545,41 @@ export function getCachedSales(companyId = getActiveCompanyId()): SaleRecord[] |
 
 export function setCachedSales(items: SaleRecord[], companyId = getActiveCompanyId()): void {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
-  const sorted = [...items].sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+  const deletedIds = getLocallyDeletedSaleIds(slug);
+  const sorted = [...items]
+    .filter((s) => s && s.id && !deletedIds.has(s.id))
+    .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
   memorySalesCache.set(slug, sorted);
+  if (isGyGAlias(slug)) {
+    for (const alias of GYG_CACHE_ALIASES) {
+      if (alias !== slug) {
+        const aliasMem = memorySalesCache.get(alias);
+        if (aliasMem) {
+          memorySalesCache.set(
+            alias,
+            aliasMem.filter((s) => s && s.id && !deletedIds.has(s.id))
+          );
+        }
+        const aliasKey = `${BASE_CACHE_KEYS.SALES}__${alias}`;
+        const aliasLs = safeReadCache<SaleRecord[]>(aliasKey);
+        if (Array.isArray(aliasLs) && aliasLs.some((s) => s && deletedIds.has(s.id))) {
+          safeWriteCache(
+            aliasKey,
+            aliasLs.filter((s) => s && s.id && !deletedIds.has(s.id))
+          );
+        }
+      }
+    }
+  }
+  if (slug === 'gosen') {
+    const legacyGosen = safeReadCache<SaleRecord[]>(BASE_CACHE_KEYS.SALES);
+    if (Array.isArray(legacyGosen) && legacyGosen.some((s) => s && deletedIds.has(s.id))) {
+      safeWriteCache(
+        BASE_CACHE_KEYS.SALES,
+        legacyGosen.filter((s) => s && s.id && !deletedIds.has(s.id))
+      );
+    }
+  }
   saveSalesToIndexedDB(sorted, slug).catch(() => {});
 
   const cacheKey = getScopedCacheKey(BASE_CACHE_KEYS.SALES, slug);
@@ -3958,11 +4025,12 @@ function mergeSaleRecordsWithCache(
   cachedRecords: SaleRecord[] | null | undefined,
   slug: string
 ): { merged: SaleRecord[]; missingOnServer: SaleRecord[] } {
+  const deletedIds = getLocallyDeletedSaleIds(slug);
   const byId = new Map<string, SaleRecord>();
   const serverIds = new Set<string>();
 
   for (const srv of serverRecords) {
-    if (!srv || !srv.id) continue;
+    if (!srv || !srv.id || deletedIds.has(srv.id)) continue;
     if (!belongsToCompany(srv.companyId, slug, srv.id)) continue;
     serverIds.add(srv.id);
     byId.set(srv.id, srv);
@@ -3971,7 +4039,7 @@ function mergeSaleRecordsWithCache(
   const missingOnServer: SaleRecord[] = [];
   if (Array.isArray(cachedRecords)) {
     for (const loc of cachedRecords) {
-      if (!loc || !loc.id) continue;
+      if (!loc || !loc.id || deletedIds.has(loc.id)) continue;
       if (!belongsToCompany(loc.companyId, slug, loc.id)) continue;
       const srv = byId.get(loc.id);
       if (!srv) {
@@ -5069,12 +5137,16 @@ export async function deleteSaleFromFirestore(
   companyId = getActiveCompanyId()
 ): Promise<void> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  markSaleDeletedLocally(saleId, slug);
   const prevSales = getCachedSales(slug) || [];
-  setCachedSales(
-    prevSales.filter((s) => s.id !== saleId),
-    slug
-  );
-  syncCollectionsWithBackendHub({ deleteSaleId: saleId }, slug).catch(() => {});
+  const filteredSales = prevSales.filter((s) => s.id !== saleId);
+  setCachedSales(filteredSales, slug);
+  await saveSalesToIndexedDB(filteredSales, slug).catch(() => {});
+  await syncCollectionsWithBackendHub({ deleteSaleId: saleId }, slug).catch(() => null);
+
+  if (isFirestoreQuotaExhausted()) {
+    return;
+  }
 
   try {
     await deleteDoc(doc(db, 'sales', saleId));
@@ -8006,16 +8078,24 @@ export async function verifyAdminPinViaFirestore(
     .trim();
   if (!cleanPin) return false;
 
+  const isRealSecretValue = (val: unknown): boolean => {
+    const s = String(val || '').trim();
+    return Boolean(s && s !== HASHED_PASSWORD_MASK && s !== '••••••••');
+  };
+
   const cachedComp = (getCachedCompanies() || []).find(
     (c) => normalizeCompanySlug(c.slug) === slug
   );
   const cachedSettings = getCachedStoreSettings(slug);
-  if (cachedComp?.adminPassword && (await verifyPasswordClient(cleanPin, cachedComp.adminPassword))) {
+  if (
+    isRealSecretValue(cachedComp?.adminPassword) &&
+    (await verifyPasswordClient(cleanPin, cachedComp!.adminPassword))
+  ) {
     return true;
   }
   if (
-    cachedSettings?.accessPassword &&
-    (await verifyPasswordClient(cleanPin, cachedSettings.accessPassword))
+    isRealSecretValue(cachedSettings?.accessPassword) &&
+    (await verifyPasswordClient(cleanPin, cachedSettings!.accessPassword))
   ) {
     return true;
   }
@@ -8030,8 +8110,10 @@ export async function verifyAdminPinViaFirestore(
         withFirestoreTimeout(getDocs(collection(db, 'users')), 5000).catch(() => null),
       ]);
 
-      const compPass = compSnap?.exists() ? compSnap.data()?.adminPassword : undefined;
-      const settingsPass = settingsSnap?.exists() ? settingsSnap.data()?.accessPassword : undefined;
+      const rawCompPass = compSnap?.exists() ? compSnap.data()?.adminPassword : undefined;
+      const rawSettingsPass = settingsSnap?.exists() ? settingsSnap.data()?.accessPassword : undefined;
+      const compPass = isRealSecretValue(rawCompPass) ? rawCompPass : undefined;
+      const settingsPass = isRealSecretValue(rawSettingsPass) ? rawSettingsPass : undefined;
 
       if (compPass && (await verifyPasswordClient(cleanPin, compPass))) return true;
       if (settingsPass && (await verifyPasswordClient(cleanPin, settingsPass))) return true;
@@ -8060,6 +8142,13 @@ export async function verifyAdminPinViaFirestore(
       }
     } catch (err) {
       isQuotaOrNetworkError(err);
+    }
+  }
+
+  const cachedUsers = getCachedUsers(slug) || [];
+  for (const u of cachedUsers) {
+    if (u.role === 'admin' && u.isActive !== false && (await verifyPasswordClient(cleanPin, u.password))) {
+      return true;
     }
   }
   return false;

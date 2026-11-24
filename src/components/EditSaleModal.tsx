@@ -262,11 +262,20 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
           }),
         });
         const ct = String(res.headers.get('content-type') || '').toLowerCase();
-        if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+        if (res.status === 404 || res.status === 405 || res.status >= 500 || !ct.includes('application/json')) {
           authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
         } else {
           const data = await res.json().catch(() => ({}));
-          authorized = Boolean(res.ok && data?.authorized);
+          if (res.ok && data?.authorized) {
+            authorized = true;
+          } else if (
+            res.status === 403 ||
+            (res.status === 401 && (data?.code === 'SESSION_REQUIRED' || data?.authorized === undefined))
+          ) {
+            authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
+          } else {
+            authorized = false;
+          }
         }
       } catch {
         authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
@@ -747,11 +756,20 @@ export const AdminCancelAuthModal: React.FC<AdminCancelAuthModalProps> = ({
         }),
       });
       const ct = String(res.headers.get('content-type') || '').toLowerCase();
-      if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+      if (res.status === 404 || res.status === 405 || res.status >= 500 || !ct.includes('application/json')) {
         authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
       } else {
         const data = await res.json().catch(() => ({}));
-        authorized = Boolean(res.ok && data?.authorized);
+        if (res.ok && data?.authorized) {
+          authorized = true;
+        } else if (
+          res.status === 403 ||
+          (res.status === 401 && (data?.code === 'SESSION_REQUIRED' || data?.authorized === undefined))
+        ) {
+          authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
+        } else {
+          authorized = false;
+        }
       }
     } catch {
       authorized = await verifyAdminPinViaFirestore(storeSettings.companyId || 'gosen', candidatePin);
