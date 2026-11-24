@@ -6,7 +6,7 @@ import {
   StoreSettings,
   resolveInvoiceIssuerName,
 } from '../types';
-import { isMaskedOrHashedPassword } from '../firebase/firestoreService';
+import { isMaskedOrHashedPassword, getAuthHeaders } from '../firebase/firestoreService';
 import {
   X,
   Save,
@@ -255,7 +255,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
         const res = await fetch('/api/auth/verify-admin-pin', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body: JSON.stringify({
             companyId: storeSettings.companyId || 'gosen',
             pin: candidatePin,
@@ -737,7 +737,7 @@ export const AdminCancelAuthModal: React.FC<AdminCancelAuthModalProps> = ({
       const res = await fetch('/api/auth/verify-admin-pin', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
           companyId: storeSettings.companyId || 'gosen',
           pin: candidatePin,

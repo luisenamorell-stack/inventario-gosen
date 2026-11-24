@@ -11,16 +11,16 @@
   <meta name="description" content="Sistema integral de control de inventario, punto de venta, compras y auditoría con escáner para Tienda Gosén." />
   <meta property="og:title" content="Tienda Gosén - Inventario y Ventas" />
   <meta property="og:description" content="Sistema integral de control de inventario, punto de venta, compras y auditoría con escáner para Tienda Gosén." />
-  <meta property="og:image" content="/pwa-512x512.png?v=miapphn3" />
+  <meta property="og:image" content="/pwa-512x512.png?v=miapphn4" />
   <meta name="application-name" content="MIAPPHN" />
   <meta name="apple-mobile-web-app-title" content="MIAPPHN" />
-  <link rel="manifest" href="/manifest.json?v=miapphn3" />
-  <link rel="icon" type="image/png" href="/favicon.png?v=miapphn3" />
-  <link rel="shortcut icon" href="/favicon.png?v=miapphn3" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=miapphn3" />
-  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=miapphn3" />
-  <link rel="apple-touch-icon" sizes="192x192" href="/pwa-192x192.png?v=miapphn3" />
-  <link rel="apple-touch-icon" sizes="512x512" href="/pwa-512x512.png?v=miapphn3" />
+  <link rel="manifest" href="/manifest.json?v=miapphn4" />
+  <link rel="icon" type="image/png" href="/favicon.png?v=miapphn4" />
+  <link rel="shortcut icon" href="/favicon.png?v=miapphn4" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=miapphn4" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=miapphn4" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/pwa-192x192.png?v=miapphn4" />
+  <link rel="apple-touch-icon" sizes="512x512" href="/pwa-512x512.png?v=miapphn4" />
   <script>
     (function() {
       try {
@@ -72,7 +72,7 @@
     if ('caches' in window) {
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
-          if (key !== 'miapphn-pwa-v12') {
+          if (key !== 'miapphn-pwa-v13') {
             caches.delete(key);
           }
         });
@@ -80,7 +80,7 @@
     }
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function() {
-        navigator.serviceWorker.register('/sw.js?v=miapphn3').then(
+        navigator.serviceWorker.register('/sw.js?v=miapphn4').then(
           function(reg) {
             reg.update();
           },

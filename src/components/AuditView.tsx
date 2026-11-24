@@ -5,6 +5,7 @@ import { PrintableReport } from './PrintableReport';
 import { ConfirmDialog } from './ConfirmDialog';
 import { PrintFormatModal } from './PrintFormatModal';
 import { buildAuditReportHtml, downloadAuditReportPdf } from '../utils/printPdfService';
+import { getAuthHeaders } from '../firebase/firestoreService';
 import {
   ClipboardList,
   Printer,
@@ -527,7 +528,8 @@ export const AuditView: React.FC<AuditViewProps> = ({
     try {
       const res = await fetch('/api/gemini/analyze-audit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ auditData: aiData }),
       });
 
@@ -623,7 +625,8 @@ export const AuditView: React.FC<AuditViewProps> = ({
     try {
       const res = await fetch('/api/gemini/financial-summary', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
           match,
           missing,

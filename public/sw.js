@@ -1,12 +1,12 @@
 // Service Worker for Multi-Tenant SaaS PWA (MIAPPHN Official Branding)
-const CACHE_NAME = 'miapphn-pwa-v12';
+const CACHE_NAME = 'miapphn-pwa-v13';
 const STATIC_ASSETS = [
-  '/manifest.json?v=miapphn3',
-  '/favicon.png?v=miapphn3',
-  '/apple-touch-icon.png?v=miapphn3',
-  '/pwa-192x192.png?v=miapphn3',
-  '/pwa-512x512.png?v=miapphn3',
-  '/pwa-maskable-512x512.png?v=miapphn3'
+  '/manifest.json?v=miapphn4',
+  '/favicon.png?v=miapphn4',
+  '/apple-touch-icon.png?v=miapphn4',
+  '/pwa-192x192.png?v=miapphn4',
+  '/pwa-512x512.png?v=miapphn4',
+  '/pwa-maskable-512x512.png?v=miapphn4'
 ];
 
 self.addEventListener('install', (event) => {

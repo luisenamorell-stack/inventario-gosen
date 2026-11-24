@@ -6,6 +6,7 @@ import {
   getActiveCompanyId,
   normalizeCompanySlug,
   isMaskedOrHashedPassword,
+  getAuthHeaders,
 } from '../firebase/firestoreService';
 import {
   ShieldCheck,
@@ -159,7 +160,10 @@ export const SecurityAuditPanel: React.FC<SecurityAuditPanelProps> = ({
   const loadSecurityEvents = useCallback(async () => {
     setIsLoadingEvents(true);
     try {
-      const res = await fetch('/api/security/events', { credentials: 'include' });
+      const res = await fetch('/api/security/events', {
+        credentials: 'include',
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) {
         setSecurityEvents([]);
         return;

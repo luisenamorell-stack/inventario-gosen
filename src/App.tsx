@@ -170,6 +170,7 @@ import {
   fetchBackendSyncStatus,
   pushProductSaveToBackendHub,
   setBackendSessionAuthenticated,
+  getAuthHeaders,
   fetchPublicCatalogFromHub,
   HASHED_PASSWORD_MASK,
   isMaskedOrHashedPassword,
@@ -392,17 +393,27 @@ export const App: React.FC = () => {
     return userSession !== null;
   });
   const [sessionVerified, setSessionVerified] = useState<boolean>(false);
+  const lastAuthActionAtRef = useRef<number>(0);
 
-  // Verify HttpOnly session cookie against backend on mount (prevents localStorage tampering / stale sessions)
+  // Verify HttpOnly cookie or Bearer session token against backend on mount (mobile-safe cross-context)
   useEffect(() => {
     let active = true;
     const verifyCookieSession = async () => {
+      const checkStartedAt = Date.now();
       try {
-        const res = await fetch('/api/auth/session', { credentials: 'include' });
+        const res = await fetch('/api/auth/session', {
+          credentials: 'include',
+          headers: getAuthHeaders(),
+        });
         const data = await res.json().catch(() => null);
-        if (!active || !data) return;
+        if (!active || !data || lastAuthActionAtRef.current > checkStartedAt) return;
 
         if (data.authenticated && data.session) {
+          if (data.authToken) {
+            try {
+              localStorage.setItem('stockmaster_auth_token', String(data.authToken));
+            } catch {}
+          }
           setBackendSessionAuthenticated(true);
           const serverSess = data.session;
           setUserSession((prev) => {
@@ -493,6 +504,7 @@ export const App: React.FC = () => {
             localStorage.removeItem('stockmaster_user_session');
             sessionStorage.removeItem('stockmaster_user_session');
             localStorage.removeItem('stockmaster_saas_owner_unlocked');
+            localStorage.removeItem('stockmaster_auth_token');
           } catch {}
         }
       } catch {
@@ -686,6 +698,7 @@ export const App: React.FC = () => {
 
   // Auth Handlers — Fluid login animation over instant background workspace mount
   const handleLoginSuccess = (session: UserSession, remember: boolean) => {
+    lastAuthActionAtRef.current = Date.now();
     const sessionCompany = resolveCompanySlugFromInput(session.companyId || activeCompanyId || 'gosen', companies);
     if (sessionCompany !== activeCompanyId) {
       handleSelectCompanyContext(sessionCompany);
@@ -755,12 +768,17 @@ export const App: React.FC = () => {
       const res = await fetch('/api/auth/unlock-saas', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ masterKey: masterKeyInput.trim() }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.ok) {
         return false;
+      }
+      if (data?.authToken) {
+        try {
+          localStorage.setItem('stockmaster_auth_token', String(data.authToken));
+        } catch {}
       }
     } catch {
       return false;
@@ -792,10 +810,17 @@ export const App: React.FC = () => {
 
   const handleLockSuperAdmin = async () => {
     try {
-      await fetch('/api/auth/lock-saas', {
+      const res = await fetch('/api/auth/lock-saas', {
         method: 'POST',
         credentials: 'include',
+        headers: getAuthHeaders(),
       });
+      const data = await res.json().catch(() => null);
+      if (data?.authToken) {
+        try {
+          localStorage.setItem('stockmaster_auth_token', String(data.authToken));
+        } catch {}
+      }
     } catch {}
     try {
       localStorage.removeItem('stockmaster_saas_owner_unlocked');
@@ -832,6 +857,7 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = async () => {
+    lastAuthActionAtRef.current = Date.now();
     const wasSuperAdmin = Boolean(userSession?.isSuperAdmin);
     if (userSession && !wasSuperAdmin) {
       logActivityInFirestore(
@@ -850,6 +876,7 @@ export const App: React.FC = () => {
       await fetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'include',
+        headers: getAuthHeaders(),
       });
     } catch {}
     setBackendSessionAuthenticated(false);
@@ -860,6 +887,7 @@ export const App: React.FC = () => {
       localStorage.removeItem('stockmaster_user_session');
       sessionStorage.removeItem('stockmaster_user_session');
       localStorage.removeItem('stockmaster_saas_owner_unlocked');
+      localStorage.removeItem('stockmaster_auth_token');
       const params = new URLSearchParams(window.location.search);
       const urlCompany = params.get('empresa') || params.get('tienda') || params.get('cliente');
       if (!urlCompany && wasSuperAdmin) {
@@ -1851,12 +1879,18 @@ export const App: React.FC = () => {
       const res = await fetch('/api/auth/switch-company', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ companyId: clean }),
       });
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
         showToast('Solo el SuperAdmin autenticado puede cambiar de empresa.', 'error');
         return;
+      }
+      if (data?.authToken) {
+        try {
+          localStorage.setItem('stockmaster_auth_token', String(data.authToken));
+        } catch {}
       }
     } catch {
       showToast('Error al sincronizar el cambio de empresa con el servidor.', 'error');

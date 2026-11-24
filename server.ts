@@ -1254,6 +1254,7 @@ function redactSettingsForResponse(s: any): any {
 function redactCompanyForResponse(c: any): any {
   if (!c || typeof c !== 'object') return c;
   const copy = { ...c };
+  delete copy._isDefaultFallback;
   if ('adminPassword' in copy) {
     copy.adminPassword = copy.adminPassword ? HASHED_PASSWORD_MASK : '';
   }
@@ -1277,6 +1278,7 @@ function redactCompanyForResponse(c: any): any {
       dirty = true;
     } else if (!comp.adminPassword) {
       comp.adminPassword = hashPassword(slug === 'gosen' ? 'GOSEN2026' : slug === 'tiendagyg' ? 'GYG2026' : 'ADMIN2026');
+      comp._isDefaultFallback = true;
       dirty = true;
     }
   }
@@ -1310,6 +1312,7 @@ function redactCompanyForResponse(c: any): any {
       adminPassword: hashPassword('GOSEN2026'),
       plan: 'vitalicia',
       isPrimary: true,
+      _isDefaultFallback: true,
     };
     dirty = true;
   }
@@ -1369,11 +1372,15 @@ function parseFirestoreRestDoc(docObj: any): { id: string; data: Record<string, 
 }
 
 let lastFirestoreAuthHydrationAt = 0;
+let firestoreAuthHydrationInFlight: Promise<void> | null = null;
 async function hydrateAuthFromFirestoreRest(force = false): Promise<void> {
   const { projectId, firestoreDatabaseId, apiKey: fbKey } = FIREBASE_SERVER_CONFIG;
   if (!projectId || !firestoreDatabaseId) return;
   const now = Date.now();
   if (!force && now - lastFirestoreAuthHydrationAt < 30_000) return;
+  if (firestoreAuthHydrationInFlight) {
+    return firestoreAuthHydrationInFlight;
+  }
   lastFirestoreAuthHydrationAt = now;
 
   const base = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents`;
@@ -1381,7 +1388,7 @@ async function hydrateAuthFromFirestoreRest(force = false): Promise<void> {
 
   const fetchCollection = async (colName: string) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4500);
+    const timer = setTimeout(() => controller.abort(), 6000);
     try {
       // Use Firestore REST :runQuery (returns 200 on Enterprise/Standard; collection GET list returns 403)
       const resp = await fetch(`${base}:runQuery${keyQs}`, {
@@ -1390,7 +1397,7 @@ async function hydrateAuthFromFirestoreRest(force = false): Promise<void> {
         body: JSON.stringify({
           structuredQuery: {
             from: [{ collectionId: colName }],
-            limit: 500,
+            limit: 1000,
           },
         }),
         signal: controller.signal,
@@ -1406,110 +1413,208 @@ async function hydrateAuthFromFirestoreRest(force = false): Promise<void> {
     }
   };
 
-  try {
-    const [compDocs, settingsDocs, userDocs] = await Promise.all([
-      fetchCollection('companies'),
-      fetchCollection('settings'),
-      fetchCollection('users'),
-    ]);
+  const fetchDocById = async (colName: string, docId: string) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    try {
+      const resp = await fetch(`${base}/${encodeURIComponent(colName)}/${encodeURIComponent(docId)}${keyQs}`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      if (!resp.ok) return null;
+      const docJson: any = await resp.json();
+      return docJson && docJson.name ? docJson : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
-    let changed = false;
-    for (const rawDoc of compDocs) {
-      const parsed = parseFirestoreRestDoc(rawDoc);
-      if (!parsed) continue;
-      const slug = normalizeServerCompanySlug(parsed.data.slug || parsed.id);
-      if (!isSafeRecordKey(slug)) continue;
-      const existing = syncDbMemory.companies[slug];
-      const fsPass = String(parsed.data.adminPassword || '').trim();
-      const hasRealFsPass = Boolean(fsPass && fsPass !== HASHED_PASSWORD_MASK);
-      if (!existing || !existing.adminPassword || (hasRealFsPass && !isHashedPassword(existing.adminPassword))) {
-        syncDbMemory.companies[slug] = {
-          ...(existing || {}),
-          ...parsed.data,
-          id: slug,
-          slug,
-          adminPassword: resolvePasswordWrite(
-            parsed.data.adminPassword,
-            existing?.adminPassword,
-            slug === 'gosen' ? 'GOSEN2026' : slug === 'tiendagyg' ? 'GYG2026' : 'ADMIN2026'
-          ),
-        };
-        changed = true;
-      } else if (parsed.data.status && existing.status !== parsed.data.status) {
-        existing.status = parsed.data.status;
-        if (parsed.data.moraReason !== undefined) existing.moraReason = parsed.data.moraReason;
-        changed = true;
+  firestoreAuthHydrationInFlight = (async () => {
+    try {
+      const [compDocs, settingsDocs, userDocs] = await Promise.all([
+        fetchCollection('companies'),
+        fetchCollection('settings'),
+        fetchCollection('users'),
+      ]);
+
+      let changed = false;
+      const discoveredSlugs = new Set<string>([
+        'gosen',
+        'tiendagyg',
+        ...Object.keys(syncDbMemory.companies),
+        ...Object.keys(syncDbMemory.tenants),
+      ]);
+
+      for (const rawDoc of compDocs) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (!parsed) continue;
+        const slug = normalizeServerCompanySlug(parsed.data.slug || parsed.id);
+        if (!isSafeRecordKey(slug)) continue;
+        discoveredSlugs.add(slug);
+
+        const existing = syncDbMemory.companies[slug];
+        const fsPass = String(parsed.data.adminPassword || '').trim();
+        const hasRealFsPass = Boolean(fsPass && fsPass !== HASHED_PASSWORD_MASK && fsPass !== '••••••••');
+        const fsTs = Number(parsed.data.updatedAt || parsed.data.createdAt || 0);
+        const exTs = Number(existing?.updatedAt || existing?.createdAt || 0);
+
+        const shouldUpdateCompany =
+          !existing ||
+          !existing.adminPassword ||
+          Boolean(existing._isDefaultFallback && hasRealFsPass) ||
+          !isHashedPassword(existing.adminPassword) ||
+          fsTs > exTs ||
+          (hasRealFsPass && !isHashedPassword(fsPass) && exTs === 0 && !verifyPassword(fsPass, existing.adminPassword)) ||
+          (hasRealFsPass && isHashedPassword(fsPass) && fsTs >= exTs && fsPass !== existing.adminPassword);
+
+        if (shouldUpdateCompany) {
+          const nextPassword =
+            hasRealFsPass && !isHashedPassword(fsPass) && existing?.adminPassword && verifyPassword(fsPass, existing.adminPassword)
+              ? existing.adminPassword
+              : resolvePasswordWrite(
+                  parsed.data.adminPassword,
+                  existing?.adminPassword,
+                  slug === 'gosen' ? 'GOSEN2026' : slug === 'tiendagyg' ? 'GYG2026' : 'ADMIN2026'
+                );
+          const mergedComp: Record<string, any> = {
+            ...(existing || {}),
+            ...parsed.data,
+            id: slug,
+            slug,
+            adminPassword: nextPassword,
+          };
+          delete mergedComp._isDefaultFallback;
+          syncDbMemory.companies[slug] = mergedComp;
+          changed = true;
+        } else if (parsed.data.status && existing.status !== parsed.data.status) {
+          existing.status = parsed.data.status;
+          if (parsed.data.moraReason !== undefined) existing.moraReason = parsed.data.moraReason;
+          changed = true;
+        }
       }
-    }
 
-    for (const rawDoc of settingsDocs) {
-      const parsed = parseFirestoreRestDoc(rawDoc);
-      if (!parsed || !parsed.id.startsWith('store_profile')) continue;
-      const slug = normalizeServerCompanySlug(
-        parsed.data.companyId || parsed.id.replace(/^store_profile_?/, '') || 'gosen'
-      );
-      if (!isSafeRecordKey(slug)) continue;
-      const tenant = getTenantStore(slug);
-      const fsPass = String(parsed.data.accessPassword || '').trim();
-      const hasRealFsPass = Boolean(fsPass && fsPass !== HASHED_PASSWORD_MASK);
-      if (!tenant.settings || !tenant.settings.accessPassword || (hasRealFsPass && !isHashedPassword(tenant.settings.accessPassword))) {
-        tenant.settings = {
-          ...(tenant.settings || {}),
-          ...parsed.data,
-          companyId: slug,
-          accessPassword: resolvePasswordWrite(
-            parsed.data.accessPassword,
-            tenant.settings?.accessPassword
-          ),
-        };
-        changed = true;
+      // Direct fetch store_profile docs so sync_state_* docs in `settings` can never crowd them out
+      const settingsById = new Map<string, any>();
+      for (const rawDoc of settingsDocs) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (parsed && parsed.id.startsWith('store_profile')) {
+          settingsById.set(parsed.id, rawDoc);
+        }
       }
-    }
-
-    for (const rawDoc of userDocs) {
-      const parsed = parseFirestoreRestDoc(rawDoc);
-      if (!parsed) continue;
-      const slug = normalizeServerCompanySlug(
-        parsed.data.companyId || (parsed.id.includes('__') ? parsed.id.split('__')[0] : 'gosen')
-      );
-      if (!isSafeRecordKey(slug) || !isSafeRecordKey(parsed.id)) continue;
-      const tenant = getTenantStore(slug);
-      const existing = tenant.users[parsed.id];
-      const fsPass = String(parsed.data.password || '').trim();
-      const hasRealFsPass = Boolean(fsPass && fsPass !== HASHED_PASSWORD_MASK);
-      const fsTs = Number(parsed.data.updatedAt || parsed.data.createdAt || 0);
-      const exTs = Number(existing?.updatedAt || existing?.createdAt || 0);
-
-      if (!existing) {
-        tenant.users[parsed.id] = {
-          ...parsed.data,
-          id: parsed.id,
-          companyId: slug,
-          password: resolvePasswordWrite(parsed.data.password, undefined),
-        };
-        changed = true;
-      } else if (
-        (hasRealFsPass && (!existing.password || fsTs >= exTs)) ||
-        fsTs > exTs
-      ) {
-        tenant.users[parsed.id] = {
-          ...existing,
-          ...parsed.data,
-          id: parsed.id,
-          companyId: slug,
-          password: resolvePasswordWrite(
-            hasRealFsPass ? fsPass : undefined,
-            existing.password
-          ),
-        };
-        changed = true;
+      const directProfileIds = new Set<string>(['store_profile']);
+      for (const s of discoveredSlugs) {
+        directProfileIds.add(s === 'gosen' ? 'store_profile' : `store_profile_${s}`);
       }
-    }
+      const missingDirectIds = Array.from(directProfileIds).filter((docId) => !settingsById.has(docId));
+      if (missingDirectIds.length > 0) {
+        const fetchedDirect = await Promise.all(missingDirectIds.map((docId) => fetchDocById('settings', docId)));
+        for (const rawDoc of fetchedDirect) {
+          const parsed = parseFirestoreRestDoc(rawDoc);
+          if (parsed) {
+            settingsById.set(parsed.id, rawDoc);
+          }
+        }
+      }
 
-    if (changed) {
-      schedulePersistSyncDb();
-    }
-  } catch {}
+      for (const rawDoc of settingsById.values()) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (!parsed || !parsed.id.startsWith('store_profile')) continue;
+        const slug = normalizeServerCompanySlug(
+          parsed.data.companyId || parsed.id.replace(/^store_profile_?/, '') || 'gosen'
+        );
+        if (!isSafeRecordKey(slug)) continue;
+        const tenant = getTenantStore(slug);
+        const fsPass = String(parsed.data.accessPassword || '').trim();
+        const hasRealFsPass = Boolean(fsPass && fsPass !== HASHED_PASSWORD_MASK && fsPass !== '••••••••');
+        const fsTs = Number(parsed.data.updatedAt || 0);
+        const exTs = Number(tenant.settings?.updatedAt || 0);
+
+        const shouldUpdateSettings =
+          !tenant.settings ||
+          !tenant.settings.accessPassword ||
+          fsTs > exTs ||
+          (hasRealFsPass &&
+            (!isHashedPassword(tenant.settings.accessPassword) ||
+              (exTs === 0 && !isHashedPassword(fsPass) && !verifyPassword(fsPass, tenant.settings.accessPassword)) ||
+              (isHashedPassword(fsPass) && fsTs >= exTs && fsPass !== tenant.settings.accessPassword)));
+
+        if (shouldUpdateSettings) {
+          const nextAccessPassword =
+            hasRealFsPass &&
+            !isHashedPassword(fsPass) &&
+            tenant.settings?.accessPassword &&
+            verifyPassword(fsPass, tenant.settings.accessPassword)
+              ? tenant.settings.accessPassword
+              : resolvePasswordWrite(parsed.data.accessPassword, tenant.settings?.accessPassword);
+          tenant.settings = {
+            ...(tenant.settings || {}),
+            ...parsed.data,
+            companyId: slug,
+            accessPassword: nextAccessPassword,
+          };
+          changed = true;
+        }
+      }
+
+      for (const rawDoc of userDocs) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (!parsed) continue;
+        const slug = normalizeServerCompanySlug(
+          parsed.data.companyId || (parsed.id.includes('__') ? parsed.id.split('__')[0] : 'gosen')
+        );
+        if (!isSafeRecordKey(slug) || !isSafeRecordKey(parsed.id)) continue;
+        const tenant = getTenantStore(slug);
+        const existing = tenant.users[parsed.id];
+        const fsPass = String(parsed.data.password || '').trim();
+        const hasRealFsPass = Boolean(fsPass && fsPass !== HASHED_PASSWORD_MASK && fsPass !== '••••••••');
+        const fsTs = Number(parsed.data.updatedAt || parsed.data.createdAt || 0);
+        const exTs = Number(existing?.updatedAt || existing?.createdAt || 0);
+
+        if (!existing) {
+          tenant.users[parsed.id] = {
+            ...parsed.data,
+            id: parsed.id,
+            companyId: slug,
+            password: resolvePasswordWrite(parsed.data.password, undefined),
+          };
+          changed = true;
+        } else {
+          const fsMatchesExisting =
+            hasRealFsPass &&
+            (!isHashedPassword(fsPass)
+              ? verifyPassword(fsPass, existing.password)
+              : fsPass === existing.password);
+          const shouldUpdateUser =
+            fsTs > exTs ||
+            (hasRealFsPass && (!existing.password || (fsTs >= exTs && !fsMatchesExisting)));
+
+          if (shouldUpdateUser) {
+            const nextPass = fsMatchesExisting
+              ? existing.password
+              : resolvePasswordWrite(hasRealFsPass ? fsPass : undefined, existing.password);
+            tenant.users[parsed.id] = {
+              ...existing,
+              ...parsed.data,
+              id: parsed.id,
+              companyId: slug,
+              password: nextPass,
+            };
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        schedulePersistSyncDb();
+      }
+    } catch {}
+  })().finally(() => {
+    firestoreAuthHydrationInFlight = null;
+  });
+
+  return firestoreAuthHydrationInFlight;
 }
 
 // Track failed logins per IP for brute-force protection
@@ -1592,8 +1697,13 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const { mode = 'store_pass', password, username, companyId, remember = true } = req.body || {};
-    const cleanPass = String(password || '').trim();
-    const cleanUser = String(username || '').trim().toLowerCase().replace(/^@+/, '');
+    const cleanPass = String(password || '').replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+    const cleanUser = String(username || '')
+      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+      .trim()
+      .toLowerCase()
+      .replace(/^@+/, '')
+      .replace(/\s+/g, ' ');
     const hasPreferred = Boolean(companyId && String(companyId).trim());
     const preferredSlug = hasPreferred ? normalizeServerCompanySlug(String(companyId)) : '';
 
@@ -2142,7 +2252,7 @@ app.post('/api/auth/verify-admin-pin', requireAuthSession, async (req, res) => {
     if (!session.sa && requestedSlug !== session.cid) {
       return res.status(403).json({ ok: false, error: 'Acceso denegado para esta tienda.' });
     }
-    const candidate = String(req.body?.pin || '').trim();
+    const candidate = String(req.body?.pin || '').replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
     if (!candidate) {
       return res.status(400).json({ ok: false, error: 'Ingresa la contraseña de Administrador.' });
     }
@@ -2865,15 +2975,18 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
             if (!isSafeRecordKey(cSlug)) continue;
             if (!session.sa && cSlug !== slug) continue;
             const prevComp = syncDbMemory.companies[cSlug];
-            syncDbMemory.companies[cSlug] = {
+            const nextComp: Record<string, any> = {
               ...(prevComp || {}),
               ...comp,
+              updatedAt: Number(comp.updatedAt) || Date.now(),
               adminPassword: resolvePasswordWrite(
                 comp.adminPassword,
                 prevComp?.adminPassword,
                 cSlug === 'gosen' ? 'GOSEN2026' : cSlug === 'tiendagyg' ? 'GYG2026' : 'ADMIN2026'
               ),
             };
+            delete nextComp._isDefaultFallback;
+            syncDbMemory.companies[cSlug] = nextComp;
             changed = true;
           }
         }
@@ -2956,6 +3069,8 @@ async function startServer() {
   // Bind port 3000 immediately so the platform health check never times out during cold start
   app.listen(port, '0.0.0.0', () => {
     console.log(`StockMaster Server listening on http://0.0.0.0:${port}`);
+    // Pre-hydrate auth credentials from Firestore REST in background so mobile logins never hit stale cold defaults
+    hydrateAuthFromFirestoreRest(true).catch(() => {});
   });
 
   if (!isProd) {

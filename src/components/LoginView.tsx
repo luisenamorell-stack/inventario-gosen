@@ -209,7 +209,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    const cleanInput = password.trim();
+    const cleanInput = password.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
 
     if (!cleanInput) {
       setError('Ingresa tu contraseña de acceso para continuar.');
@@ -232,7 +232,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setIsVerifying(true);
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 9000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
       let res: Response;
       try {
         res = await fetch('/api/auth/login', {
@@ -505,9 +505,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   value={usernameInput}
                   disabled={loader.isActive || isVerifying || remainingLockSeconds > 0}
                   onChange={(e) => {
-                    setUsernameInput(e.target.value.toLowerCase().trim());
+                    setUsernameInput(e.target.value.toLowerCase());
                     if (error) setError(null);
                   }}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck="false"
                   autoComplete="username"
                   className="w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm font-semibold"
                 />

@@ -31,6 +31,7 @@ import {
   deleteSaaSDemoRequestFromFirestore,
   HASHED_PASSWORD_MASK,
   isMaskedOrHashedPassword,
+  getAuthHeaders,
 } from '../firebase/firestoreService';
 import {
   Building2,
@@ -581,7 +582,7 @@ export const CompaniesSaaSView: React.FC<CompaniesSaaSViewProps> = ({
       const res = await fetch('/api/auth/change-master-key', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ newKey: clean }),
       });
       const data = await res.json().catch(() => ({}));
