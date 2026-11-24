@@ -1818,6 +1818,20 @@ export function isMaskedOrHashedPassword(val: unknown): boolean {
   return clean === HASHED_PASSWORD_MASK || clean === '••••••••' || clean.startsWith('scrypt$');
 }
 
+export function getAuthHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(extraHeaders || {}),
+  };
+  try {
+    const token = localStorage.getItem('stockmaster_auth_token');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  } catch {}
+  return headers;
+}
+
 export async function hashPasswordViaServer(plain: string): Promise<string | null> {
   if (typeof window === 'undefined') return null;
   const clean = String(plain || '').trim();
@@ -1826,7 +1840,7 @@ export async function hashPasswordViaServer(plain: string): Promise<string | nul
     const res = await fetch('/api/auth/hash-password', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ password: clean }),
     });
     if (!res.ok) return null;
@@ -1856,7 +1870,9 @@ export async function fetchPublicCatalogFromHub(
   if (typeof window === 'undefined') return null;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   try {
-    const res = await fetch(`/api/public/catalog?empresa=${encodeURIComponent(slug)}`);
+    const res = await fetch(`/api/public/catalog?empresa=${encodeURIComponent(slug)}`, {
+      headers: getAuthHeaders(),
+    });
     if (!res.ok) return null;
     const data = await res.json();
     if (!data?.ok) return null;
@@ -1884,6 +1900,7 @@ export async function fetchBackendSyncStatus(
   try {
     const res = await fetch(`/api/cloud-sync/status?companyId=${encodeURIComponent(slug)}`, {
       credentials: 'include',
+      headers: getAuthHeaders(),
     });
     if (res.status === 401) {
       hasBackendAuthSession = false;
@@ -1943,7 +1960,7 @@ export async function syncInventoryWithBackendHub(
     const res = await fetch('/api/cloud-sync/inventory', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         companyId: slug,
         items: enrichedItems,
@@ -2006,7 +2023,7 @@ export async function pushProductSaveToBackendHub(
     const res = await fetch('/api/cloud-sync/product-save', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         companyId: slug,
         product,
@@ -2029,7 +2046,7 @@ export async function pushProductDeleteToBackendHub(
     const res = await fetch('/api/cloud-sync/product-delete', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         companyId: slug,
         id,
@@ -2076,7 +2093,7 @@ export async function syncCollectionsWithBackendHub(
     const res = await fetch('/api/cloud-sync/collections', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         companyId: slug,
         ...payload,

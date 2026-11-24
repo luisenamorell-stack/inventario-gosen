@@ -369,18 +369,17 @@ function setSessionCookie(
 ): string {
   const token = signSessionToken(payload);
   const https = isRequestHttps(req);
-  const isCrossSite = String(req.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site';
   const maxAgeSec = remember ? 7 * 24 * 60 * 60 : 12 * 60 * 60;
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
     `Max-Age=${maxAgeSec}`,
-    https && isCrossSite ? 'SameSite=None' : 'SameSite=Lax',
+    https ? 'SameSite=None' : 'SameSite=Lax',
   ];
   if (https) {
     parts.push('Secure');
-    if (isCrossSite) parts.push('Partitioned');
+    parts.push('Partitioned');
   }
   res.setHeader('Set-Cookie', parts.join('; '));
   return token;
@@ -388,17 +387,16 @@ function setSessionCookie(
 
 function clearSessionCookie(res: express.Response, req: express.Request): void {
   const https = isRequestHttps(req);
-  const isCrossSite = String(req.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site';
   const parts = [
     `${SESSION_COOKIE_NAME}=`,
     'Path=/',
     'HttpOnly',
     'Max-Age=0',
-    https && isCrossSite ? 'SameSite=None' : 'SameSite=Lax',
+    https ? 'SameSite=None' : 'SameSite=Lax',
   ];
   if (https) {
     parts.push('Secure');
-    if (isCrossSite) parts.push('Partitioned');
+    parts.push('Partitioned');
   }
   res.setHeader('Set-Cookie', parts.join('; '));
 }

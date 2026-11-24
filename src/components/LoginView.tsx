@@ -283,6 +283,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
         return;
       }
 
+      if (data?.authToken) {
+        try {
+          localStorage.setItem('stockmaster_auth_token', String(data.authToken));
+        } catch {}
+      }
+
       const serverSession = data.session as UserSession;
       const matchedSlug = normalizeCompanySlug(serverSession.companyId || 'gosen');
 
