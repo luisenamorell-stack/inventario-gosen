@@ -401,6 +401,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [creditFilter, setCreditFilter] = useState<
     'pending' | 'alerts' | 'profit_zone' | 'recovering_cost' | 'paid' | 'all'
   >('pending');
+  const [openCreditCardsAccordion, setOpenCreditCardsAccordion] = useState<Record<string, { costProfit?: boolean; scheduleNotices?: boolean; itemsList?: boolean; abonosList?: boolean }>>({});
   const [selectedSaleForAbone, setSelectedSaleForAbone] = useState<SaleRecord | null>(null);
   const [aboneAmount, setAboneAmount] = useState<string>('');
   const [aboneMethod, setAboneMethod] = useState<'cash' | 'transfer' | 'card'>('cash');
@@ -5352,467 +5353,566 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         </div>
                       )}
 
-                      {/* ==================== ROUTE COLLECTOR PROGRESS SUMMARY OR ADMIN COST VS PROFIT ==================== */}
-                      {isRoutePanelActive ? (
-                        <div className="p-2.5 sm:p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2">
-                          <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center bg-white rounded-lg p-2 border border-amber-200/60 text-[10px] sm:text-[11px]">
-                            <div className="min-w-0">
-                              <span className="text-slate-500 block leading-tight">Total Deuda</span>
-                              <span className="font-black text-slate-900 tabular-nums break-words">
-                                L. {totalSale.toFixed(2)}
-                              </span>
-                            </div>
-                            <div className="border-x border-slate-100 px-1 min-w-0">
-                              <span className="text-emerald-700 font-semibold block leading-tight">
-                                Total Abonado
-                              </span>
-                              <span className="font-black text-emerald-700 tabular-nums break-words">
-                                L. {paid.toFixed(2)}
-                              </span>
-                            </div>
-                            <div className="min-w-0">
-                              <span className="text-amber-800 font-semibold block leading-tight">
-                                Saldo a Cobrar
-                              </span>
-                              <span className="font-black text-amber-800 tabular-nums break-words">
-                                L. {bal.toFixed(2)}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-bold text-slate-600 tabular-nums">
-                              <span>Avance de pago ({simplePaidPct.toFixed(0)}%)</span>
-                              {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 ? (
-                                <span className="text-amber-900 font-black">
-                                  Cuota acordada: L. {controlMeta.installmentAmount.toFixed(2)}
-                                </span>
-                              ) : null}
-                            </div>
-                            <div className="h-2.5 w-full bg-slate-200 rounded-full overflow-hidden">
-                              <div
-                                style={{ width: `${simplePaidPct}%` }}
-                                className="h-full bg-emerald-600 transition-all duration-200"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div
-                          className={`p-2.5 sm:p-3 rounded-xl border space-y-2 sm:space-y-2.5 ${
-                            isCostRecovered
-                              ? 'bg-emerald-50/70 border-emerald-200'
-                              : 'bg-slate-50 border-slate-200'
+                      {/* ==================== COLLAPSIBLE PANEL TABS (SIMPLIFIED CARD VIEW) ==================== */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cur = openCreditCardsAccordion[sale.id] || {};
+                            setOpenCreditCardsAccordion({
+                              ...openCreditCardsAccordion,
+                              [sale.id]: { ...cur, costProfit: !cur.costProfit },
+                            });
+                          }}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all ${
+                            openCreditCardsAccordion[sale.id]?.costProfit
+                              ? 'bg-slate-900 text-white'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                           }`}
                         >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <TrendingUp
-                                className={`w-4 h-4 shrink-0 ${
-                                  isCostRecovered ? 'text-emerald-700' : 'text-slate-700'
-                                }`}
-                              />
-                              <span className="text-xs font-black text-slate-900 leading-tight">
-                                Control de Costo vs. Ganancia
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => openControlModalForSale(sale)}
-                              className={`text-[11px] font-bold flex items-center gap-1 cursor-pointer ${
-                                isPricingPending
-                                  ? 'px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-2xs'
-                                  : 'text-slate-700 hover:text-slate-900 underline'
-                              }`}
-                              title="Editar Artículo, Precio Costo, Precio de Venta al Crédito, Cobrador y Fecha"
-                            >
-                              <Pencil className="w-3 h-3 shrink-0" />
-                              <span>
-                                {isPricingPending
-                                  ? 'Agregar Costo / Precio Crédito'
-                                  : 'Editar Artículo / Precios'}
-                              </span>
-                            </button>
-                          </div>
+                          <TrendingUp className="w-3 h-3" />
+                          <span>
+                            {isRoutePanelActive ? 'Progreso' : 'Costo vs Ganancia'}
+                            {openCreditCardsAccordion[sale.id]?.costProfit ? ' ▲' : ' ▼'}
+                          </span>
+                        </button>
 
-                          <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center bg-white/90 rounded-lg p-2 border border-slate-200/80 text-[10px] sm:text-[11px]">
-                            <div className="min-w-0">
-                              <span className="text-slate-500 block leading-tight">Precio Venta</span>
-                              <span
-                                className={`font-black tabular-nums break-words ${
-                                  isPricingPending && totalSale <= 0
-                                    ? 'text-amber-700'
-                                    : 'text-slate-900'
-                                }`}
-                              >
-                                {isPricingPending && totalSale <= 0
-                                  ? 'Por definir'
-                                  : `L. ${totalSale.toFixed(2)}`}
-                              </span>
-                            </div>
-                            <div className="border-x border-slate-100 px-1 min-w-0">
-                              <span className="text-slate-500 block leading-tight">Precio Costo</span>
-                              <span
-                                className={`font-black tabular-nums break-words ${
-                                  isPricingPending && totalCost <= 0
-                                    ? 'text-amber-700'
-                                    : 'text-slate-800'
-                                }`}
-                              >
-                                {isPricingPending && totalCost <= 0
-                                  ? 'Por definir'
-                                  : `L. ${totalCost.toFixed(2)}`}
-                              </span>
-                            </div>
-                            <div className="min-w-0">
-                              <span className="text-emerald-700 font-semibold block leading-tight">
-                                Ganancia Total
-                              </span>
-                              <span className="font-black text-emerald-700 tabular-nums break-words">
-                                {isPricingPending && totalSale <= 0
-                                  ? 'Por definir'
-                                  : `L. ${expectedTotalProfit.toFixed(2)}`}
-                              </span>
-                            </div>
-                          </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cur = openCreditCardsAccordion[sale.id] || {};
+                            setOpenCreditCardsAccordion({
+                              ...openCreditCardsAccordion,
+                              [sale.id]: { ...cur, scheduleNotices: !cur.scheduleNotices },
+                            });
+                          }}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all ${
+                            openCreditCardsAccordion[sale.id]?.scheduleNotices
+                              ? 'bg-amber-600 text-white'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                          }`}
+                        >
+                          <Bell className="w-3 h-3" />
+                          <span>
+                            Cobros y WhatsApp
+                            {openCreditCardsAccordion[sale.id]?.scheduleNotices ? ' ▲' : ' ▼'}
+                          </span>
+                        </button>
 
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
-                              <span>
-                                Costo cubierto: L. {costRecovered.toFixed(2)} / L.{' '}
-                                {totalCost.toFixed(2)}
-                              </span>
-                              <span className="text-emerald-700">
-                                Ganancia cobrada: L. {realizedProfitCollected.toFixed(2)} / L.{' '}
-                                {expectedTotalProfit.toFixed(2)}
-                              </span>
-                            </div>
-                            <div className="relative h-2.5 w-full bg-slate-200 rounded-full overflow-hidden flex">
-                              <div
-                                style={{ width: `${paidCostBarPct}%` }}
-                                className="h-full bg-amber-500 transition-all duration-200"
-                              />
-                              <div
-                                style={{ width: `${paidProfitBarPct}%` }}
-                                className="h-full bg-emerald-600 transition-all duration-200"
-                              />
-                              {costShareOfSalePct > 0 && costShareOfSalePct < 100 && (
-                                <div
-                                  style={{ left: `${costShareOfSalePct}%` }}
-                                  className="absolute top-0 bottom-0 w-0.5 bg-slate-900/70"
-                                />
-                              )}
-                            </div>
-                          </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cur = openCreditCardsAccordion[sale.id] || {};
+                            setOpenCreditCardsAccordion({
+                              ...openCreditCardsAccordion,
+                              [sale.id]: { ...cur, itemsList: !cur.itemsList },
+                            });
+                          }}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all ${
+                            openCreditCardsAccordion[sale.id]?.itemsList
+                              ? 'bg-slate-900 text-white'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                          }`}
+                        >
+                          <Receipt className="w-3 h-3" />
+                          <span>
+                            Artículos ({(sale.items || []).length})
+                            {openCreditCardsAccordion[sale.id]?.itemsList ? ' ▲' : ' ▼'}
+                          </span>
+                        </button>
 
-                          {isPaid ? (
-                            <div className="p-2 rounded-lg bg-emerald-100/80 border border-emerald-200 text-emerald-950 text-xs flex flex-wrap items-center justify-between gap-1.5">
-                              <span className="font-bold leading-snug">
-                                Cuenta 100% Liquidada — Costo (L. {totalCost.toFixed(2)}) y Ganancia
-                                Total cobrados:
-                              </span>
-                              <span className="font-black text-emerald-800 tabular-nums shrink-0">
-                                + L. {expectedTotalProfit.toFixed(2)}
-                              </span>
-                            </div>
-                          ) : isCostRecovered ? (
-                            <div className="p-2.5 rounded-lg bg-emerald-600 text-white text-xs space-y-1 shadow-2xs">
-                              <div className="flex flex-wrap items-center justify-between gap-1.5">
-                                <span className="font-black uppercase tracking-tight leading-snug">
-                                  ✓ ¡Precio Costo (L. {totalCost.toFixed(2)}) 100% Recuperado!
-                                </span>
-                                <span className="font-mono font-black text-emerald-100 tabular-nums shrink-0 text-[11px]">
-                                  Ganancia Pura
+                        {abonos.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const cur = openCreditCardsAccordion[sale.id] || {};
+                              setOpenCreditCardsAccordion({
+                                ...openCreditCardsAccordion,
+                                [sale.id]: { ...cur, abonosList: !cur.abonosList },
+                              });
+                            }}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all ${
+                              openCreditCardsAccordion[sale.id]?.abonosList
+                                ? 'bg-emerald-700 text-white'
+                                : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            }`}
+                          >
+                            <DollarSign className="w-3 h-3" />
+                            <span>
+                              Abonos ({abonos.length})
+                              {openCreditCardsAccordion[sale.id]?.abonosList ? ' ▲' : ' ▼'}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* ==================== COLLAPSIBLE PANEL 1: COST VS PROFIT / PROGRESS ==================== -->
+                      {openCreditCardsAccordion[sale.id]?.costProfit && (
+                        isRoutePanelActive ? (
+                          <div className="p-2.5 sm:p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2">
+                            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center bg-white rounded-lg p-2 border border-amber-200/60 text-[10px] sm:text-[11px]">
+                              <div className="min-w-0">
+                                <span className="text-slate-500 block leading-tight">Total Deuda</span>
+                                <span className="font-black text-slate-900 tabular-nums break-words">
+                                  L. {totalSale.toFixed(2)}
                                 </span>
                               </div>
-                              <p className="text-[11px] text-emerald-50 leading-snug">
-                                El cliente ya abonó <strong>L. {paid.toFixed(2)}</strong>. Todo lo
-                                que queda de abonar (
-                                <strong className="underline">
-                                  L. {remainingProfitToCollect.toFixed(2)}
-                                </strong>
-                                ) es <strong>100% GANANCIA</strong>.
-                              </p>
+                              <div className="border-x border-slate-100 px-1 min-w-0">
+                                <span className="text-emerald-700 font-semibold block leading-tight">
+                                  Total Abonado
+                                </span>
+                                <span className="font-black text-emerald-700 tabular-nums break-words">
+                                  L. {paid.toFixed(2)}
+                                </span>
+                              </div>
+                              <div className="min-w-0">
+                                <span className="text-amber-800 font-semibold block leading-tight">
+                                  Saldo a Cobrar
+                                </span>
+                                <span className="font-black text-amber-800 tabular-nums break-words">
+                                  L. {bal.toFixed(2)}
+                                </span>
+                              </div>
                             </div>
-                          ) : (
-                            <div className="p-2 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-950 text-[11px] leading-snug">
-                              <span className="font-bold">Etapa 1 (Recuperando Precio Costo):</span>{' '}
-                              Faltan{' '}
-                              <strong className="font-black tabular-nums">
-                                L. {costRemainingToRecover.toFixed(2)}
-                              </strong>{' '}
-                              de abono para cubrir el Costo (L. {totalCost.toFixed(2)}).
+
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-bold text-slate-600 tabular-nums">
+                                <span>Avance de pago ({simplePaidPct.toFixed(0)}%)</span>
+                                {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 ? (
+                                  <span className="text-amber-900 font-black">
+                                    Cuota acordada: L. {controlMeta.installmentAmount.toFixed(2)}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="h-2.5 w-full bg-slate-200 rounded-full overflow-hidden">
+                                <div
+                                  style={{ width: `${simplePaidPct}%` }}
+                                  className="h-full bg-emerald-600 transition-all duration-200"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            className={`p-2.5 sm:p-3 rounded-xl border space-y-2 sm:space-y-2.5 ${
+                              isCostRecovered
+                                ? 'bg-emerald-50/70 border-emerald-200'
+                                : 'bg-slate-50 border-slate-200'
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <TrendingUp
+                                  className={`w-4 h-4 shrink-0 ${
+                                    isCostRecovered ? 'text-emerald-700' : 'text-slate-700'
+                                  }`}
+                                />
+                                <span className="text-xs font-black text-slate-900 leading-tight">
+                                  Control de Costo vs. Ganancia
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => openControlModalForSale(sale)}
+                                className={`text-[11px] font-bold flex items-center gap-1 cursor-pointer ${
+                                  isPricingPending
+                                    ? 'px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-2xs'
+                                    : 'text-slate-700 hover:text-slate-900 underline'
+                                }`}
+                                title="Editar Artículo, Precio Costo, Precio de Venta al Crédito, Cobrador y Fecha"
+                              >
+                                <Pencil className="w-3 h-3 shrink-0" />
+                                <span>
+                                  {isPricingPending
+                                    ? 'Agregar Costo / Precio Crédito'
+                                    : 'Editar Artículo / Precios'}
+                                </span>
+                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center bg-white/90 rounded-lg p-2 border border-slate-200/80 text-[10px] sm:text-[11px]">
+                              <div className="min-w-0">
+                                <span className="text-slate-500 block leading-tight">Precio Venta</span>
+                                <span
+                                  className={`font-black tabular-nums break-words ${
+                                    isPricingPending && totalSale <= 0
+                                      ? 'text-amber-700'
+                                      : 'text-slate-900'
+                                  }`}
+                                >
+                                  {isPricingPending && totalSale <= 0
+                                    ? 'Por definir'
+                                    : `L. ${totalSale.toFixed(2)}`}
+                                </span>
+                              </div>
+                              <div className="border-x border-slate-100 px-1 min-w-0">
+                                <span className="text-slate-500 block leading-tight">Precio Costo</span>
+                                <span
+                                  className={`font-black tabular-nums break-words ${
+                                    isPricingPending && totalCost <= 0
+                                      ? 'text-amber-700'
+                                      : 'text-slate-800'
+                                  }`}
+                                >
+                                  {isPricingPending && totalCost <= 0
+                                    ? 'Por definir'
+                                    : `L. ${totalCost.toFixed(2)}`}
+                                </span>
+                              </div>
+                              <div className="min-w-0">
+                                <span className="text-emerald-700 font-semibold block leading-tight">
+                                  Ganancia Total
+                                </span>
+                                <span className="font-black text-emerald-700 tabular-nums break-words">
+                                  {isPricingPending && totalSale <= 0
+                                    ? 'Por definir'
+                                    : `L. ${expectedTotalProfit.toFixed(2)}`}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
+                                <span>
+                                  Costo cubierto: L. {costRecovered.toFixed(2)} / L.{' '}
+                                  {totalCost.toFixed(2)}
+                                </span>
+                                <span className="text-emerald-700">
+                                  Ganancia cobrada: L. {realizedProfitCollected.toFixed(2)} / L.{' '}
+                                  {expectedTotalProfit.toFixed(2)}
+                                </span>
+                              </div>
+                              <div className="relative h-2.5 w-full bg-slate-200 rounded-full overflow-hidden flex">
+                                <div
+                                  style={{ width: `${paidCostBarPct}%` }}
+                                  className="h-full bg-amber-500 transition-all duration-200"
+                                />
+                                <div
+                                  style={{ width: `${paidProfitBarPct}%` }}
+                                  className="h-full bg-emerald-600 transition-all duration-200"
+                                />
+                                {costShareOfSalePct > 0 && costShareOfSalePct < 100 && (
+                                  <div
+                                    style={{ left: `${costShareOfSalePct}%` }}
+                                    className="absolute top-0 bottom-0 w-0.5 bg-slate-900/70"
+                                  />
+                                )}
+                              </div>
+                            </div>
+
+                            {isPaid ? (
+                              <div className="p-2 rounded-lg bg-emerald-100/80 border border-emerald-200 text-emerald-950 text-xs flex flex-wrap items-center justify-between gap-1.5">
+                                <span className="font-bold leading-snug">
+                                  Cuenta 100% Liquidada — Costo (L. {totalCost.toFixed(2)}) y Ganancia
+                                  Total cobrados:
+                                </span>
+                                <span className="font-black text-emerald-800 tabular-nums shrink-0">
+                                  + L. {expectedTotalProfit.toFixed(2)}
+                                </span>
+                              </div>
+                            ) : isCostRecovered ? (
+                              <div className="p-2.5 rounded-lg bg-emerald-600 text-white text-xs space-y-1 shadow-2xs">
+                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                  <span className="font-black uppercase tracking-tight leading-snug">
+                                    ✓ ¡Precio Costo (L. {totalCost.toFixed(2)}) 100% Recuperado!
+                                  </span>
+                                  <span className="font-mono font-black text-emerald-100 tabular-nums shrink-0 text-[11px]">
+                                    Ganancia Pura
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-emerald-50 leading-snug">
+                                  El cliente ya abonó <strong>L. {paid.toFixed(2)}</strong>. Todo lo
+                                  que queda de abonar (
+                                  <strong className="underline">
+                                    L. {remainingProfitToCollect.toFixed(2)}
+                                  </strong>
+                                  ) es <strong>100% GANANCIA</strong>.
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="p-2 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-950 text-[11px] leading-snug">
+                                <span className="font-bold">Etapa 1 (Recuperando Precio Costo):</span>{' '}
+                                Faltan{' '}
+                                <strong className="font-black tabular-nums">
+                                  L. {costRemainingToRecover.toFixed(2)}
+                                </strong>{' '}
+                                de abono para cubrir el Costo (L. {totalCost.toFixed(2)}).
+                              </div>
+                            )}
+                          </div>
+                        )
+                      )}
+
+                      {/* ==================== COLLAPSIBLE PANEL 2: SCHEDULE & WHATSAPP NOTICES ==================== */}
+                      {openCreditCardsAccordion[sale.id]?.scheduleNotices && (
+                        <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-1.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <Bell
+                                className={`w-3.5 h-3.5 shrink-0 ${
+                                  alertStatus === 'overdue'
+                                    ? 'text-rose-600'
+                                    : alertStatus === 'due_today'
+                                    ? 'text-amber-600'
+                                    : 'text-slate-600'
+                                }`}
+                              />
+                              <span className="font-black text-slate-900">
+                                Programación de Cobro y Alertas
+                              </span>
+                            </div>
+
+                            {!isPaid && (
+                              <span
+                                className={`text-[11px] font-bold ${
+                                  alertStatus === 'overdue'
+                                    ? 'text-rose-600'
+                                    : alertStatus === 'due_today'
+                                    ? 'text-amber-700'
+                                    : alertStatus === 'upcoming'
+                                    ? 'text-amber-600'
+                                    : 'text-slate-600'
+                                }`}
+                              >
+                                {alertStatus === 'overdue'
+                                  ? `🚨 Cobro Atrasado (${Math.abs(daysDiff || 0)} día(s))`
+                                  : alertStatus === 'due_today'
+                                  ? '🔔 ¡Hoy Toca Cobrar Abono!'
+                                  : alertStatus === 'upcoming'
+                                  ? `📅 Próximo abono en ${daysDiff} día(s)`
+                                  : effectiveNextDate
+                                  ? `Programado: ${effectiveNextDate}`
+                                  : 'Sin fecha de próximo abono'}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-[11px] text-slate-600 bg-white sm:bg-transparent p-2 sm:p-0 rounded-lg sm:rounded-none border border-slate-200/70 sm:border-0">
+                            <div className="min-w-0">
+                              <span className="text-[10px] text-slate-400 sm:hidden block">Siguiente Cobro</span>
+                              <span className="hidden sm:inline">Siguiente Cobro: </span>
+                              <strong className="text-slate-900 tabular-nums">
+                                {effectiveNextDate || 'No asignado'}
+                              </strong>
+                            </div>
+
+                            <span aria-hidden="true" className="hidden sm:inline text-slate-300">
+                              ·
+                            </span>
+
+                            <div className="min-w-0">
+                              <span className="text-[10px] text-slate-400 sm:hidden block">Frecuencia</span>
+                              <span className="hidden sm:inline">Frecuencia: </span>
+                              <span className="font-semibold sm:font-normal text-slate-800 sm:text-slate-600">{freqLabel}</span>
+                            </div>
+
+                            {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 && (
+                              <>
+                                <span aria-hidden="true" className="hidden sm:inline text-slate-300">
+                                  ·
+                                </span>
+                                <div className="min-w-0">
+                                  <span className="text-[10px] text-slate-400 sm:hidden block">Cuota Acordada</span>
+                                  <span className="font-bold text-slate-900 tabular-nums">
+                                    <span className="hidden sm:inline">Cuota: </span>L. {controlMeta.installmentAmount.toFixed(2)}
+                                  </span>
+                                </div>
+                              </>
+                            )}
+
+                            <div className="text-slate-500 sm:ml-auto">
+                              <span className="text-[10px] text-slate-400 sm:hidden block">Bitácora</span>
+                              <button
+                                type="button"
+                                onClick={() => openControlModalForSale(sale)}
+                                className="hover:underline cursor-pointer font-semibold sm:font-normal"
+                                title="Ver bitácora de avisos y programar cobros"
+                              >
+                                {noticeCount > 0 ? (
+                                  <span>
+                                    Avisos: <strong className="text-slate-800">{noticeCount}</strong>
+                                  </span>
+                                ) : (
+                                  <span>0 avisos</span>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          {controlMeta?.collectionNotes && (
+                            <p className="text-[11px] text-slate-600 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/80 break-words">
+                              📝 <strong>Nota de cobro:</strong> {controlMeta.collectionNotes}
+                            </p>
+                          )}
+
+                          {!isPaid && (
+                            <div className="space-y-2 pt-1">
+                              {/* Direct 4 WhatsApp Collection Notice Buttons (Admin & Assigned Collector) */}
+                              <div className="p-2 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-1.5">
+                                <span className="text-[10px] font-black uppercase tracking-wide text-emerald-950 flex items-center gap-1">
+                                  <WhatsAppIcon className="w-3 h-3 fill-emerald-700 shrink-0" />
+                                  <span>Enviar Aviso de Cobro por WhatsApp:</span>
+                                </span>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleSendCreditReminderWhatsApp(sale, 'preventive')
+                                    }
+                                    className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
+                                  >
+                                    Recordatorio Preventivo
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleSendCreditReminderWhatsApp(sale, 'due_today')
+                                    }
+                                    className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
+                                  >
+                                    Hoy Toca Abono
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleSendCreditReminderWhatsApp(sale, 'overdue')
+                                    }
+                                    className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
+                                  >
+                                    Cobro Vencido
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleSendCreditReminderWhatsApp(sale, 'statement')
+                                    }
+                                    className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
+                                  >
+                                    Estado de Cuenta
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch sm:items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedSaleForQuickSchedule(sale);
+                                    setQuickScheduleFrequency(
+                                      controlMeta?.paymentFrequency ||
+                                        routeCollectorConfig.defaultPaymentFrequency ||
+                                        'weekly'
+                                    );
+                                    setQuickScheduleDate(
+                                      calculateNextDateByFrequency(
+                                        controlMeta?.paymentFrequency,
+                                        effectiveNextDate
+                                      )
+                                    );
+                                    setQuickScheduleNote('');
+                                  }}
+                                  className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-amber-300 text-amber-950 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
+                                >
+                                  <Calendar className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                  <span>Programar Cobro</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedSaleForGpsModal(sale)}
+                                  className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer shadow-2xs text-center leading-tight"
+                                  title="Capturar la dirección exacta del cliente estando en el lugar usando el GPS del teléfono"
+                                >
+                                  <MapPin className="w-3.5 h-3.5 shrink-0" />
+                                  <span>
+                                    {typeof controlMeta?.customerGpsLat === 'number'
+                                      ? 'Actualizar GPS'
+                                      : 'Agregar GPS'}
+                                  </span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedSaleForCollectorAlert(sale);
+                                    setCollectorAlertType('customer_absent');
+                                    setCollectorAlertMessage('');
+                                    setCollectorAlertNextDate('');
+                                  }}
+                                  className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
+                                >
+                                  <Bell className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                  <span>Alerta al Admin</span>
+                                </button>
+
+                                {(isAdminSession || isCurrentUserRouteCollector) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openControlModalForSale(sale)}
+                                    className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
+                                    title="Configurar ruta, notas, avisos WhatsApp y bitácora de visitas"
+                                  >
+                                    <Settings className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                                    <span>
+                                      {isAdminSession
+                                        ? 'Configurar / Asignar'
+                                        : 'Avisos y Bitácora'}
+                                    </span>
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>
                       )}
 
-                      {/* ==================== CONTROL DE PRÓXIMO COBRO, FRECUENCIA Y ALERTAS ==================== */}
-                      <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
-                        <div className="flex flex-wrap items-center justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <Bell
-                              className={`w-3.5 h-3.5 shrink-0 ${
-                                alertStatus === 'overdue'
-                                  ? 'text-rose-600'
-                                  : alertStatus === 'due_today'
-                                  ? 'text-amber-600'
-                                  : 'text-slate-600'
-                              }`}
-                            />
-                            <span className="font-black text-slate-900">
-                              Programación de Cobro y Alertas
+                      {/* ==================== COLLAPSIBLE PANEL 3: ITEMS SUMMARY ==================== */}
+                      {openCreditCardsAccordion[sale.id]?.itemsList && (
+                        <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              Artículo(s) en Deuda:
                             </span>
-                          </div>
-
-                          {!isPaid && (
-                            <span
-                              className={`text-[11px] font-bold ${
-                                alertStatus === 'overdue'
-                                  ? 'text-rose-600'
-                                  : alertStatus === 'due_today'
-                                  ? 'text-amber-700'
-                                  : alertStatus === 'upcoming'
-                                  ? 'text-amber-600'
-                                  : 'text-slate-600'
-                              }`}
-                            >
-                              {alertStatus === 'overdue'
-                                ? `🚨 Cobro Atrasado (${Math.abs(daysDiff || 0)} día(s))`
-                                : alertStatus === 'due_today'
-                                ? '🔔 ¡Hoy Toca Cobrar Abono!'
-                                : alertStatus === 'upcoming'
-                                ? `📅 Próximo abono en ${daysDiff} día(s)`
-                                : effectiveNextDate
-                                ? `Programado: ${effectiveNextDate}`
-                                : 'Sin fecha de próximo abono'}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-[11px] text-slate-600 bg-white sm:bg-transparent p-2 sm:p-0 rounded-lg sm:rounded-none border border-slate-200/70 sm:border-0">
-                          <div className="min-w-0">
-                            <span className="text-[10px] text-slate-400 sm:hidden block">Siguiente Cobro</span>
-                            <span className="hidden sm:inline">Siguiente Cobro: </span>
-                            <strong className="text-slate-900 tabular-nums">
-                              {effectiveNextDate || 'No asignado'}
-                            </strong>
-                          </div>
-
-                          <span aria-hidden="true" className="hidden sm:inline text-slate-300">
-                            ·
-                          </span>
-
-                          <div className="min-w-0">
-                            <span className="text-[10px] text-slate-400 sm:hidden block">Frecuencia</span>
-                            <span className="hidden sm:inline">Frecuencia: </span>
-                            <span className="font-semibold sm:font-normal text-slate-800 sm:text-slate-600">{freqLabel}</span>
-                          </div>
-
-                          {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 && (
-                            <>
-                              <span aria-hidden="true" className="hidden sm:inline text-slate-300">
-                                ·
-                              </span>
-                              <div className="min-w-0">
-                                <span className="text-[10px] text-slate-400 sm:hidden block">Cuota Acordada</span>
-                                <span className="font-bold text-slate-900 tabular-nums">
-                                  <span className="hidden sm:inline">Cuota: </span>L. {controlMeta.installmentAmount.toFixed(2)}
-                                </span>
-                              </div>
-                            </>
-                          )}
-
-                          <div className="text-slate-500 sm:ml-auto">
-                            <span className="text-[10px] text-slate-400 sm:hidden block">Bitácora</span>
-                            <button
-                              type="button"
-                              onClick={() => openControlModalForSale(sale)}
-                              className="hover:underline cursor-pointer font-semibold sm:font-normal"
-                              title="Ver bitácora de avisos y programar cobros"
-                            >
-                              {noticeCount > 0 ? (
+                            {isAdminSession && (
+                              <button
+                                type="button"
+                                onClick={() => openControlModalForSale(sale)}
+                                className={`text-[10px] font-black flex items-center gap-1 cursor-pointer ${
+                                  isPricingPending
+                                    ? 'px-2 py-0.5 rounded-md bg-amber-600 text-white hover:bg-amber-700'
+                                    : 'text-indigo-700 hover:text-indigo-900 hover:underline'
+                                }`}
+                              >
+                                <Pencil className="w-3 h-3 shrink-0" />
                                 <span>
-                                  Avisos: <strong className="text-slate-800">{noticeCount}</strong>
-                                </span>
-                              ) : (
-                                <span>0 avisos</span>
-                              )}
-                            </button>
-                          </div>
-                        </div>
-
-                        {controlMeta?.collectionNotes && (
-                          <p className="text-[11px] text-slate-600 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/80 break-words">
-                            📝 <strong>Nota de cobro:</strong> {controlMeta.collectionNotes}
-                          </p>
-                        )}
-
-                        {!isPaid && (
-                          <div className="space-y-2 pt-1">
-                            {/* Direct 4 WhatsApp Collection Notice Buttons (Admin & Assigned Collector) */}
-                            <div className="p-2 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-1.5">
-                              <span className="text-[10px] font-black uppercase tracking-wide text-emerald-950 flex items-center gap-1">
-                                <WhatsAppIcon className="w-3 h-3 fill-emerald-700 shrink-0" />
-                                <span>Enviar Aviso de Cobro por WhatsApp:</span>
-                              </span>
-                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleSendCreditReminderWhatsApp(sale, 'preventive')
-                                  }
-                                  className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
-                                >
-                                  Recordatorio Preventivo
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleSendCreditReminderWhatsApp(sale, 'due_today')
-                                  }
-                                  className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
-                                >
-                                  Hoy Toca Abono
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleSendCreditReminderWhatsApp(sale, 'overdue')
-                                  }
-                                  className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
-                                >
-                                  Cobro Vencido
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleSendCreditReminderWhatsApp(sale, 'statement')
-                                  }
-                                  className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
-                                >
-                                  Estado de Cuenta
-                                </button>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch sm:items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedSaleForQuickSchedule(sale);
-                                  setQuickScheduleFrequency(
-                                    controlMeta?.paymentFrequency ||
-                                      routeCollectorConfig.defaultPaymentFrequency ||
-                                      'weekly'
-                                  );
-                                  setQuickScheduleDate(
-                                    calculateNextDateByFrequency(
-                                      controlMeta?.paymentFrequency,
-                                      effectiveNextDate
-                                    )
-                                  );
-                                  setQuickScheduleNote('');
-                                }}
-                                className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-amber-300 text-amber-950 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
-                              >
-                                <Calendar className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                <span>Programar Cobro</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => setSelectedSaleForGpsModal(sale)}
-                                className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer shadow-2xs text-center leading-tight"
-                                title="Capturar la dirección exacta del cliente estando en el lugar usando el GPS del teléfono"
-                              >
-                                <MapPin className="w-3.5 h-3.5 shrink-0" />
-                                <span>
-                                  {typeof controlMeta?.customerGpsLat === 'number'
-                                    ? 'Actualizar GPS'
-                                    : 'Agregar GPS'}
+                                  {isPricingPending
+                                    ? 'Agregar Costo y Precio'
+                                    : 'Editar Artículo / Precios'}
                                 </span>
                               </button>
-
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedSaleForCollectorAlert(sale);
-                                  setCollectorAlertType('customer_absent');
-                                  setCollectorAlertMessage('');
-                                  setCollectorAlertNextDate('');
-                                }}
-                                className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
-                              >
-                                <Bell className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                                <span>Alerta al Admin</span>
-                              </button>
-
-                              {(isAdminSession || isCurrentUserRouteCollector) && (
-                                <button
-                                  type="button"
-                                  onClick={() => openControlModalForSale(sale)}
-                                  className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
-                                  title="Configurar ruta, notas, avisos WhatsApp y bitácora de visitas"
-                                >
-                                  <Settings className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                                  <span>
-                                    {isAdminSession
-                                      ? 'Configurar / Asignar'
-                                      : 'Avisos y Bitácora'}
-                                  </span>
-                                </button>
-                              )}
-                            </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-
-                      {/* Items summary */}
-                      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-1">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                            Artículo(s) en Deuda:
-                          </span>
-                          {isAdminSession && (
-                            <button
-                              type="button"
-                              onClick={() => openControlModalForSale(sale)}
-                              className={`text-[10px] font-black flex items-center gap-1 cursor-pointer ${
-                                isPricingPending
-                                  ? 'px-2 py-0.5 rounded-md bg-amber-600 text-white hover:bg-amber-700'
-                                  : 'text-indigo-700 hover:text-indigo-900 hover:underline'
-                              }`}
+                          {(sale.items || []).map((it, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-start justify-between gap-2 text-slate-700 tabular-nums"
                             >
-                              <Pencil className="w-3 h-3 shrink-0" />
-                              <span>
-                                {isPricingPending
-                                  ? 'Agregar Costo y Precio'
-                                  : 'Editar Artículo / Precios'}
+                              <span className="min-w-0 break-words leading-snug">
+                                <strong>{it.quantity}x</strong> {it.name}
                               </span>
-                            </button>
-                          )}
+                              <span className="font-semibold shrink-0">
+                                {isPricingPending && it.subtotal <= 0
+                                  ? 'Precio por definir'
+                                  : `L. ${it.subtotal.toFixed(2)}`}
+                              </span>
+                            </div>
+                          ))}
                         </div>
-                        {(sale.items || []).map((it, idx) => (
-                          <div
-                            key={idx}
-                            className="flex items-start justify-between gap-2 text-slate-700 tabular-nums"
-                          >
-                            <span className="min-w-0 break-words leading-snug">
-                              <strong>{it.quantity}x</strong> {it.name}
-                            </span>
-                            <span className="font-semibold shrink-0">
-                              {isPricingPending && it.subtotal <= 0
-                                ? 'Precio por definir'
-                                : `L. ${it.subtotal.toFixed(2)}`}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
+                      )}
 
-                      {/* Abonos History */}
-                      {abonos.length > 0 && (
-                        <div className="space-y-1">
+                      {/* ==================== COLLAPSIBLE PANEL 4: ABONOS HISTORY ==================== */}
+                      {openCreditCardsAccordion[sale.id]?.abonosList && abonos.length > 0 && (
+                        <div className="space-y-1 pt-1">
                           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                             Historial de Abonos Recibidos ({abonos.length})
                           </p>

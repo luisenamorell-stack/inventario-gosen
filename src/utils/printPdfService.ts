@@ -3144,7 +3144,7 @@ export function buildCreditStatementHtml(
     <div style="${isThermal ? '' : 'border:1px solid #cbd5e1;border-radius:12px;padding:22px;'}">
       <div class="text-center">
         <div style="font-size:${isThermal ? '14px' : '19px'};font-weight:900;text-transform:uppercase;">${storeName}</div>
-        <div style="font-size:${isThermal ? '11px' : '13px'};font-weight:800;color:#b45309;">ESTADO DE CUENTA DE CRÉDITO CLIENTE</div>
+        <div style="font-size:${isThermal ? '11px' : '13px'};font-weight:800;color:#b45309;">ESTADO DE CUENTA Y DETALLE DE ABONOS</div>
       </div>
       <div class="dashed-line"></div>
       <div style="font-size:${isThermal ? '10.5px' : '12px'};">
@@ -3168,16 +3168,32 @@ export function buildCreditStatementHtml(
         </tbody>
       </table>
       <div class="dashed-line"></div>
-      <div style="font-weight:800;font-size:11px;margin-bottom:4px;">HISTORIAL DE ABONOS REALIZADOS:</div>
+      <div style="font-weight:800;font-size:11px;margin-bottom:6px;">HISTORIAL DETALLADO DE ABONOS:</div>
       ${
         (sale.creditPayments || []).length === 0
-          ? `<div style="font-size:10.5px;color:#64748b;">Sin abonos registrados aún.</div>`
-          : (sale.creditPayments || [])
-              .map(
-                (cp) =>
-                  `<div style="display:flex;justify-content:space-between;font-size:${isThermal ? '10px' : '11.5px'};margin:2px 0;"><span>• ${cp.date} (${getPaymentMethodLabel(cp.paymentMethod)})</span><strong>${formatCurrencyL(cp.amount)}</strong></div>`
-              )
-              .join('')
+          ? `<div style="font-size:10.5px;color:#64748b;font-style:italic;">Sin abonos registrados aún en esta cuenta.</div>`
+          : (() => {
+              let runningBalance = Number(sale.total) || 0;
+              return (sale.creditPayments || [])
+                .map((cp, idx) => {
+                  const amt = Number(cp.amount) || 0;
+                  runningBalance = Math.max(0, runningBalance - amt);
+                  return `
+                    <div style="font-size:${isThermal ? '10px' : '11px'};border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;margin-bottom:5px;background:#f8fafc;">
+                      <div style="display:flex;justify-content:space-between;font-weight:bold;">
+                        <span>#${idx + 1} • ${cp.date}</span>
+                        <span style="color:#047857;">+ ${formatCurrencyL(amt)}</span>
+                      </div>
+                      <div style="display:flex;justify-content:space-between;color:#475569;margin-top:2px;">
+                        <span>Método: ${getPaymentMethodLabel(cp.paymentMethod)}${cp.receivedBy ? ` • Cobrador: ${cp.receivedBy}` : ''}</span>
+                        <span>Queda: <strong>${formatCurrencyL(runningBalance)}</strong></span>
+                      </div>
+                      ${cp.notes ? `<div style="color:#64748b;margin-top:2px;font-style:italic;">Nota: ${cp.notes}</div>` : ''}
+                    </div>
+                  `;
+                })
+                .join('');
+            })()
       }
       <div class="dashed-line"></div>
       <div style="font-size:${isThermal ? '11.5px' : '13px'};">
