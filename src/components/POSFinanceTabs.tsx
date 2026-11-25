@@ -5307,63 +5307,62 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       </div>
 
                       {/* Full-width Customer Address / GPS Location Strip */}
-                      {(controlMeta?.customerAddressOrRoute ||
-                        (typeof controlMeta?.customerGpsLat === 'number' &&
-                          typeof controlMeta?.customerGpsLng === 'number')) && (
-                        <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                          <div className="text-xs text-slate-800 min-w-0 flex-1">
-                            <span className="font-bold text-amber-950 flex items-start gap-1.5">
-                              <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
-                              <span className="break-words leading-snug">
-                                {controlMeta?.customerAddressOrRoute ||
-                                  controlMeta?.customerGpsFormattedAddress ||
-                                  `Coordenadas GPS: ${controlMeta?.customerGpsLat?.toFixed(
-                                    5
-                                  )}, ${controlMeta?.customerGpsLng?.toFixed(5)}`}
-                              </span>
+                      <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="text-xs text-slate-800 min-w-0 flex-1">
+                          <span className="font-bold text-amber-950 flex items-start gap-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
+                            <span className="break-words leading-snug">
+                              {controlMeta?.customerAddressOrRoute ||
+                                controlMeta?.customerGpsFormattedAddress ||
+                                (typeof controlMeta?.customerGpsLat === 'number' &&
+                                typeof controlMeta?.customerGpsLng === 'number'
+                                  ? `Coordenadas GPS: ${controlMeta.customerGpsLat.toFixed(5)}, ${controlMeta.customerGpsLng.toFixed(5)}`
+                                  : 'Sin ubicación GPS ni dirección exacta asignada')}
                             </span>
-                            {typeof controlMeta?.customerGpsLat === 'number' &&
-                              typeof controlMeta?.customerGpsLng === 'number' && (
-                                <span className="text-[10px] font-semibold text-emerald-800 block mt-0.5 tabular-nums">
-                                  🛰️ GPS Exacto: {controlMeta.customerGpsLat.toFixed(5)},{' '}
-                                  {controlMeta.customerGpsLng.toFixed(5)}
-                                  {controlMeta.customerGpsAccuracy
-                                    ? ` (±${controlMeta.customerGpsAccuracy}m)`
-                                    : ''}
-                                  {controlMeta.customerGpsCapturedBy
-                                    ? ` · Por: ${controlMeta.customerGpsCapturedBy}`
-                                    : ''}
-                                </span>
-                              )}
-                          </div>
-
-                          <div className="grid grid-cols-2 sm:flex items-center gap-1.5 shrink-0">
-                            {typeof controlMeta?.customerGpsLat === 'number' &&
-                              typeof controlMeta?.customerGpsLng === 'number' && (
-                                <a
-                                  href={`https://www.google.com/maps/dir/?api=1&destination=${controlMeta.customerGpsLat},${controlMeta.customerGpsLng}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="min-h-[36px] sm:min-h-0 px-2.5 py-1.5 sm:py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] flex items-center justify-center gap-1 shadow-2xs"
-                                  title="Abrir navegación GPS en Google Maps hacia el cliente"
-                                >
-                                  <Navigation className="w-3 h-3 shrink-0" />
-                                  <span>Ir con GPS</span>
-                                </a>
-                              )}
-                            <button
-                              type="button"
-                              onClick={() => setSelectedSaleForGpsModal(sale)}
-                              className={`min-h-[36px] sm:min-h-0 px-2.5 py-1.5 sm:py-1 rounded-lg bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold text-[10px] flex items-center justify-center gap-1 cursor-pointer ${
-                                typeof controlMeta?.customerGpsLat !== 'number' ? 'col-span-2 sm:col-span-1' : ''
-                              }`}
-                            >
-                              <MapPin className="w-3 h-3 text-emerald-700 shrink-0" />
-                              <span>Ver Mapa / GPS</span>
-                            </button>
-                          </div>
+                          </span>
+                          {typeof controlMeta?.customerGpsLat === 'number' &&
+                            typeof controlMeta?.customerGpsLng === 'number' && (
+                              <span className="text-[10px] font-semibold text-emerald-800 block mt-0.5 tabular-nums">
+                                🛰️ GPS Exacto: {controlMeta.customerGpsLat.toFixed(5)},{' '}
+                                {controlMeta.customerGpsLng.toFixed(5)}
+                                {controlMeta.customerGpsAccuracy
+                                  ? ` (±${controlMeta.customerGpsAccuracy}m)`
+                                  : ''}
+                                {controlMeta.customerGpsCapturedBy
+                                  ? ` · Por: ${controlMeta.customerGpsCapturedBy}`
+                                  : ''}
+                              </span>
+                            )}
                         </div>
-                      )}
+
+                        <div className="grid grid-cols-2 sm:flex items-center gap-1.5 shrink-0">
+                          {typeof controlMeta?.customerGpsLat === 'number' &&
+                            typeof controlMeta?.customerGpsLng === 'number' && (
+                              <a
+                                href={`https://www.google.com/maps/dir/?api=1&destination=${controlMeta.customerGpsLat},${controlMeta.customerGpsLng}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="min-h-[36px] sm:min-h-0 px-2.5 py-1.5 sm:py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] flex items-center justify-center gap-1 shadow-2xs"
+                                title="Abrir navegación GPS en Google Maps hacia el cliente"
+                              >
+                                <Navigation className="w-3 h-3 shrink-0" />
+                                <span>Ir con GPS</span>
+                              </a>
+                            )}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedSaleForGpsModal(sale)}
+                            className="min-h-[36px] sm:min-h-0 px-2.5 py-1.5 sm:py-1 rounded-lg bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold text-[10px] flex items-center justify-center gap-1 cursor-pointer col-span-2 sm:col-span-1"
+                          >
+                            <MapPin className="w-3 h-3 text-emerald-700 shrink-0" />
+                            <span>
+                              {typeof controlMeta?.customerGpsLat === 'number'
+                                ? 'Actualizar GPS'
+                                : '📍 Asignar Ubicación GPS'}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
 
                       {/* ==================== COLLAPSIBLE PANEL TABS (SIMPLIFIED CARD VIEW) ==================== */}
                       <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-100">
