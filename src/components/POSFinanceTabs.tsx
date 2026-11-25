@@ -401,6 +401,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
   const [creditFilter, setCreditFilter] = useState<
     'pending' | 'alerts' | 'profit_zone' | 'recovering_cost' | 'paid' | 'all'
   >('pending');
+  const [openAlertsBanner, setOpenAlertsBanner] = useState<boolean>(true);
   const [openCreditCardsAccordion, setOpenCreditCardsAccordion] = useState<Record<string, { costProfit?: boolean; scheduleNotices?: boolean; itemsList?: boolean; abonosList?: boolean }>>({});
   const [selectedSaleForAbone, setSelectedSaleForAbone] = useState<SaleRecord | null>(null);
   const [aboneAmount, setAboneAmount] = useState<string>('');
@@ -4821,16 +4822,26 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setCreditFilter(creditFilter === 'alerts' ? 'pending' : 'alerts')}
-                  className="w-full sm:w-auto min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs cursor-pointer whitespace-nowrap text-center shrink-0"
-                >
-                  {creditFilter === 'alerts' ? 'Ver todas las pendientes' : 'Filtrar solo alertas'}
-                </button>
+                <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setOpenAlertsBanner(!openAlertsBanner)}
+                    className="min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold text-xs cursor-pointer whitespace-nowrap text-center"
+                  >
+                    {openAlertsBanner ? 'Ocultar ▲' : 'Mostrar ▼'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCreditFilter(creditFilter === 'alerts' ? 'pending' : 'alerts')}
+                    className="min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs cursor-pointer whitespace-nowrap text-center"
+                  >
+                    {creditFilter === 'alerts' ? 'Ver pendientes' : 'Filtrar alertas'}
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 sm:gap-3">
+              {openAlertsBanner && (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 sm:gap-3">
                 {creditPortfolioStats.alertSales.slice(0, 6).map(({ sale, analytics }) => {
                   const isOverdue = analytics.alertStatus === 'overdue';
                   const isDueToday = analytics.alertStatus === 'due_today';
@@ -4963,6 +4974,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   );
                 })}
               </div>
+              )}
             </div>
           )}
 
