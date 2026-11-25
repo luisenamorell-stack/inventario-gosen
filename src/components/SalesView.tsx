@@ -3651,7 +3651,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
       {/* Top Bar / Navigation Tabs — Hidden for Route Collector Collaborators so they only see their Exclusive Route Collector Panel */}
       {(isAdminUser || !isRouteCollectorCollab) && (
         <div className="bg-white border-b border-slate-200 shrink-0 shadow-2xs">
-          <div className="w-full max-w-[1680px] mx-auto px-3 sm:px-6 lg:px-8 py-2 sm:py-2.5 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2">
+          <div className="w-full max-w-[1680px] mx-auto px-2.5 sm:px-5 md:px-6 lg:px-8 py-2 sm:py-2.5 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2">
             <div className="hidden sm:flex items-center justify-between min-w-0 shrink-0">
               <h1 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2 truncate">
                 <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />

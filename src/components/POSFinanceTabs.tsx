@@ -4500,37 +4500,37 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
       : null;
 
     return (
-      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto scroll-container px-3 sm:px-6 lg:px-8 py-3 sm:py-5 pb-32">
-        <div className="w-full max-w-[1640px] mx-auto space-y-5">
+      <div className="flex-1 min-h-0 h-full w-full overflow-y-auto overflow-x-hidden scroll-container px-2.5 sm:px-5 md:px-6 lg:px-8 py-2.5 sm:py-5 pb-24 sm:pb-12">
+        <div className="w-full max-w-[1640px] mx-auto space-y-3 sm:space-y-4 lg:space-y-5 min-w-0">
           {/* ==================== TOP HEADER: ADMIN CONTROL BAR OR EXCLUSIVE ROUTE COLLECTOR BANNER ==================== */}
           {isAdminSession ? (
-            <div className="bg-slate-900 text-white p-4 sm:p-5 rounded-2xl border border-slate-800 shadow-md flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
-              <div className="flex items-start sm:items-center gap-3">
-                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0 font-black text-lg">
+            <div className="bg-slate-900 text-white p-3.5 sm:p-5 rounded-2xl border border-slate-800 shadow-md flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 min-w-0">
+                <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0 font-black text-base sm:text-lg">
                   🛵
                 </div>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-sm sm:text-base font-black text-white">
-                      Cuentas por Cobrar y Gestión de Cobradores de Ruta
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                    <h2 className="text-sm sm:text-base font-black text-white leading-tight">
+                      Cuentas por Cobrar y Cobradores de Ruta
                     </h2>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-400/30">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-400/30 whitespace-nowrap">
                       {activeRouteCollectors.length} cobrador(es) activo(s)
                     </span>
                   </div>
-                  <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5">
+                  <p className="text-[11px] sm:text-xs text-slate-300 mt-1 leading-relaxed">
                     Crea deudas de artículos para clientes, asigna el panel exclusivo de Cobrador de Ruta a colaboradores, programa cobros automáticos y recibe alertas en tiempo real.
                   </p>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:flex xl:flex-wrap items-stretch xl:items-center gap-2 pt-1 xl:pt-0 border-t border-slate-800/80 xl:border-t-0">
                 {onRecordSale && (
                   <>
                     <button
                       type="button"
                       onClick={() => openCreateDebtModal('new')}
-                      className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                      className="min-h-[42px] sm:min-h-[38px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs text-center leading-tight active:scale-[0.98] transition-transform"
                     >
                       <Plus className="w-4 h-4 shrink-0" />
                       <span>Crear Deuda a Cliente</span>
@@ -4538,7 +4538,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     <button
                       type="button"
                       onClick={() => openCreateDebtModal('historical')}
-                      className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap border border-indigo-400/40"
+                      className="min-h-[42px] sm:min-h-[38px] px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border border-indigo-400/40 text-center leading-tight active:scale-[0.98] transition-transform"
                       title="Ingresar una venta al crédito de antes de usar la app con su historial de abonos previos"
                     >
                       <History className="w-4 h-4 shrink-0" />
@@ -4550,7 +4550,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowAdminCollectorConfigModal(true)}
-                  className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                  className="min-h-[42px] sm:min-h-[38px] px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs text-center leading-tight active:scale-[0.98] transition-transform"
                 >
                   <Settings className="w-4 h-4 shrink-0" />
                   <span>Configurar Cobradores y Reglas</span>
@@ -4559,7 +4559,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowAdminAlertsModal(true)}
-                  className={`px-3 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer border transition-all whitespace-nowrap ${
+                  className={`min-h-[42px] sm:min-h-[38px] px-3 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer border transition-all text-center leading-tight active:scale-[0.98] ${
                     unreadCollectorAlertsCount > 0
                       ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400 animate-pulse'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
@@ -4568,7 +4568,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   <Bell className="w-4 h-4 shrink-0" />
                   <span>Alertas de Cobradores</span>
                   <span
-                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
                       unreadCollectorAlertsCount > 0
                         ? 'bg-white text-rose-700'
                         : 'bg-slate-700 text-slate-300'
@@ -4587,7 +4587,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       adminCreditsViewMode === 'admin_full' ? 'route_panel' : 'admin_full'
                     )
                   }
-                  className={`px-3 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer border whitespace-nowrap ${
+                  className={`sm:col-span-2 xl:col-span-1 min-h-[42px] sm:min-h-[38px] px-3 py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer border text-center leading-tight active:scale-[0.98] transition-transform ${
                     adminCreditsViewMode === 'route_panel'
                       ? 'bg-teal-500 text-slate-950 border-teal-400 font-black'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
@@ -4603,34 +4603,34 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
               </div>
             </div>
           ) : (
-            <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-amber-950 text-white p-4 sm:p-5 rounded-2xl border border-amber-500/30 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0 text-xl font-black">
+            <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-amber-950 text-white p-3.5 sm:p-5 rounded-2xl border border-amber-500/30 shadow-md flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 min-w-0">
+                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0 text-lg sm:text-xl font-black">
                   🛵
                 </div>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                     <span className="px-2 py-0.5 rounded-md bg-amber-500 text-slate-950 text-[10px] font-black uppercase tracking-wider">
                       Panel Exclusivo • Cobrador de Ruta
                     </span>
-                    <span className="text-xs font-bold text-amber-200">
+                    <span className="text-xs font-bold text-amber-200 truncate">
                       Colaborador: {currentUserName}
                     </span>
                   </div>
-                  <h2 className="text-sm sm:text-base font-black text-white mt-1">
+                  <h2 className="text-sm sm:text-base font-black text-white mt-1 leading-tight">
                     Control de Clientes por Cobrar, Abonos y Alertas de Ruta
                   </h2>
-                  <p className="text-[11px] text-slate-300">
+                  <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">
                     Registra abonos en ruta, envía avisos por WhatsApp (Preventivo, Toca Hoy, Vencido y Estado de Cuenta), programa cobros, registra visitas y envía alertas al Administrador.
                   </p>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 self-stretch sm:self-auto">
+              <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
                 <button
                   type="button"
                   onClick={() => setCreditFilter(creditFilter === 'alerts' ? 'pending' : 'alerts')}
-                  className={`flex-1 sm:flex-initial px-3 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer border ${
+                  className={`w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer border active:scale-[0.98] transition-transform ${
                     creditPortfolioStats.totalAlertsCount > 0
                       ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400'
                       : 'bg-slate-800 text-slate-200 border-slate-700'
@@ -4647,34 +4647,34 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
           {/* ==================== UNREAD COLLECTOR ALERTS BANNER FOR ADMIN ==================== */}
           {isAdminSession && unreadCollectorAlertsCount > 0 && (
-            <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-              <div className="flex items-start gap-3">
+            <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 shadow-xs">
+              <div className="flex items-start gap-2.5 sm:gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 font-black">
                   <Bell className="w-4 h-4" />
                 </div>
-                <div>
-                  <h3 className="text-xs sm:text-sm font-black text-rose-950">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs sm:text-sm font-black text-rose-950 leading-snug">
                     🔔 Tienes {unreadCollectorAlertsCount} alerta(s) nueva(s) enviada(s) por tus Cobradores de Ruta
                   </h3>
-                  <p className="text-[11px] text-rose-800 mt-0.5">
+                  <p className="text-[11px] text-rose-800 mt-0.5 break-words">
                     Última alerta: <strong>{routeCollectorAlerts.find((a) => a.status === 'unread')?.title}</strong> —{' '}
                     {routeCollectorAlerts.find((a) => a.status === 'unread')?.customerName} (por{' '}
                     {routeCollectorAlerts.find((a) => a.status === 'unread')?.collectorName})
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setShowAdminAlertsModal(true)}
-                  className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs cursor-pointer"
+                  className="min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs cursor-pointer text-center"
                 >
-                  Ver Bandeja de Alertas
+                  Ver Bandeja
                 </button>
                 <button
                   type="button"
                   onClick={handleMarkAllCollectorAlertsReviewed}
-                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs cursor-pointer"
+                  className="min-h-[38px] sm:min-h-0 px-2.5 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs cursor-pointer text-center"
                 >
                   Marcar leídas
                 </button>
@@ -4684,113 +4684,119 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
           {/* ==================== TOP KPI CARDS (ROUTE MODE VS ADMIN FULL MODE) ==================== */}
           {isRoutePanelActive ? (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs">
-                <span className="text-[11px] font-bold uppercase text-amber-700 block">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-amber-200 shadow-xs min-w-0 flex flex-col justify-between">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase text-amber-700 block leading-tight">
                   Saldo por Cobrar en Ruta
                 </span>
-                <span className="text-xl sm:text-2xl font-black text-amber-700 mt-1 block tabular-nums">
+                <span className="text-base sm:text-xl lg:text-2xl font-black text-amber-700 mt-1 block tabular-nums break-words">
                   L. {creditPortfolioStats.totalReceivable.toFixed(2)}
                 </span>
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 leading-snug">
                   {creditPortfolioStats.pendingAccountsCount} cliente(s) con deuda activa
                 </span>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-xs">
-                <span className="text-[11px] font-bold uppercase text-rose-700 block">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-rose-200 shadow-xs min-w-0 flex flex-col justify-between">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase text-rose-700 block leading-tight">
                   ¡Toca Cobrar Hoy / Vencidos!
                 </span>
-                <span className="text-xl sm:text-2xl font-black text-rose-600 mt-1 block tabular-nums">
+                <span className="text-base sm:text-xl lg:text-2xl font-black text-rose-600 mt-1 block tabular-nums">
                   {creditPortfolioStats.overdueCount + creditPortfolioStats.dueTodayCount}
                 </span>
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 leading-snug">
                   {creditPortfolioStats.overdueCount} atrasado(s) · {creditPortfolioStats.dueTodayCount} tocan hoy
                 </span>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-indigo-200 shadow-xs">
-                <span className="text-[11px] font-bold uppercase text-indigo-700 block">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-indigo-200 shadow-xs min-w-0 flex flex-col justify-between">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase text-indigo-700 block leading-tight">
                   Próximos Cobros Programados
                 </span>
-                <span className="text-xl sm:text-2xl font-black text-indigo-700 mt-1 block tabular-nums">
+                <span className="text-base sm:text-xl lg:text-2xl font-black text-indigo-700 mt-1 block tabular-nums">
                   {creditPortfolioStats.upcomingCount}
                 </span>
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 leading-snug">
                   En los próximos {routeCollectorConfig.upcomingAlertDays} día(s)
                 </span>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-xs">
-                <span className="text-[11px] font-bold uppercase text-emerald-700 block">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-emerald-200 shadow-xs min-w-0 flex flex-col justify-between">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase text-emerald-700 block leading-tight">
                   Total Abonos Recibidos
                 </span>
-                <span className="text-xl sm:text-2xl font-black text-emerald-700 mt-1 block tabular-nums">
+                <span className="text-base sm:text-xl lg:text-2xl font-black text-emerald-700 mt-1 block tabular-nums break-words">
                   L. {creditPortfolioStats.totalCollectedFromCredits.toFixed(2)}
                 </span>
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 leading-snug">
                   Pagos acumulados de la cartera
                 </span>
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-              <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs">
-                <span className="text-[11px] font-bold uppercase text-amber-700 block">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-3">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-amber-200 shadow-xs min-w-0 flex flex-col justify-between">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase text-amber-700 block leading-tight">
                   Total por Cobrar (Cartera)
                 </span>
-                <span className="text-xl sm:text-2xl font-black text-amber-700 mt-1 block tabular-nums">
+                <span className="text-base sm:text-xl lg:text-2xl font-black text-amber-700 mt-1 block tabular-nums break-words">
                   L. {creditPortfolioStats.totalReceivable.toFixed(2)}
                 </span>
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 leading-snug">
                   {creditPortfolioStats.pendingAccountsCount} cuenta(s) activa(s)
                 </span>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-                <span className="text-[11px] font-bold uppercase text-slate-600 block">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 shadow-xs min-w-0 flex flex-col justify-between">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase text-slate-600 block leading-tight">
                   Costo por Recuperar
                 </span>
-                <span className="text-xl sm:text-2xl font-black text-slate-900 mt-1 block tabular-nums">
+                <span className="text-base sm:text-xl lg:text-2xl font-black text-slate-900 mt-1 block tabular-nums break-words">
                   L. {creditPortfolioStats.totalCostRemainingInStreet.toFixed(2)}
                 </span>
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 leading-snug">
                   {creditPortfolioStats.accountsRecoveringCostCount} cuenta(s) cubriendo costo
                 </span>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-xs">
-                <span className="text-[11px] font-bold uppercase text-emerald-700 block">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-emerald-200 shadow-xs min-w-0 flex flex-col justify-between">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase text-emerald-700 block leading-tight">
                   Ganancia por Cobrar (Calle)
                 </span>
-                <span className="text-xl sm:text-2xl font-black text-emerald-700 mt-1 block tabular-nums">
+                <span className="text-base sm:text-xl lg:text-2xl font-black text-emerald-700 mt-1 block tabular-nums break-words">
                   L. {creditPortfolioStats.totalProfitRemainingInStreet.toFixed(2)}
                 </span>
-                <span className="text-[11px] text-emerald-700 font-semibold">
+                <span className="text-[10px] sm:text-[11px] text-emerald-700 font-semibold mt-0.5 leading-snug">
                   {creditPortfolioStats.accountsInProfitZoneCount} cuenta(s) 100% en Ganancia
                 </span>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-teal-200 shadow-xs">
-                <span className="text-[11px] font-bold uppercase text-teal-700 block">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-teal-200 shadow-xs min-w-0 flex flex-col justify-between">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase text-teal-700 block leading-tight">
                   Ganancia Ya Cobrada (Mano)
                 </span>
-                <span className="text-xl sm:text-2xl font-black text-teal-700 mt-1 block tabular-nums">
+                <span className="text-base sm:text-xl lg:text-2xl font-black text-teal-700 mt-1 block tabular-nums break-words">
                   L. {creditPortfolioStats.totalRealizedProfitInHand.toFixed(2)}
                 </span>
-                <span className="text-[11px] text-slate-500 tabular-nums">
+                <span className="text-[10px] sm:text-[11px] text-slate-500 tabular-nums mt-0.5 leading-snug">
                   Total abonado: L. {creditPortfolioStats.totalCollectedFromCredits.toFixed(2)}
                 </span>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-xs col-span-2 lg:col-span-1">
-                <span className="text-[11px] font-bold uppercase text-rose-700 block">
-                  Alertas de Cobro de Abono
-                </span>
-                <span className="text-xl sm:text-2xl font-black text-rose-600 mt-1 block tabular-nums">
+              <div className="bg-white p-3 sm:p-4 rounded-2xl border border-rose-200 shadow-xs col-span-2 lg:col-span-1 min-w-0 flex flex-row lg:flex-col items-center lg:items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="text-[10px] sm:text-[11px] font-bold uppercase text-rose-700 block leading-tight">
+                    Alertas de Cobro de Abono
+                  </span>
+                  <span className="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 block leading-snug lg:hidden">
+                    {creditPortfolioStats.overdueCount} vencido(s) · {creditPortfolioStats.dueTodayCount} hoy ·{' '}
+                    {creditPortfolioStats.upcomingCount} próx.
+                  </span>
+                </div>
+                <span className="text-xl sm:text-2xl font-black text-rose-600 lg:mt-1 block tabular-nums shrink-0">
                   {creditPortfolioStats.totalAlertsCount}
                 </span>
-                <span className="text-[11px] text-slate-500">
+                <span className="hidden lg:block text-[11px] text-slate-500 mt-0.5 leading-snug">
                   {creditPortfolioStats.overdueCount} vencido(s) · {creditPortfolioStats.dueTodayCount} hoy ·{' '}
                   {creditPortfolioStats.upcomingCount} próx.
                 </span>
@@ -4800,15 +4806,15 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
           {/* ==================== CENTRO DE ALERTAS DE RUTA Y AVISOS DE COBRO ==================== */}
           {creditPortfolioStats.alertSales.length > 0 && (
-            <div className="bg-white rounded-2xl border border-rose-200 p-4 shadow-xs space-y-3">
+            <div className="bg-white rounded-2xl border border-rose-200 p-3 sm:p-4 shadow-xs space-y-2.5 sm:space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
-                <div className="flex items-center gap-2">
-                  <Bell className="w-4 h-4 text-rose-600 shrink-0" />
-                  <div>
-                    <h3 className="text-xs sm:text-sm font-black text-slate-900">
+                <div className="flex items-start sm:items-center gap-2 min-w-0">
+                  <Bell className="w-4 h-4 text-rose-600 shrink-0 mt-0.5 sm:mt-0" />
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-black text-slate-900 leading-snug">
                       Alertas de Ruta: Clientes que Toca Cobrar ({creditPortfolioStats.alertSales.length})
                     </h3>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-[11px] text-slate-500 leading-snug">
                       Clientes con fecha de abono vencida, que corresponden cobrar hoy o en los próximos{' '}
                       {routeCollectorConfig.upcomingAlertDays} días
                     </p>
@@ -4817,13 +4823,13 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 <button
                   type="button"
                   onClick={() => setCreditFilter(creditFilter === 'alerts' ? 'pending' : 'alerts')}
-                  className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs cursor-pointer self-start sm:self-auto whitespace-nowrap"
+                  className="w-full sm:w-auto min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs cursor-pointer whitespace-nowrap text-center shrink-0"
                 >
                   {creditFilter === 'alerts' ? 'Ver todas las pendientes' : 'Filtrar solo alertas'}
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 sm:gap-3">
                 {creditPortfolioStats.alertSales.slice(0, 6).map(({ sale, analytics }) => {
                   const isOverdue = analytics.alertStatus === 'overdue';
                   const isDueToday = analytics.alertStatus === 'due_today';
@@ -4836,7 +4842,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   return (
                     <div
                       key={`alert_${sale.id}`}
-                      className={`p-3 rounded-xl border flex flex-col justify-between gap-2 ${
+                      className={`p-3 rounded-xl border flex flex-col justify-between gap-2.5 min-w-0 ${
                         isOverdue
                           ? 'bg-rose-50/60 border-rose-200'
                           : isDueToday
@@ -4844,9 +4850,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           : 'bg-slate-50 border-slate-200'
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                      <div className="flex items-start justify-between gap-2 min-w-0">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
                             <span
                               className={
                                 isOverdue
@@ -4857,19 +4863,19 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                               }
                             >
                               {isOverdue
-                                ? `🚨 Cobro Atrasado (${Math.abs(analytics.daysDiff || 0)}d)`
+                                ? `🚨 Atrasado (${Math.abs(analytics.daysDiff || 0)}d)`
                                 : isDueToday
                                 ? '🔔 ¡Toca Cobrar Hoy!'
-                                : `📅 Próximo Abono en ${analytics.daysDiff}d`}
+                                : `📅 Próximo en ${analytics.daysDiff}d`}
                             </span>
                             <span className="text-slate-400">·</span>
                             <span className="font-mono text-slate-600">{sale.saleNumber}</span>
                           </div>
-                          <p className="text-xs font-black text-slate-900 mt-0.5">
+                          <p className="text-xs font-black text-slate-900 mt-0.5 truncate">
                             {sale.customerName || 'Cliente'}
                           </p>
-                          <p className="text-[11px] text-slate-600 tabular-nums">
-                            Fecha cobro: <strong>{analytics.effectiveNextDate}</strong>
+                          <p className="text-[11px] text-slate-600 tabular-nums leading-snug">
+                            Cobro: <strong>{analytics.effectiveNextDate}</strong>
                             {analytics.controlMeta?.installmentAmount
                               ? ` · Cuota: L. ${analytics.controlMeta.installmentAmount.toFixed(2)}`
                               : ''}
@@ -4881,20 +4887,20 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           )}
                         </div>
                         <div className="text-right shrink-0">
-                          <span className="text-xs font-black text-slate-900 block tabular-nums">
+                          <span className="text-xs sm:text-sm font-black text-slate-900 block tabular-nums">
                             L. {analytics.balanceDue.toFixed(2)}
                           </span>
-                          <span className="text-[10px] text-slate-500 block">
+                          <span className="text-[10px] text-slate-500 block tabular-nums">
                             Abonado: L. {analytics.paid.toFixed(2)}
                           </span>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-1.5 pt-1 border-t border-slate-200/60">
                         <button
                           type="button"
                           onClick={() => openAboneModalForSale(sale)}
-                          className="flex-1 py-1.5 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] cursor-pointer whitespace-nowrap"
+                          className="col-span-2 sm:col-span-1 sm:flex-1 min-h-[38px] sm:min-h-0 py-1.5 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
                         >
                           💵 Abonar
                         </button>
@@ -4915,10 +4921,10 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             );
                             setQuickScheduleNote('');
                           }}
-                          className="py-1.5 px-2.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 font-bold text-[11px] cursor-pointer whitespace-nowrap"
+                          className="min-h-[38px] sm:min-h-0 py-1.5 px-2 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 font-bold text-[11px] flex items-center justify-center cursor-pointer whitespace-nowrap"
                           title="Programar o cambiar fecha del siguiente cobro"
                         >
-                          📅 Próx. Cobro
+                          📅 Próx.
                         </button>
                         <button
                           type="button"
@@ -4928,7 +4934,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             setCollectorAlertMessage('');
                             setCollectorAlertNextDate('');
                           }}
-                          className="py-1.5 px-2 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-[11px] cursor-pointer"
+                          className="min-h-[38px] sm:min-h-0 py-1.5 px-2 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-[11px] flex items-center justify-center cursor-pointer"
                           title="Enviar alerta de cobro al Administrador"
                         >
                           📣 Alerta
@@ -4936,15 +4942,16 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         <button
                           type="button"
                           onClick={() => handleSendCreditReminderWhatsApp(sale, templateToUse)}
-                          className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                          className="min-h-[38px] sm:min-h-0 py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
                           title="Enviar aviso rápido por WhatsApp al cliente"
                         >
                           <WhatsAppIcon className="w-3.5 h-3.5 fill-white shrink-0" />
+                          <span className="sm:hidden">WhatsApp</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => openControlModalForSale(sale)}
-                          className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                          className="min-h-[38px] sm:min-h-0 py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
                           title="Abrir los 4 avisos por WhatsApp, bitácora de visitas y programación"
                         >
                           <MessageSquare className="w-3.5 h-3.5 shrink-0" />
@@ -4959,16 +4966,16 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
           )}
 
           {/* ==================== SEARCH, COLLECTOR FILTER & STATUS FILTER BAR ==================== */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1">
-              <div className="relative flex-1 max-w-md">
+          <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-2.5 sm:gap-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1 min-w-0">
+              <div className="relative flex-1 w-full xl:max-w-md min-w-0">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Buscar cliente, teléfono, dirección/ruta o factura..."
+                  placeholder="Buscar cliente, teléfono, ruta o factura..."
                   value={creditSearch}
                   onChange={(e) => setCreditSearch(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  className="w-full min-h-[42px] sm:min-h-0 pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
               </div>
 
@@ -4976,7 +4983,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 <select
                   value={selectedCollectorFilter}
                   onChange={(e) => setSelectedCollectorFilter(e.target.value)}
-                  className="px-3 py-2 bg-amber-50/70 border border-amber-200 rounded-xl text-xs font-bold text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  className="w-full sm:w-auto min-h-[42px] sm:min-h-0 px-3 py-2 bg-amber-50/70 border border-amber-200 rounded-xl text-xs font-bold text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 >
                   <option value="all">🛵 Todos los Cobradores ({creditSales.length})</option>
                   {collaboratorUsers.map((col) => (
@@ -4989,12 +4996,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 min-w-0">
+              <div className="flex items-center sm:flex-wrap gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs overflow-x-auto no-scrollbar max-w-full">
                 <button
                   type="button"
                   onClick={() => setCreditFilter('pending')}
-                  className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                  className={`min-h-[36px] sm:min-h-0 px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
                     creditFilter === 'pending'
                       ? 'bg-amber-600 text-white shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -5005,7 +5012,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 <button
                   type="button"
                   onClick={() => setCreditFilter('alerts')}
-                  className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                  className={`min-h-[36px] sm:min-h-0 px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
                     creditFilter === 'alerts'
                       ? 'bg-rose-600 text-white shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -5018,7 +5025,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     <button
                       type="button"
                       onClick={() => setCreditFilter('profit_zone')}
-                      className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                      className={`min-h-[36px] sm:min-h-0 px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
                         creditFilter === 'profit_zone'
                           ? 'bg-emerald-600 text-white shadow-2xs'
                           : 'text-slate-600 hover:text-slate-900'
@@ -5029,7 +5036,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                     <button
                       type="button"
                       onClick={() => setCreditFilter('recovering_cost')}
-                      className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                      className={`min-h-[36px] sm:min-h-0 px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
                         creditFilter === 'recovering_cost'
                           ? 'bg-slate-800 text-white shadow-2xs'
                           : 'text-slate-600 hover:text-slate-900'
@@ -5042,7 +5049,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 <button
                   type="button"
                   onClick={() => setCreditFilter('paid')}
-                  className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                  className={`min-h-[36px] sm:min-h-0 px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
                     creditFilter === 'paid'
                       ? 'bg-teal-700 text-white shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -5053,7 +5060,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 <button
                   type="button"
                   onClick={() => setCreditFilter('all')}
-                  className={`px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap ${
+                  className={`min-h-[36px] sm:min-h-0 px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
                     creditFilter === 'all'
                       ? 'bg-slate-900 text-white shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -5072,10 +5079,10 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   }
                   setShowCreditPortfolioPrintModal(true);
                 }}
-                className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                className="w-full sm:w-auto min-h-[42px] sm:min-h-0 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap shrink-0"
                 title="Imprimir o descargar en PDF la Cartera de Cuentas por Cobrar"
               >
-                <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                <Printer className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span>Imprimir / PDF Ruta</span>
               </button>
             </div>
@@ -5083,12 +5090,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
           {/* ==================== CREDIT ACCOUNTS / ROUTE CARDS LIST ==================== */}
           {filteredCreditSales.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-400">
-              <Users className="w-12 h-12 mx-auto mb-2 text-slate-300 stroke-1" />
-              <p className="font-bold text-slate-700 text-base">
+            <div className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center text-slate-400">
+              <Users className="w-11 h-11 sm:w-12 sm:h-12 mx-auto mb-2 text-slate-300 stroke-1" />
+              <p className="font-bold text-slate-700 text-sm sm:text-base">
                 No hay cuentas por cobrar en esta vista
               </p>
-              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
                 Para registrar una deuda nueva o ingresar una venta al crédito anterior con historial de abonos previos, presiona{' '}
                 <strong>"Crear Deuda a Cliente"</strong> o{' '}
                 <strong>"Ingresar Crédito con Abonos Previos"</strong> arriba.
@@ -5098,16 +5105,16 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                   <button
                     type="button"
                     onClick={() => openCreateDebtModal('historical')}
-                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    className="min-h-[42px] px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
-                    <History className="w-4 h-4" />
+                    <History className="w-4 h-4 shrink-0" />
                     <span>Ingresar Crédito con Abonos Previos</span>
                   </button>
                 </div>
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
               {filteredCreditSales.map((sale) => {
                 const analytics = getSaleCreditAnalytics(sale);
                 const {
@@ -5162,7 +5169,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                 return (
                   <div
                     key={sale.id}
-                    className={`bg-white rounded-2xl border p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-4 ${
+                    className={`bg-white rounded-2xl border p-3.5 sm:p-5 shadow-xs flex flex-col justify-between space-y-3 sm:space-y-4 min-w-0 ${
                       isPaid
                         ? 'border-emerald-200'
                         : alertStatus === 'overdue'
@@ -5174,10 +5181,10 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         : 'border-amber-200/90'
                     }`}
                   >
-                    <div className="space-y-3.5">
-                      {/* Header */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
+                    <div className="space-y-3 min-w-0">
+                      {/* Header: Identity + Responsive Balance Summary */}
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5 sm:gap-3">
+                        <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-1.5 text-xs">
                             <span className="font-mono font-bold text-slate-800">
                               {sale.saleNumber}
@@ -5187,7 +5194,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             </span>
                             {isRoutePanelActive ? (
                               <span
-                                className={`text-[11px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                className={`text-[10px] sm:text-[11px] font-black uppercase px-2 py-0.5 rounded-full ${
                                   isPaid
                                     ? 'bg-emerald-100 text-emerald-800'
                                     : alertStatus === 'overdue'
@@ -5207,7 +5214,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                               </span>
                             ) : (
                               <span
-                                className={`text-[11px] font-black uppercase ${
+                                className={`text-[10px] sm:text-[11px] font-black uppercase ${
                                   isPaid
                                     ? 'text-emerald-700'
                                     : isCostRecovered
@@ -5239,15 +5246,15 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             )}
                           </div>
 
-                          <h3 className="text-base font-black text-slate-900 mt-1 flex items-center gap-1.5">
+                          <h3 className="text-sm sm:text-base font-black text-slate-900 mt-1.5 flex items-center gap-1.5 min-w-0">
                             <User className="w-4 h-4 text-amber-600 shrink-0" />
-                            <span>{sale.customerName || 'Cliente'}</span>
+                            <span className="break-words">{sale.customerName || 'Cliente'}</span>
                           </h3>
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-0.5">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500 mt-0.5">
                             {sale.customerPhone && (
                               <>
-                                <span className="flex items-center gap-1 font-semibold text-emerald-700">
-                                  <Phone className="w-3 h-3" />
+                                <span className="flex items-center gap-1 font-semibold text-emerald-700 tabular-nums">
+                                  <Phone className="w-3 h-3 shrink-0" />
                                   {sale.customerPhone}
                                 </span>
                                 <span aria-hidden="true">·</span>
@@ -5255,69 +5262,22 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             )}
                             <span>Fecha: {sale.date}</span>
                           </div>
-                          {(controlMeta?.customerAddressOrRoute ||
-                            (typeof controlMeta?.customerGpsLat === 'number' &&
-                              typeof controlMeta?.customerGpsLng === 'number')) && (
-                            <div className="mt-1.5 p-2 rounded-xl bg-amber-50/80 border border-amber-200/80 flex flex-wrap items-center justify-between gap-2">
-                              <div className="text-xs text-slate-800">
-                                <span className="font-bold text-amber-950 flex items-center gap-1">
-                                  <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                                  <span>
-                                    {controlMeta?.customerAddressOrRoute ||
-                                      controlMeta?.customerGpsFormattedAddress ||
-                                      `Coordenadas GPS: ${controlMeta?.customerGpsLat?.toFixed(
-                                        5
-                                      )}, ${controlMeta?.customerGpsLng?.toFixed(5)}`}
-                                  </span>
-                                </span>
-                                {typeof controlMeta?.customerGpsLat === 'number' &&
-                                  typeof controlMeta?.customerGpsLng === 'number' && (
-                                    <span className="text-[10px] font-semibold text-emerald-800 block mt-0.5">
-                                      🛰️ GPS Exacto: {controlMeta.customerGpsLat.toFixed(5)},{' '}
-                                      {controlMeta.customerGpsLng.toFixed(5)}
-                                      {controlMeta.customerGpsAccuracy
-                                        ? ` (±${controlMeta.customerGpsAccuracy}m)`
-                                        : ''}
-                                      {controlMeta.customerGpsCapturedBy
-                                        ? ` · Por: ${controlMeta.customerGpsCapturedBy}`
-                                        : ''}
-                                    </span>
-                                  )}
-                              </div>
-
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                {typeof controlMeta?.customerGpsLat === 'number' &&
-                                  typeof controlMeta?.customerGpsLng === 'number' && (
-                                    <a
-                                      href={`https://www.google.com/maps/dir/?api=1&destination=${controlMeta.customerGpsLat},${controlMeta.customerGpsLng}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] flex items-center gap-1 shadow-2xs"
-                                      title="Abrir navegación GPS en Google Maps hacia el cliente"
-                                    >
-                                      <Navigation className="w-3 h-3" />
-                                      <span>Ir con GPS</span>
-                                    </a>
-                                  )}
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedSaleForGpsModal(sale)}
-                                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold text-[10px] flex items-center gap-1 cursor-pointer"
-                                >
-                                  <MapPin className="w-3 h-3 text-emerald-700" />
-                                  <span>Ver Mapa / Actualizar GPS</span>
-                                </button>
-                              </div>
-                            </div>
-                          )}
                         </div>
 
-                        <div className="text-right shrink-0">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200/80 sm:block sm:p-0 sm:bg-transparent sm:border-0 sm:text-right shrink-0">
+                          <div className="sm:hidden min-w-0">
+                            <span className="text-[10px] uppercase font-bold text-slate-500 block leading-tight">
+                              Saldo Pendiente
+                            </span>
+                            <span className="text-[11px] text-slate-500 block tabular-nums mt-0.5">
+                              Total: {isPricingPending && totalSale <= 0 ? 'Por definir' : `L. ${totalSale.toFixed(2)}`} · Abonado: L. {paid.toFixed(2)}
+                            </span>
+                          </div>
+                          <span className="hidden sm:block text-[10px] uppercase font-bold text-slate-400">
                             Saldo Pendiente
                           </span>
                           <span
-                            className={`text-lg sm:text-xl font-black block tabular-nums ${
+                            className={`text-lg sm:text-xl font-black block tabular-nums shrink-0 ${
                               isPricingPending && totalSale <= 0
                                 ? 'text-amber-600'
                                 : isPaid
@@ -5327,43 +5287,102 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           >
                             {isPricingPending && totalSale <= 0 ? 'Por definir' : `L. ${bal.toFixed(2)}`}
                           </span>
-                          <span className="text-[11px] text-slate-500 block tabular-nums">
+                          <span className="hidden sm:block text-[11px] text-slate-500 tabular-nums">
                             Total: {isPricingPending && totalSale <= 0 ? 'Por definir' : `L. ${totalSale.toFixed(2)}`} · Abonado: L. {paid.toFixed(2)}
                           </span>
                         </div>
                       </div>
 
+                      {/* Full-width Customer Address / GPS Location Strip */}
+                      {(controlMeta?.customerAddressOrRoute ||
+                        (typeof controlMeta?.customerGpsLat === 'number' &&
+                          typeof controlMeta?.customerGpsLng === 'number')) && (
+                        <div className="p-2.5 rounded-xl bg-amber-50/80 border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="text-xs text-slate-800 min-w-0 flex-1">
+                            <span className="font-bold text-amber-950 flex items-start gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
+                              <span className="break-words leading-snug">
+                                {controlMeta?.customerAddressOrRoute ||
+                                  controlMeta?.customerGpsFormattedAddress ||
+                                  `Coordenadas GPS: ${controlMeta?.customerGpsLat?.toFixed(
+                                    5
+                                  )}, ${controlMeta?.customerGpsLng?.toFixed(5)}`}
+                              </span>
+                            </span>
+                            {typeof controlMeta?.customerGpsLat === 'number' &&
+                              typeof controlMeta?.customerGpsLng === 'number' && (
+                                <span className="text-[10px] font-semibold text-emerald-800 block mt-0.5 tabular-nums">
+                                  🛰️ GPS Exacto: {controlMeta.customerGpsLat.toFixed(5)},{' '}
+                                  {controlMeta.customerGpsLng.toFixed(5)}
+                                  {controlMeta.customerGpsAccuracy
+                                    ? ` (±${controlMeta.customerGpsAccuracy}m)`
+                                    : ''}
+                                  {controlMeta.customerGpsCapturedBy
+                                    ? ` · Por: ${controlMeta.customerGpsCapturedBy}`
+                                    : ''}
+                                </span>
+                              )}
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:flex items-center gap-1.5 shrink-0">
+                            {typeof controlMeta?.customerGpsLat === 'number' &&
+                              typeof controlMeta?.customerGpsLng === 'number' && (
+                                <a
+                                  href={`https://www.google.com/maps/dir/?api=1&destination=${controlMeta.customerGpsLat},${controlMeta.customerGpsLng}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="min-h-[36px] sm:min-h-0 px-2.5 py-1.5 sm:py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] flex items-center justify-center gap-1 shadow-2xs"
+                                  title="Abrir navegación GPS en Google Maps hacia el cliente"
+                                >
+                                  <Navigation className="w-3 h-3 shrink-0" />
+                                  <span>Ir con GPS</span>
+                                </a>
+                              )}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSaleForGpsModal(sale)}
+                              className={`min-h-[36px] sm:min-h-0 px-2.5 py-1.5 sm:py-1 rounded-lg bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold text-[10px] flex items-center justify-center gap-1 cursor-pointer ${
+                                typeof controlMeta?.customerGpsLat !== 'number' ? 'col-span-2 sm:col-span-1' : ''
+                              }`}
+                            >
+                              <MapPin className="w-3 h-3 text-emerald-700 shrink-0" />
+                              <span>Ver Mapa / GPS</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
                       {/* ==================== ROUTE COLLECTOR PROGRESS SUMMARY OR ADMIN COST VS PROFIT ==================== */}
                       {isRoutePanelActive ? (
-                        <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2">
-                          <div className="grid grid-cols-3 gap-2 text-center bg-white rounded-lg p-2 border border-amber-200/60 text-[11px]">
-                            <div>
-                              <span className="text-slate-500 block">Total Deuda</span>
-                              <span className="font-black text-slate-900 tabular-nums">
+                        <div className="p-2.5 sm:p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2">
+                          <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center bg-white rounded-lg p-2 border border-amber-200/60 text-[10px] sm:text-[11px]">
+                            <div className="min-w-0">
+                              <span className="text-slate-500 block leading-tight">Total Deuda</span>
+                              <span className="font-black text-slate-900 tabular-nums break-words">
                                 L. {totalSale.toFixed(2)}
                               </span>
                             </div>
-                            <div className="border-x border-slate-100">
-                              <span className="text-emerald-700 font-semibold block">
+                            <div className="border-x border-slate-100 px-1 min-w-0">
+                              <span className="text-emerald-700 font-semibold block leading-tight">
                                 Total Abonado
                               </span>
-                              <span className="font-black text-emerald-700 tabular-nums">
+                              <span className="font-black text-emerald-700 tabular-nums break-words">
                                 L. {paid.toFixed(2)}
                               </span>
                             </div>
-                            <div>
-                              <span className="text-amber-800 font-semibold block">
+                            <div className="min-w-0">
+                              <span className="text-amber-800 font-semibold block leading-tight">
                                 Saldo a Cobrar
                               </span>
-                              <span className="font-black text-amber-800 tabular-nums">
+                              <span className="font-black text-amber-800 tabular-nums break-words">
                                 L. {bal.toFixed(2)}
                               </span>
                             </div>
                           </div>
 
                           <div className="space-y-1">
-                            <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 tabular-nums">
-                              <span>Avance de pago del cliente ({simplePaidPct.toFixed(0)}%)</span>
+                            <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-bold text-slate-600 tabular-nums">
+                              <span>Avance de pago ({simplePaidPct.toFixed(0)}%)</span>
                               {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 ? (
                                 <span className="text-amber-900 font-black">
                                   Cuota acordada: L. {controlMeta.installmentAmount.toFixed(2)}
@@ -5380,21 +5399,21 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         </div>
                       ) : (
                         <div
-                          className={`p-3 rounded-xl border space-y-2.5 ${
+                          className={`p-2.5 sm:p-3 rounded-xl border space-y-2 sm:space-y-2.5 ${
                             isCostRecovered
                               ? 'bg-emerald-50/70 border-emerald-200'
                               : 'bg-slate-50 border-slate-200'
                           }`}
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
                               <TrendingUp
                                 className={`w-4 h-4 shrink-0 ${
                                   isCostRecovered ? 'text-emerald-700' : 'text-slate-700'
                                 }`}
                               />
-                              <span className="text-xs font-black text-slate-900">
-                                Control de Precio Costo vs. Ganancia
+                              <span className="text-xs font-black text-slate-900 leading-tight">
+                                Control de Costo vs. Ganancia
                               </span>
                             </div>
                             <button
@@ -5402,12 +5421,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                               onClick={() => openControlModalForSale(sale)}
                               className={`text-[11px] font-bold flex items-center gap-1 cursor-pointer ${
                                 isPricingPending
-                                  ? 'px-2 py-0.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-2xs'
+                                  ? 'px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-2xs'
                                   : 'text-slate-700 hover:text-slate-900 underline'
                               }`}
                               title="Editar Artículo, Precio Costo, Precio de Venta al Crédito, Cobrador y Fecha"
                             >
-                              <Pencil className="w-3 h-3" />
+                              <Pencil className="w-3 h-3 shrink-0" />
                               <span>
                                 {isPricingPending
                                   ? 'Agregar Costo / Precio Crédito'
@@ -5416,11 +5435,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             </button>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-2 text-center bg-white/90 rounded-lg p-2 border border-slate-200/80 text-[11px]">
-                            <div>
-                              <span className="text-slate-500 block">Precio Venta</span>
+                          <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center bg-white/90 rounded-lg p-2 border border-slate-200/80 text-[10px] sm:text-[11px]">
+                            <div className="min-w-0">
+                              <span className="text-slate-500 block leading-tight">Precio Venta</span>
                               <span
-                                className={`font-black tabular-nums ${
+                                className={`font-black tabular-nums break-words ${
                                   isPricingPending && totalSale <= 0
                                     ? 'text-amber-700'
                                     : 'text-slate-900'
@@ -5431,10 +5450,10 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   : `L. ${totalSale.toFixed(2)}`}
                               </span>
                             </div>
-                            <div className="border-x border-slate-100">
-                              <span className="text-slate-500 block">Precio Costo</span>
+                            <div className="border-x border-slate-100 px-1 min-w-0">
+                              <span className="text-slate-500 block leading-tight">Precio Costo</span>
                               <span
-                                className={`font-black tabular-nums ${
+                                className={`font-black tabular-nums break-words ${
                                   isPricingPending && totalCost <= 0
                                     ? 'text-amber-700'
                                     : 'text-slate-800'
@@ -5445,11 +5464,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   : `L. ${totalCost.toFixed(2)}`}
                               </span>
                             </div>
-                            <div>
-                              <span className="text-emerald-700 font-semibold block">
+                            <div className="min-w-0">
+                              <span className="text-emerald-700 font-semibold block leading-tight">
                                 Ganancia Total
                               </span>
-                              <span className="font-black text-emerald-700 tabular-nums">
+                              <span className="font-black text-emerald-700 tabular-nums break-words">
                                 {isPricingPending && totalSale <= 0
                                   ? 'Por definir'
                                   : `L. ${expectedTotalProfit.toFixed(2)}`}
@@ -5458,7 +5477,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           </div>
 
                           <div className="space-y-1">
-                            <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 tabular-nums">
+                            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
                               <span>
                                 Costo cubierto: L. {costRecovered.toFixed(2)} / L.{' '}
                                 {totalCost.toFixed(2)}
@@ -5487,8 +5506,8 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           </div>
 
                           {isPaid ? (
-                            <div className="p-2 rounded-lg bg-emerald-100/80 border border-emerald-200 text-emerald-950 text-xs flex items-center justify-between gap-2">
-                              <span className="font-bold">
+                            <div className="p-2 rounded-lg bg-emerald-100/80 border border-emerald-200 text-emerald-950 text-xs flex flex-wrap items-center justify-between gap-1.5">
+                              <span className="font-bold leading-snug">
                                 Cuenta 100% Liquidada — Costo (L. {totalCost.toFixed(2)}) y Ganancia
                                 Total cobrados:
                               </span>
@@ -5498,11 +5517,11 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             </div>
                           ) : isCostRecovered ? (
                             <div className="p-2.5 rounded-lg bg-emerald-600 text-white text-xs space-y-1 shadow-2xs">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="font-black uppercase tracking-tight">
+                              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                <span className="font-black uppercase tracking-tight leading-snug">
                                   ✓ ¡Precio Costo (L. {totalCost.toFixed(2)}) 100% Recuperado!
                                 </span>
-                                <span className="font-mono font-black text-emerald-100 tabular-nums shrink-0">
+                                <span className="font-mono font-black text-emerald-100 tabular-nums shrink-0 text-[11px]">
                                   Ganancia Pura
                                 </span>
                               </div>
@@ -5529,9 +5548,9 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       )}
 
                       {/* ==================== CONTROL DE PRÓXIMO COBRO, FRECUENCIA Y ALERTAS ==================== */}
-                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
+                      <div className="p-2.5 sm:p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <div className="flex items-center gap-1.5 min-w-0">
                             <Bell
                               className={`w-3.5 h-3.5 shrink-0 ${
                                 alertStatus === 'overdue'
@@ -5571,35 +5590,45 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                           )}
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
-                          <div>
-                            <span>
-                              Siguiente Cobro:{' '}
-                              <strong className="text-slate-900">
-                                {effectiveNextDate || 'No asignado'}
-                              </strong>
-                            </span>
-                            <span aria-hidden="true" className="mx-1.5 text-slate-300">
-                              ·
-                            </span>
-                            <span>Frecuencia: {freqLabel}</span>
-                            {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 && (
-                              <>
-                                <span aria-hidden="true" className="mx-1.5 text-slate-300">
-                                  ·
-                                </span>
-                                <span className="font-bold text-slate-900 tabular-nums">
-                                  Cuota: L. {controlMeta.installmentAmount.toFixed(2)}
-                                </span>
-                              </>
-                            )}
+                        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-[11px] text-slate-600 bg-white sm:bg-transparent p-2 sm:p-0 rounded-lg sm:rounded-none border border-slate-200/70 sm:border-0">
+                          <div className="min-w-0">
+                            <span className="text-[10px] text-slate-400 sm:hidden block">Siguiente Cobro</span>
+                            <span className="hidden sm:inline">Siguiente Cobro: </span>
+                            <strong className="text-slate-900 tabular-nums">
+                              {effectiveNextDate || 'No asignado'}
+                            </strong>
                           </div>
 
-                          <div className="text-slate-500">
+                          <span aria-hidden="true" className="hidden sm:inline text-slate-300">
+                            ·
+                          </span>
+
+                          <div className="min-w-0">
+                            <span className="text-[10px] text-slate-400 sm:hidden block">Frecuencia</span>
+                            <span className="hidden sm:inline">Frecuencia: </span>
+                            <span className="font-semibold sm:font-normal text-slate-800 sm:text-slate-600">{freqLabel}</span>
+                          </div>
+
+                          {controlMeta?.installmentAmount && controlMeta.installmentAmount > 0 && (
+                            <>
+                              <span aria-hidden="true" className="hidden sm:inline text-slate-300">
+                                ·
+                              </span>
+                              <div className="min-w-0">
+                                <span className="text-[10px] text-slate-400 sm:hidden block">Cuota Acordada</span>
+                                <span className="font-bold text-slate-900 tabular-nums">
+                                  <span className="hidden sm:inline">Cuota: </span>L. {controlMeta.installmentAmount.toFixed(2)}
+                                </span>
+                              </div>
+                            </>
+                          )}
+
+                          <div className="text-slate-500 sm:ml-auto">
+                            <span className="text-[10px] text-slate-400 sm:hidden block">Bitácora</span>
                             <button
                               type="button"
                               onClick={() => openControlModalForSale(sale)}
-                              className="hover:underline cursor-pointer"
+                              className="hover:underline cursor-pointer font-semibold sm:font-normal"
                               title="Ver bitácora de avisos y programar cobros"
                             >
                               {noticeCount > 0 ? (
@@ -5614,7 +5643,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         </div>
 
                         {controlMeta?.collectionNotes && (
-                          <p className="text-[11px] text-slate-600 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/80">
+                          <p className="text-[11px] text-slate-600 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/80 break-words">
                             📝 <strong>Nota de cobro:</strong> {controlMeta.collectionNotes}
                           </p>
                         )}
@@ -5633,7 +5662,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   onClick={() =>
                                     handleSendCreditReminderWhatsApp(sale, 'preventive')
                                   }
-                                  className="px-2 py-1.5 rounded-lg bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-[10px] text-center cursor-pointer leading-tight"
+                                  className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
                                 >
                                   Recordatorio Preventivo
                                 </button>
@@ -5642,7 +5671,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   onClick={() =>
                                     handleSendCreditReminderWhatsApp(sale, 'due_today')
                                   }
-                                  className="px-2 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-bold text-[10px] text-center cursor-pointer leading-tight"
+                                  className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
                                 >
                                   Hoy Toca Abono
                                 </button>
@@ -5651,7 +5680,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   onClick={() =>
                                     handleSendCreditReminderWhatsApp(sale, 'overdue')
                                   }
-                                  className="px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-900 font-bold text-[10px] text-center cursor-pointer leading-tight"
+                                  className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
                                 >
                                   Cobro Vencido
                                 </button>
@@ -5660,14 +5689,14 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   onClick={() =>
                                     handleSendCreditReminderWhatsApp(sale, 'statement')
                                   }
-                                  className="px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-900 font-bold text-[10px] text-center cursor-pointer leading-tight"
+                                  className="min-h-[38px] sm:min-h-0 px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-900 font-bold text-[10px] flex items-center justify-center text-center cursor-pointer leading-tight"
                                 >
                                   Estado de Cuenta
                                 </button>
                               </div>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-1.5">
+                            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch sm:items-center gap-1.5">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -5685,23 +5714,23 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   );
                                   setQuickScheduleNote('');
                                 }}
-                                className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-amber-300 text-amber-950 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                                className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-amber-300 text-amber-950 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
                               >
-                                <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                                <span>Programar Siguiente Cobro</span>
+                                <Calendar className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <span>Programar Cobro</span>
                               </button>
 
                               <button
                                 type="button"
                                 onClick={() => setSelectedSaleForGpsModal(sale)}
-                                className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
+                                className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer shadow-2xs text-center leading-tight"
                                 title="Capturar la dirección exacta del cliente estando en el lugar usando el GPS del teléfono"
                               >
-                                <MapPin className="w-3.5 h-3.5" />
+                                <MapPin className="w-3.5 h-3.5 shrink-0" />
                                 <span>
                                   {typeof controlMeta?.customerGpsLat === 'number'
-                                    ? '📍 Actualizar GPS Cliente'
-                                    : '📍 Agregar Dirección con GPS'}
+                                    ? 'Actualizar GPS'
+                                    : 'Agregar GPS'}
                                 </span>
                               </button>
 
@@ -5713,24 +5742,24 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   setCollectorAlertMessage('');
                                   setCollectorAlertNextDate('');
                                 }}
-                                className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                                className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
                               >
-                                <Bell className="w-3.5 h-3.5 text-rose-600" />
-                                <span>Enviar Alerta al Admin</span>
+                                <Bell className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                <span>Alerta al Admin</span>
                               </button>
 
                               {(isAdminSession || isCurrentUserRouteCollector) && (
                                 <button
                                   type="button"
                                   onClick={() => openControlModalForSale(sale)}
-                                  className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                                  className="min-h-[40px] sm:min-h-0 px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer text-center leading-tight"
                                   title="Configurar ruta, notas, avisos WhatsApp y bitácora de visitas"
                                 >
-                                  <Settings className="w-3.5 h-3.5 text-slate-500" />
+                                  <Settings className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                                   <span>
                                     {isAdminSession
                                       ? 'Configurar / Asignar'
-                                      : 'Avisos, Ruta y Bitácora'}
+                                      : 'Avisos y Bitácora'}
                                   </span>
                                 </button>
                               )}
@@ -5741,7 +5770,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
 
                       {/* Items summary */}
                       <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-1">
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                             Artículo(s) en Deuda:
                           </span>
@@ -5755,7 +5784,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                   : 'text-indigo-700 hover:text-indigo-900 hover:underline'
                               }`}
                             >
-                              <Pencil className="w-3 h-3" />
+                              <Pencil className="w-3 h-3 shrink-0" />
                               <span>
                                 {isPricingPending
                                   ? 'Agregar Costo y Precio'
@@ -5767,12 +5796,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         {(sale.items || []).map((it, idx) => (
                           <div
                             key={idx}
-                            className="flex justify-between text-slate-700 tabular-nums"
+                            className="flex items-start justify-between gap-2 text-slate-700 tabular-nums"
                           >
-                            <span>
+                            <span className="min-w-0 break-words leading-snug">
                               <strong>{it.quantity}x</strong> {it.name}
                             </span>
-                            <span className="font-semibold">
+                            <span className="font-semibold shrink-0">
                               {isPricingPending && it.subtotal <= 0
                                 ? 'Precio por definir'
                                 : `L. ${it.subtotal.toFixed(2)}`}
@@ -5791,13 +5820,13 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                             {abonos.map((cp) => (
                               <div
                                 key={cp.id}
-                                className={`flex items-center justify-between gap-2 text-[11px] px-2.5 py-1 rounded-lg tabular-nums border ${
+                                className={`flex items-start sm:items-center justify-between gap-2 text-[11px] px-2.5 py-1.5 rounded-lg tabular-nums border ${
                                   cp.isHistoricalPreApp
                                     ? 'bg-indigo-50/70 border-indigo-200'
                                     : 'bg-emerald-50/60 border-emerald-100'
                                 }`}
                               >
-                                <span className="text-slate-600 flex flex-wrap items-center gap-1">
+                                <span className="text-slate-600 flex flex-wrap items-center gap-1 min-w-0 leading-snug">
                                   <span>
                                     {cp.date} (
                                     {cp.paymentMethod === 'cash'
@@ -5808,12 +5837,12 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                                     {cp.receivedBy ? ` · ${cp.receivedBy}` : ''})
                                   </span>
                                   {cp.isHistoricalPreApp && (
-                                    <span className="px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-800 font-bold text-[9px]">
+                                    <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 font-bold text-[9px]">
                                       Previo a la app
                                     </span>
                                   )}
                                   {cp.notes && (
-                                    <span className="text-[10px] text-slate-400 italic">
+                                    <span className="text-[10px] text-slate-400 italic break-words">
                                       · {cp.notes}
                                     </span>
                                   )}
@@ -5834,7 +5863,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         <button
                           type="button"
                           onClick={() => openAboneModalForSale(sale)}
-                          className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 col-span-2 sm:col-span-1"
+                          className="min-h-[44px] sm:min-h-[40px] px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 col-span-2 sm:col-span-1"
                         >
                           <DollarSign className="w-4 h-4 shrink-0" />
                           <span>Registrar Abono</span>
@@ -5844,7 +5873,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       <button
                         type="button"
                         onClick={() => handleSendCreditReminderWhatsApp(sale, 'statement')}
-                        className="min-h-[42px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                        className="min-h-[44px] sm:min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
                       >
                         <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
                         <span>WhatsApp</span>
@@ -5853,7 +5882,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                       <button
                         type="button"
                         onClick={() => setCreditSaleForPrintModal(sale)}
-                        className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                        className="min-h-[44px] sm:min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
                         title="Imprimir o descargar en PDF el Estado de Cuenta del cliente"
                       >
                         <Printer className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -5864,18 +5893,18 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         <button
                           type="button"
                           onClick={() => setSelectedSaleForContract(sale)}
-                          className="min-h-[42px] px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
+                          className="min-h-[44px] sm:min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
                           title="Ver, editar, imprimir o enviar el Contrato de Arrendamiento con Reserva de Dominio"
                         >
                           <FileText className="w-4 h-4 text-amber-700 shrink-0" />
-                          <span>Contrato de Crédito</span>
+                          <span>Contrato Crédito</span>
                         </button>
                       )}
 
                       <button
                         type="button"
                         onClick={() => onViewSaleTicket(sale)}
-                        className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                        className="min-h-[44px] sm:min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
                         title="Ver Factura Original"
                       >
                         <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -5886,7 +5915,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         <button
                           type="button"
                           onClick={() => openDeleteCreditModal(sale)}
-                          className="min-h-[42px] px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                          className="min-h-[44px] sm:min-h-[40px] px-2.5 sm:px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
                           title="Eliminar cuenta por cobrar (requiere contraseña de Administrador)"
                         >
                           <Trash2 className="w-4 h-4 shrink-0" />
