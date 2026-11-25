@@ -5458,7 +5458,7 @@ export const POSFinanceTabs: React.FC<POSFinanceTabsProps> = ({
                         )}
                       </div>
 
-                      {/* ==================== COLLAPSIBLE PANEL 1: COST VS PROFIT / PROGRESS ==================== -->
+                      {/* ==================== COLLAPSIBLE PANEL 1: COST VS PROFIT / PROGRESS ==================== */}
                       {openCreditCardsAccordion[sale.id]?.costProfit && (
                         isRoutePanelActive ? (
                           <div className="p-2.5 sm:p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2">
