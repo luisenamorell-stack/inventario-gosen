@@ -1718,14 +1718,19 @@ function getScopedCollectionQuery(collectionName: string, slug: string) {
         'comercialgyg',
         'comercial_gyg',
         'gyg',
+        'GYG',
         'tienda-gyg',
         'tienda_gyg',
         'comercial gyg',
         'Comercial GYG',
         'Comercial GyG',
         'COMERCIAL GYG',
+        'Comercial-GYG',
+        'comercial-GYG',
+        'COMERCIAL-GYG',
         'Tienda GYG',
         'Tienda GyG',
+        'TIENDA GYG',
         'TIENDAGYG',
         'comercialgyghn',
       ])
@@ -2211,10 +2216,12 @@ export interface AuthoritativeHubSnapshot {
   ok: boolean;
   companyId: string;
   updatedAt: number;
+  hydratedFromCloud?: boolean;
   inventory?: Product[];
   suppliers?: Supplier[];
   purchases?: PurchaseInvoice[];
   sales?: SaleRecord[];
+  auditHistory?: AuditHistoryRecord[];
   users?: UserAccount[];
   allUsers?: UserAccount[];
   warehouses?: StoreWarehousesData | null;
@@ -2229,6 +2236,183 @@ export interface AuthoritativeHubSnapshot {
   explicitDeletedCodes?: string[];
   deletedCodes?: string[];
   deletedIds?: string[];
+}
+
+export function mergeInventoryUnion(
+  base: Product[],
+  incoming: Product[],
+  deletedCodesSet?: Set<string>,
+  deletedIdsSet?: Set<string>
+): Product[] {
+  const map = new Map<string, Product>();
+  const isDeleted = (item?: Product | null) => {
+    if (!item) return true;
+    const ck = (item.code || '').trim().toLowerCase();
+    const idStr = (item.id || '').trim();
+    if (!ck) return true;
+    if (deletedCodesSet && deletedCodesSet.has(ck)) return true;
+    if (deletedIdsSet && idStr && deletedIdsSet.has(idStr)) return true;
+    return false;
+  };
+
+  for (const item of base || []) {
+    if (isDeleted(item)) continue;
+    const ck = (item.code || '').trim().toLowerCase();
+    map.set(ck, item);
+  }
+
+  for (const item of incoming || []) {
+    if (isDeleted(item)) continue;
+    const ck = (item.code || '').trim().toLowerCase();
+    const existing = map.get(ck);
+    if (!existing) {
+      map.set(ck, item);
+      continue;
+    }
+    const exTs = Number(existing.updatedAt || 0);
+    const inTs = Number(item.updatedAt || 0);
+    if (inTs >= exTs) {
+      map.set(ck, {
+        ...existing,
+        ...item,
+        img: item.img || existing.img || '',
+        img2: item.img2 || existing.img2 || '',
+      });
+    } else {
+      map.set(ck, {
+        ...item,
+        ...existing,
+        img: existing.img || item.img || '',
+        img2: existing.img2 || item.img2 || '',
+      });
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' })
+  );
+}
+
+export function mergeSalesUnion(
+  base: SaleRecord[],
+  incoming: SaleRecord[],
+  deletedSaleIds?: Set<string>
+): SaleRecord[] {
+  const map = new Map<string, SaleRecord>();
+  const pickBetter = (a: SaleRecord, b: SaleRecord): SaleRecord => {
+    const aUpdated = Number(a.updatedAt || 0);
+    const bUpdated = Number(b.updatedAt || 0);
+    const aPayLen = Array.isArray(a.creditPayments) ? a.creditPayments.length : 0;
+    const bPayLen = Array.isArray(b.creditPayments) ? b.creditPayments.length : 0;
+    const aPaid = Number(a.amountPaid || 0);
+    const bPaid = Number(b.amountPaid || 0);
+
+    // Preserve explicit newer updatedAt first, then more payments/higher paidAmount, then incoming (b)
+    if (bUpdated !== aUpdated) {
+      return bUpdated > aUpdated ? b : a;
+    }
+    if (bPayLen !== aPayLen) {
+      return bPayLen > aPayLen ? b : a;
+    }
+    if (bPaid !== aPaid) {
+      return bPaid > aPaid ? b : a;
+    }
+    if (b.status === 'cancelled' && a.status !== 'cancelled') return b;
+    if (a.status === 'cancelled' && b.status !== 'cancelled') return a;
+    return b;
+  };
+
+  for (const s of base || []) {
+    if (!s || !s.id) continue;
+    if (deletedSaleIds && deletedSaleIds.has(s.id)) continue;
+    map.set(s.id, s);
+  }
+  for (const s of incoming || []) {
+    if (!s || !s.id) continue;
+    if (deletedSaleIds && deletedSaleIds.has(s.id)) continue;
+    const existing = map.get(s.id);
+    map.set(s.id, existing ? pickBetter(existing, s) : s);
+  }
+
+  return Array.from(map.values()).sort(
+    (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+  );
+}
+
+export function mergePurchasesUnion(
+  base: PurchaseInvoice[],
+  incoming: PurchaseInvoice[],
+  deletedPurchaseIds?: Set<string>
+): PurchaseInvoice[] {
+  const map = new Map<string, PurchaseInvoice>();
+  for (const p of base || []) {
+    if (!p || !p.id) continue;
+    if (deletedPurchaseIds && deletedPurchaseIds.has(p.id)) continue;
+    map.set(p.id, p);
+  }
+  for (const p of incoming || []) {
+    if (!p || !p.id) continue;
+    if (deletedPurchaseIds && deletedPurchaseIds.has(p.id)) continue;
+    const existing = map.get(p.id);
+    if (!existing) {
+      map.set(p.id, p);
+      continue;
+    }
+    const exTs = Number(existing.updatedAt || existing.timestamp || 0);
+    const inTs = Number(p.updatedAt || p.timestamp || 0);
+    if (inTs >= exTs || (p.status === 'cancelled' && existing.status !== 'cancelled')) {
+      map.set(p.id, p);
+    }
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+  );
+}
+
+export function mergeSuppliersUnion(
+  base: Supplier[],
+  incoming: Supplier[],
+  deletedSupplierIds?: Set<string>
+): Supplier[] {
+  const map = new Map<string, Supplier>();
+  for (const s of base || []) {
+    if (!s || !s.id) continue;
+    if (deletedSupplierIds && deletedSupplierIds.has(s.id)) continue;
+    map.set(s.id, s);
+  }
+  for (const s of incoming || []) {
+    if (!s || !s.id) continue;
+    if (deletedSupplierIds && deletedSupplierIds.has(s.id)) continue;
+    const existing = map.get(s.id);
+    if (!existing) {
+      map.set(s.id, s);
+      continue;
+    }
+    const exTs = Number(existing.updatedAt || 0);
+    const inTs = Number(s.updatedAt || 0);
+    if (inTs >= exTs) {
+      map.set(s.id, s);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' })
+  );
+}
+
+export function mergeAuditHistoryUnion(
+  base: AuditHistoryRecord[],
+  incoming: AuditHistoryRecord[]
+): AuditHistoryRecord[] {
+  const map = new Map<string, AuditHistoryRecord>();
+  for (const rec of [...(base || []), ...(incoming || [])]) {
+    if (!rec) continue;
+    const key = String(rec.id || `${rec.timestamp}_${rec.date || ''}`).trim();
+    if (!key) continue;
+    map.set(key, rec);
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0)
+  );
 }
 
 export function subscribeToBackendSyncStream(
@@ -2318,7 +2502,8 @@ export function subscribeToBackendSyncStream(
 
 export async function fetchAuthoritativeHubSnapshot(
   companyId = getActiveCompanyId(),
-  scopes?: string[]
+  scopes?: string[],
+  reconcile = false
 ): Promise<AuthoritativeHubSnapshot | null> {
   if (typeof window === 'undefined' || !hasBackendAuthSession) return null;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
@@ -2326,6 +2511,9 @@ export async function fetchAuthoritativeHubSnapshot(
     const params = new URLSearchParams({ companyId: slug });
     if (Array.isArray(scopes) && scopes.length > 0) {
       params.set('scopes', scopes.join(','));
+    }
+    if (reconcile) {
+      params.set('reconcile', '1');
     }
     const res = await fetch(`/api/cloud-sync/snapshot?${params.toString()}`, {
       credentials: 'include',
@@ -2368,7 +2556,7 @@ export async function fetchAuthoritativeHubSnapshot(
     const hasServerState = Number(data.updatedAt || 0) > 0;
     const explicitScopes = new Set(Array.isArray(scopes) ? scopes : []);
 
-    // Update local caches with authoritative server slices (guarding against cold-empty server state)
+    // Non-destructive bidirectional union for inventory: NEVER drop valid local/Firestore items missing on server
     if (Array.isArray(data.inventory)) {
       for (const srvItem of data.inventory) {
         const ck = (srvItem.code || '').trim().toLowerCase();
@@ -2376,24 +2564,79 @@ export async function fetchAuthoritativeHubSnapshot(
         if (srvItem.img) memoryImageMap.set(`${slug}__${ck}`, srvItem.img);
         if (srvItem.img2) memoryImage2Map.set(`${slug}__${ck}`, srvItem.img2);
       }
-      const cleanInv = applyPendingMutationsToInventory(data.inventory, slug, true);
-      data.inventory = cleanInv;
+
+      const deletedCodesSet = new Set<string>(
+        [...(mut.explicitDeletedCodes || []), ...(mut.deletedCodes || [])]
+          .map((c) => String(c || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+      const deletedIdsSet = new Set<string>(
+        (mut.deletedIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+      );
+
+      const idbInv = await loadInventoryFromIndexedDB(slug).catch(() => null);
+      const lsInv = getCachedInventory(slug) || [];
+      const localBaseInv = mergeInventoryUnion(lsInv, idbInv || [], deletedCodesSet, deletedIdsSet);
+
+      const serverCodeMap = new Map<string, Product>();
+      for (const srvItem of data.inventory) {
+        const ck = (srvItem.code || '').trim().toLowerCase();
+        if (ck) serverCodeMap.set(ck, srvItem);
+      }
+
+      const mergedInv = applyPendingMutationsToInventory(
+        mergeInventoryUnion(localBaseInv, data.inventory, deletedCodesSet, deletedIdsSet),
+        slug,
+        true
+      );
+      data.inventory = mergedInv;
+
+      // Push any valid non-deleted local items missing from server up to the Hub so other devices receive them
+      const missingOnServer = localBaseInv.filter((localItem) => {
+        const ck = (localItem.code || '').trim().toLowerCase();
+        if (!ck || deletedCodesSet.has(ck)) return false;
+        const srv = serverCodeMap.get(ck);
+        if (!srv) return true;
+        return Number(localItem.updatedAt || 0) > Number(srv.updatedAt || 0);
+      });
+      if (missingOnServer.length > 0 && missingOnServer.length <= 500) {
+        pushProductSaveToBackendHub(undefined, undefined, slug, missingOnServer).catch(() => {});
+      }
+
       if (
         hasServerState &&
-        (cleanInv.length > 0 ||
+        (mergedInv.length > 0 ||
           explicitScopes.has('inventory') ||
           (data.explicitDeletedCodes?.length || 0) > 0)
       ) {
-        setCachedInventory(cleanInv, data.updatedAt || Date.now(), slug);
+        setCachedInventory(mergedInv, Math.max(data.updatedAt || 0, Date.now()), slug);
       }
     }
 
     if (Array.isArray(data.sales)) {
       const deletedSet = getLocallyDeletedSaleIds(slug);
-      const cleanSales = data.sales
-        .filter((s) => s && s.id && !deletedSet.has(s.id))
-        .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+      const cachedSales = getCachedSales(slug) || [];
+      const serverSalesMap = new Map<string, SaleRecord>();
+      for (const s of data.sales) {
+        if (s && s.id) serverSalesMap.set(s.id, s);
+      }
+
+      const cleanSales = mergeSalesUnion(cachedSales, data.sales, deletedSet);
       data.sales = cleanSales;
+
+      const missingOrNewerLocalSales = cachedSales.filter((localSale) => {
+        if (!localSale || !localSale.id || deletedSet.has(localSale.id)) return false;
+        const srv = serverSalesMap.get(localSale.id);
+        if (!srv) return true;
+        const lPay = Array.isArray(localSale.creditPayments) ? localSale.creditPayments.length : 0;
+        const sPay = Array.isArray(srv.creditPayments) ? srv.creditPayments.length : 0;
+        if (lPay > sPay) return true;
+        return Number(localSale.updatedAt || 0) > Number(srv.updatedAt || 0);
+      });
+      if (missingOrNewerLocalSales.length > 0) {
+        syncCollectionsWithBackendHub({ sales: missingOrNewerLocalSales }, slug).catch(() => {});
+      }
+
       if (
         hasServerState &&
         (cleanSales.length > 0 ||
@@ -2406,14 +2649,43 @@ export async function fetchAuthoritativeHubSnapshot(
 
     if (data.posFinance) {
       const sanitizedPos = sanitizePOSFinanceDoc(slug, data.posFinance as Record<string, any>);
-      data.posFinance = sanitizedPos;
-      setCachedPOSFinanceData(sanitizedPos, slug);
+      const cachedPos = getCachedPOSFinanceData(slug);
+      const mergedPos = mergePOSFinanceObjects(slug, cachedPos, sanitizedPos);
+      data.posFinance = mergedPos;
+      setCachedPOSFinanceData(mergedPos, slug);
+
+      // If local cache had expenses/shifts/controls missing on server, push consolidated state up
+      const srvExpenseIds = new Set((sanitizedPos.expenses || []).map((e) => e.id));
+      const hasMissingLocalExpenses = (cachedPos.expenses || []).some(
+        (e) => e && e.id && !srvExpenseIds.has(e.id)
+      );
+      const srvShiftIds = new Set((sanitizedPos.shifts || []).map((s) => s.id));
+      const hasMissingLocalShifts = (cachedPos.shifts || []).some(
+        (s) => s && s.id && !srvShiftIds.has(s.id)
+      );
+      const srvCtrlKeys = new Set(Object.keys(sanitizedPos.creditAccountControls || {}));
+      const hasMissingLocalCtrls = Object.keys(cachedPos.creditAccountControls || {}).some(
+        (k) => !srvCtrlKeys.has(k)
+      );
+      if (hasMissingLocalExpenses || hasMissingLocalShifts || hasMissingLocalCtrls) {
+        syncCollectionsWithBackendHub({ posFinance: mergedPos }, slug).catch(() => {});
+      }
     }
 
     if (Array.isArray(data.purchases)) {
       const delPurchases = new Set((data.deletedPurchaseIds || []).map((id) => String(id).trim()));
-      const cleanPurchases = data.purchases.filter((p) => p && p.id && !delPurchases.has(p.id));
+      const cachedPurchases = getCachedPurchases(slug) || [];
+      const serverPurchaseIds = new Set(data.purchases.map((p) => p?.id).filter(Boolean));
+      const cleanPurchases = mergePurchasesUnion(cachedPurchases, data.purchases, delPurchases);
       data.purchases = cleanPurchases;
+
+      const missingLocalPurchases = cachedPurchases.filter(
+        (p) => p && p.id && !delPurchases.has(p.id) && !serverPurchaseIds.has(p.id)
+      );
+      if (missingLocalPurchases.length > 0) {
+        syncCollectionsWithBackendHub({ purchases: missingLocalPurchases }, slug).catch(() => {});
+      }
+
       if (
         hasServerState &&
         (cleanPurchases.length > 0 ||
@@ -2426,8 +2698,18 @@ export async function fetchAuthoritativeHubSnapshot(
 
     if (Array.isArray(data.suppliers)) {
       const delSuppliers = new Set((data.deletedSupplierIds || []).map((id) => String(id).trim()));
-      const cleanSuppliers = data.suppliers.filter((s) => s && s.id && !delSuppliers.has(s.id));
+      const cachedSuppliers = getCachedSuppliers(slug) || [];
+      const serverSupplierIds = new Set(data.suppliers.map((s) => s?.id).filter(Boolean));
+      const cleanSuppliers = mergeSuppliersUnion(cachedSuppliers, data.suppliers, delSuppliers);
       data.suppliers = cleanSuppliers;
+
+      const missingLocalSuppliers = cachedSuppliers.filter(
+        (s) => s && s.id && !delSuppliers.has(s.id) && !serverSupplierIds.has(s.id)
+      );
+      if (missingLocalSuppliers.length > 0) {
+        syncCollectionsWithBackendHub({ suppliers: missingLocalSuppliers }, slug).catch(() => {});
+      }
+
       if (
         hasServerState &&
         (cleanSuppliers.length > 0 ||
@@ -2435,6 +2717,24 @@ export async function fetchAuthoritativeHubSnapshot(
           (data.deletedSupplierIds?.length || 0) > 0)
       ) {
         setCachedSuppliers(cleanSuppliers, slug);
+      }
+    }
+
+    if (Array.isArray(data.auditHistory)) {
+      const cachedAudit = getCachedAuditHistory(slug) || [];
+      const serverAuditIds = new Set(data.auditHistory.map((a) => a?.id).filter(Boolean));
+      const cleanAudit = mergeAuditHistoryUnion(cachedAudit, data.auditHistory);
+      data.auditHistory = cleanAudit;
+
+      const missingLocalAudit = cachedAudit.filter(
+        (a) => a && a.id && !serverAuditIds.has(a.id)
+      );
+      if (missingLocalAudit.length > 0) {
+        syncCollectionsWithBackendHub({ auditHistory: missingLocalAudit }, slug).catch(() => {});
+      }
+
+      if (hasServerState && (cleanAudit.length > 0 || explicitScopes.has('auditHistory'))) {
+        setCachedAuditHistory(cleanAudit, slug);
       }
     }
 
@@ -2563,6 +2863,7 @@ export async function syncCollectionsWithBackendHub(
     suppliers?: Supplier[];
     purchases?: PurchaseInvoice[];
     sales?: SaleRecord[];
+    auditHistory?: AuditHistoryRecord[];
     users?: UserAccount[];
     warehouses?: StoreWarehousesData;
     settings?: StoreSettings;
@@ -2579,6 +2880,7 @@ export async function syncCollectionsWithBackendHub(
   suppliers: Supplier[];
   purchases: PurchaseInvoice[];
   sales: SaleRecord[];
+  auditHistory?: AuditHistoryRecord[];
   deletedSaleIds?: string[];
   deletedSupplierIds?: string[];
   deletedPurchaseIds?: string[];
@@ -3326,7 +3628,7 @@ export async function fetchAuditHistoryOnce(
   companyId = getActiveCompanyId()
 ): Promise<AuditHistoryRecord[]> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
-  const cached = getCachedAuditHistory(slug);
+  const cached = getCachedAuditHistory(slug) || [];
   const scopedQuery = getScopedCollectionQuery('audit_history', slug);
   const parseDocs = (snap: any): AuditHistoryRecord[] => {
     const records: AuditHistoryRecord[] = [];
@@ -3350,23 +3652,30 @@ export async function fetchAuditHistoryOnce(
     return records;
   };
 
-  try {
-    const snapshot = await getDocs(scopedQuery);
-    const records = parseDocs(snapshot);
-    setCachedAuditHistory(records, slug);
-    return records;
-  } catch (error) {
+  let fsRecords: AuditHistoryRecord[] = [];
+  if (!isFirestoreQuotaExhausted()) {
     try {
-      const cacheSnap = await getDocsFromCache(scopedQuery);
-      if (!cacheSnap.empty) {
-        const records = parseDocs(cacheSnap);
-        setCachedAuditHistory(records, slug);
-        return records;
-      }
-    } catch {}
-    if (cached) return cached;
-    return [];
+      const snapshot = await withFirestoreTimeout(getDocs(scopedQuery), 6500);
+      fsRecords = parseDocs(snapshot);
+    } catch (error) {
+      isQuotaOrNetworkError(error);
+      try {
+        const cacheSnap = await getDocsFromCache(scopedQuery);
+        if (!cacheSnap.empty) {
+          fsRecords = parseDocs(cacheSnap);
+        }
+      } catch {}
+    }
   }
+
+  const localUnion = mergeAuditHistoryUnion(cached, fsRecords);
+  const hubRes = await syncCollectionsWithBackendHub(
+    localUnion.length > 0 ? { auditHistory: localUnion } : {},
+    slug
+  ).catch(() => null);
+  const merged = mergeAuditHistoryUnion(localUnion, hubRes?.auditHistory || []);
+  setCachedAuditHistory(merged, slug);
+  return merged;
 }
 
 export function subscribeToAuditHistory(
@@ -3375,6 +3684,10 @@ export function subscribeToAuditHistory(
   companyId = getActiveCompanyId()
 ) {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  if (isFirestoreQuotaExhausted()) {
+    fetchAuditHistoryOnce(false, slug).then(onData).catch(() => {});
+    return () => {};
+  }
   const scopedQuery = getScopedCollectionQuery('audit_history', slug);
   return onSnapshot(
     scopedQuery,
@@ -3396,14 +3709,18 @@ export function subscribeToAuditHistory(
           scope: data.scope || undefined,
         });
       });
-      records.sort((a, b) => a.timestamp - b.timestamp);
-      setCachedAuditHistory(records, slug);
-      onData(records);
+      const cached = getCachedAuditHistory(slug) || [];
+      const merged = mergeAuditHistoryUnion(cached, records);
+      setCachedAuditHistory(merged, slug);
+      if (!snapshot.metadata?.fromCache && records.length > 0) {
+        syncCollectionsWithBackendHub({ auditHistory: records }, slug).catch(() => {});
+      }
+      onData(merged);
     },
     (error) => {
+      isQuotaOrNetworkError(error);
       if (onError) onError(error);
-      const cached = getCachedAuditHistory(slug);
-      if (cached) onData(cached);
+      fetchAuditHistoryOnce(false, slug).then(onData).catch(() => {});
     }
   );
 }
@@ -3414,35 +3731,72 @@ export async function applyAuditChangesToFirestore(
   auditedCodes?: string[],
   companyId = getActiveCompanyId()
 ): Promise<void> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const nowTs = Date.now();
+  const auditId = getScopedDocId(nowTs.toString(), slug);
+
+  const productsToUpdate = (
+    auditedCodes && auditedCodes.length > 0
+      ? updatedInventory.filter((p) => auditedCodes.includes(p.code))
+      : updatedInventory
+  ).map((p) => ({
+    ...p,
+    companyId: slug,
+    stock: Math.max(0, Math.round(Number(p.stock) || 0)),
+    updatedAt: nowTs,
+  }));
+
+  const createdAudit: AuditHistoryRecord = {
+    id: auditId,
+    companyId: slug,
+    date: historyRecord.date,
+    timestamp: Number(historyRecord.timestamp) || nowTs,
+    match: Number(historyRecord.match) || 0,
+    missing: Number(historyRecord.missing) || 0,
+    extra: Number(historyRecord.extra) || 0,
+    netImpact: Number(historyRecord.netImpact) || 0,
+    totalItems: Number(historyRecord.totalItems) || 0,
+    ...(historyRecord.scope ? { scope: historyRecord.scope } : {}),
+  };
+
+  // Immediately update local cache and broadcast to Backend Hub for instant PC <-> Mobile sync
+  const cachedAudit = getCachedAuditHistory(slug) || [];
+  setCachedAuditHistory(mergeAuditHistoryUnion(cachedAudit, [createdAudit]), slug);
+  if (productsToUpdate.length > 0) {
+    pushProductSaveToBackendHub(undefined, undefined, slug, productsToUpdate).catch(() => {});
+  }
+  syncCollectionsWithBackendHub({ auditHistory: [createdAudit] }, slug).catch(() => {});
+
   const batch = writeBatch(db);
-  const auditId = getScopedDocId(Date.now().toString(), slug);
-
   try {
-    const productsToUpdate =
-      auditedCodes && auditedCodes.length > 0
-        ? updatedInventory.filter((p) => auditedCodes.includes(p.code))
-        : updatedInventory;
-
     productsToUpdate.forEach((product) => {
       const docId = getScopedDocId(product.code, slug);
       const itemRef = doc(db, 'inventory', docId);
-      batch.update(itemRef, { stock: Math.max(0, Math.round(Number(product.stock) || 0)) });
+      batch.set(
+        itemRef,
+        {
+          companyId: slug,
+          code: product.code,
+          stock: product.stock,
+          updatedAt: nowTs,
+        },
+        { merge: true }
+      );
     });
 
     const auditRef = doc(db, 'audit_history', auditId);
     const auditData: any = {
       companyId: slug,
-      date: historyRecord.date,
-      timestamp: historyRecord.timestamp,
-      match: historyRecord.match,
-      missing: historyRecord.missing,
-      extra: historyRecord.extra,
-      netImpact: Number(historyRecord.netImpact) || 0,
-      totalItems: historyRecord.totalItems,
+      date: createdAudit.date,
+      timestamp: createdAudit.timestamp,
+      match: createdAudit.match,
+      missing: createdAudit.missing,
+      extra: createdAudit.extra,
+      netImpact: createdAudit.netImpact,
+      totalItems: createdAudit.totalItems,
     };
-    if (historyRecord.scope) {
-      auditData.scope = historyRecord.scope;
+    if (createdAudit.scope) {
+      auditData.scope = createdAudit.scope;
     }
 
     batch.set(auditRef, auditData);
@@ -7645,30 +7999,48 @@ export async function seedStarterTemplateToTenant(
 const POS_FINANCE_CACHE_BASE = 'stockmaster_pos_finance_v1';
 
 function getPOSFinanceDocId(companyId = getActiveCompanyId()): string {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   return slug === 'gosen' ? 'pos_finance_gosen' : `pos_finance_${slug}`;
 }
 
 export function getCachedPOSFinanceData(companyId = getActiveCompanyId()): POSFinanceStoreData {
-  const slug = normalizeCompanySlug(companyId);
-  const cached = safeReadCache<POSFinanceStoreData>(getScopedCacheKey(POS_FINANCE_CACHE_BASE, slug));
-  return (
-    cached || {
-      companyId: slug,
-      shifts: [],
-      expenses: [],
-      creditAccountControls: {},
-      quotations: [],
-      updatedAt: Date.now(),
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const emptyDefault: POSFinanceStoreData = {
+    companyId: slug,
+    shifts: [],
+    expenses: [],
+    creditAccountControls: {},
+    quotations: [],
+    updatedAt: 0,
+  };
+
+  if (isGyGAlias(slug)) {
+    const aliasSlugs = ['tiendagyg', 'comercial-gyg', 'comercialgyg', 'comercial_gyg', 'gyg'];
+    let combined: POSFinanceStoreData | null = null;
+    for (const alias of aliasSlugs) {
+      const raw = safeReadCache<POSFinanceStoreData>(
+        getScopedCacheKey(POS_FINANCE_CACHE_BASE, alias)
+      );
+      if (raw) {
+        combined = combined
+          ? mergePOSFinanceObjects(slug, combined, raw)
+          : sanitizePOSFinanceDoc(slug, raw as Record<string, any>);
+      }
     }
+    return combined || emptyDefault;
+  }
+
+  const cached = safeReadCache<POSFinanceStoreData>(
+    getScopedCacheKey(POS_FINANCE_CACHE_BASE, slug)
   );
+  return cached || emptyDefault;
 }
 
 export function setCachedPOSFinanceData(
   data: POSFinanceStoreData,
   companyId = getActiveCompanyId()
 ): void {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   safeWriteCache(getScopedCacheKey(POS_FINANCE_CACHE_BASE, slug), data);
 }
 
@@ -7923,11 +8295,11 @@ function sanitizePOSFinanceDoc(slug: string, raw: Record<string, any>): POSFinan
     loyaltyConfig,
     loyaltyCustomers,
     quotations,
-    updatedAt: Number(raw.updatedAt) || Date.now(),
+    updatedAt: Number(raw.updatedAt) > 0 ? Number(raw.updatedAt) : 0,
   };
 }
 
-function mergePOSFinanceObjects(
+export function mergePOSFinanceObjects(
   slug: string,
   a?: POSFinanceStoreData | null,
   b?: POSFinanceStoreData | null
@@ -8052,13 +8424,15 @@ export async function fetchPOSFinanceDataOnce(
 ): Promise<POSFinanceStoreData> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const cached = getCachedPOSFinanceData(slug);
-  const hubSync = await syncCollectionsWithBackendHub(
+  const hasCachedPayload =
     cached &&
-      (cached.updatedAt > 0 ||
-        Object.keys(cached.creditAccountControls || {}).length > 0 ||
-        (cached.quotations?.length || 0) > 0)
-      ? { posFinance: cached }
-      : {},
+    (cached.updatedAt > 0 ||
+      (cached.expenses?.length || 0) > 0 ||
+      (cached.shifts?.length || 0) > 0 ||
+      Object.keys(cached.creditAccountControls || {}).length > 0 ||
+      (cached.quotations?.length || 0) > 0);
+  const hubSync = await syncCollectionsWithBackendHub(
+    hasCachedPayload ? { posFinance: cached } : {},
     slug
   );
   const hubFinance = hubSync?.posFinance
@@ -8072,17 +8446,36 @@ export async function fetchPOSFinanceDataOnce(
   }
 
   try {
-    const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
-    const snap = await withFirestoreTimeout(getDoc(docRef), 6500);
-    if (snap.exists()) {
-      const parsed = sanitizePOSFinanceDoc(slug, snap.data());
-      const merged = mergePOSFinanceObjects(slug, mergePOSFinanceObjects(slug, cached, hubFinance), parsed);
-      setCachedPOSFinanceData(merged, slug);
-      syncCollectionsWithBackendHub({ posFinance: merged }, slug).catch(() => {});
-      return merged;
+    const docIds = isGyGAlias(slug)
+      ? [
+          'pos_finance_tiendagyg',
+          'pos_finance_comercial-gyg',
+          'pos_finance_comercialgyg',
+          'pos_finance_comercial_gyg',
+          'pos_finance_gyg',
+        ]
+      : [getPOSFinanceDocId(slug)];
+
+    const snaps = await Promise.all(
+      docIds.map((docId) =>
+        withFirestoreTimeout(getDoc(doc(db, 'settings', docId)), 6500).catch(() => null)
+      )
+    );
+
+    let merged = mergePOSFinanceObjects(slug, cached, hubFinance);
+    let foundAnyCloudDoc = false;
+    for (const snap of snaps) {
+      if (snap && snap.exists()) {
+        foundAnyCloudDoc = true;
+        const parsed = sanitizePOSFinanceDoc(slug, snap.data());
+        merged = mergePOSFinanceObjects(slug, merged, parsed);
+      }
     }
-    const merged = mergePOSFinanceObjects(slug, cached, hubFinance);
+
     setCachedPOSFinanceData(merged, slug);
+    if (foundAnyCloudDoc || (merged.expenses?.length || 0) > 0 || (merged.shifts?.length || 0) > 0) {
+      syncCollectionsWithBackendHub({ posFinance: merged }, slug).catch(() => {});
+    }
     return merged;
   } catch (err) {
     isQuotaOrNetworkError(err);

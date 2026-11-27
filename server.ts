@@ -1022,6 +1022,7 @@ interface ServerTenantStore {
   suppliers: Record<string, any>;
   purchases: Record<string, any>;
   sales: Record<string, any>;
+  auditHistory?: Record<string, any>;
   users: Record<string, any>;
   warehouses: any | null;
   settings: any | null;
@@ -1148,6 +1149,7 @@ function getTenantStore(companyId?: string): ServerTenantStore {
       suppliers: {},
       purchases: {},
       sales: {},
+      auditHistory: {},
       users: {},
       warehouses: null,
       settings: null,
@@ -1167,6 +1169,9 @@ function getTenantStore(companyId?: string): ServerTenantStore {
   }
   if (!Array.isArray(syncDbMemory.tenants[slug].deletedUserIds)) {
     syncDbMemory.tenants[slug].deletedUserIds = [];
+  }
+  if (!syncDbMemory.tenants[slug].auditHistory || typeof syncDbMemory.tenants[slug].auditHistory !== 'object') {
+    syncDbMemory.tenants[slug].auditHistory = {};
   }
   return syncDbMemory.tenants[slug];
 }
@@ -1659,6 +1664,477 @@ async function hydrateAuthFromFirestoreRest(force = false): Promise<void> {
   });
 
   return firestoreAuthHydrationInFlight;
+}
+
+// ============================================================================
+// FULL TENANT DATA HYDRATION FROM FIRESTORE REST (Eliminates Partial Hub Snapshots)
+// Ensures Comercial GYG & all tenants ALWAYS have complete inventory, sales,
+// POS finance/expenses, purchases, suppliers, warehouses & audit_history on server.
+// ============================================================================
+const hydratedTenantTimestamps = new Map<string, number>();
+const tenantHydrationInFlight = new Map<string, Promise<void>>();
+
+function serverDocBelongsToTenant(
+  docCompanyId: string | undefined,
+  docId: string,
+  targetSlug: string
+): boolean {
+  const normTarget = normalizeServerCompanySlug(targetSlug);
+  const isTargetGyG = isServerGyGAlias(normTarget);
+
+  if (docCompanyId && String(docCompanyId).trim()) {
+    const normDoc = normalizeServerCompanySlug(String(docCompanyId));
+    if (normDoc === normTarget) return true;
+    if (isTargetGyG && isServerGyGAlias(String(docCompanyId))) return true;
+    return false;
+  }
+
+  // Fallback for legacy documents missing the companyId field (prefix-only doc IDs)
+  if (docId && docId.includes('__')) {
+    const prefix = docId.split('__')[0];
+    if (isTargetGyG && isServerGyGAlias(prefix)) return true;
+    return normalizeServerCompanySlug(prefix) === normTarget;
+  }
+
+  return normTarget === 'gosen';
+}
+
+function mergeServerPosFinancePair(slug: string, prev: any, incoming: any): any {
+  if (!prev) return { ...incoming, companyId: slug };
+  if (!incoming) return { ...prev, companyId: slug };
+
+  const incTs = Number(incoming.updatedAt || 0);
+  const prevTs = Number(prev.updatedAt || 0);
+  const isIncomingNewer = incTs > prevTs;
+  const primary = isIncomingNewer ? incoming : prev;
+  const secondary = isIncomingNewer ? prev : incoming;
+
+  const mergedControls: Record<string, any> = {};
+  const prevControls = prev.creditAccountControls || {};
+  const incControls = incoming.creditAccountControls || {};
+  const allCtrlKeys = new Set([...Object.keys(prevControls), ...Object.keys(incControls)]);
+  for (const key of allCtrlKeys) {
+    const pCtrl = prevControls[key];
+    const iCtrl = incControls[key];
+    if (pCtrl && !iCtrl) {
+      mergedControls[key] = pCtrl;
+    } else if (iCtrl && !pCtrl) {
+      mergedControls[key] = iCtrl;
+    } else if (pCtrl && iCtrl) {
+      const pCtrlTs = Number(pCtrl.updatedAt || 0);
+      const iCtrlTs = Number(iCtrl.updatedAt || 0);
+      if (iCtrlTs > pCtrlTs) {
+        mergedControls[key] = { ...pCtrl, ...iCtrl };
+      } else if (pCtrlTs > iCtrlTs) {
+        mergedControls[key] = { ...iCtrl, ...pCtrl };
+      } else {
+        mergedControls[key] = isIncomingNewer ? { ...pCtrl, ...iCtrl } : { ...iCtrl, ...pCtrl };
+      }
+    }
+  }
+
+  const alertMap = new Map<string, any>();
+  for (const a of [...(secondary.routeCollectorAlerts || []), ...(primary.routeCollectorAlerts || [])]) {
+    if (a && a.id) {
+      const existing = alertMap.get(a.id);
+      if (!existing || a.status === 'reviewed') alertMap.set(a.id, a);
+    }
+  }
+
+  const shiftMap = new Map<string, any>();
+  for (const s of [...(secondary.shifts || []), ...(primary.shifts || [])]) {
+    if (s && s.id) {
+      const existing = shiftMap.get(s.id);
+      if (
+        !existing ||
+        s.status === 'closed' ||
+        (s.cashMovements?.length || 0) > (existing.cashMovements?.length || 0)
+      ) {
+        shiftMap.set(s.id, s);
+      }
+    }
+  }
+
+  const expMap = new Map<string, any>();
+  for (const e of [...(secondary.expenses || []), ...(primary.expenses || [])]) {
+    if (e && e.id) expMap.set(e.id, e);
+  }
+
+  const quotationMap = new Map<string, any>();
+  for (const q of [...(secondary.quotations || []), ...(primary.quotations || [])]) {
+    if (!q || !q.id) continue;
+    const existing = quotationMap.get(q.id);
+    if (!existing) {
+      quotationMap.set(q.id, q);
+    } else {
+      const exTs = Number(existing.updatedAt || existing.createdAt || 0);
+      const qTs = Number(q.updatedAt || q.createdAt || 0);
+      if (qTs > exTs || (q.status === 'converted' && existing.status !== 'converted')) {
+        quotationMap.set(q.id, q);
+      }
+    }
+  }
+
+  const collectorSet = new Set<string>(
+    (primary.routeCollectorConfig?.enabledCollectorUsernames ||
+      secondary.routeCollectorConfig?.enabledCollectorUsernames ||
+      [])
+      .map((u: any) => String(u || '').trim().toLowerCase().replace(/^@+/, ''))
+      .filter(Boolean)
+  );
+  for (const ctrl of Object.values(mergedControls)) {
+    if (ctrl?.assignedCollectorUsername) {
+      collectorSet.add(String(ctrl.assignedCollectorUsername).trim().toLowerCase().replace(/^@+/, ''));
+    }
+  }
+
+  return {
+    ...secondary,
+    ...primary,
+    companyId: slug,
+    shifts: Array.from(shiftMap.values()).sort((a, b) => (Number(b.openedAt) || 0) - (Number(a.openedAt) || 0)),
+    expenses: Array.from(expMap.values()).sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)),
+    quotations: Array.from(quotationMap.values()).sort(
+      (a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0)
+    ),
+    creditAccountControls: mergedControls,
+    routeCollectorAlerts: Array.from(alertMap.values())
+      .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0))
+      .slice(0, 300),
+    routeCollectorConfig: {
+      ...(secondary.routeCollectorConfig || {}),
+      ...(primary.routeCollectorConfig || {}),
+      enabledCollectorUsernames: Array.from(collectorSet),
+    },
+    updatedAt: Math.max(incTs, prevTs, 1),
+  };
+}
+
+async function hydrateTenantDataFromFirestoreRest(
+  targetSlug: string,
+  force = false
+): Promise<void> {
+  const { projectId, firestoreDatabaseId, apiKey: fbKey } = FIREBASE_SERVER_CONFIG;
+  if (!projectId || !firestoreDatabaseId) return;
+
+  const slug = normalizeServerCompanySlug(targetSlug);
+  const now = Date.now();
+  const lastAt = hydratedTenantTimestamps.get(slug) || 0;
+  // Throttle normal hydrations to once per 5 minutes unless force=true (e.g. manual reconcile)
+  if (!force && lastAt > 0 && now - lastAt < 5 * 60_000) return;
+
+  const existingPromise = tenantHydrationInFlight.get(slug);
+  if (existingPromise) return existingPromise;
+
+  const base = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents`;
+  const keyQs = fbKey ? `?key=${encodeURIComponent(fbKey)}` : '';
+
+  const fetchAllCollectionDocs = async (colName: string, maxDocs = 3000) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9000);
+    try {
+      const resp = await fetch(`${base}:runQuery${keyQs}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: colName }],
+            limit: maxDocs,
+          },
+        }),
+        signal: controller.signal,
+      });
+      if (!resp.ok) return [];
+      const json: any = await resp.json();
+      if (!Array.isArray(json)) return [];
+      return json.filter((row: any) => row && row.document).map((row: any) => row.document);
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const fetchDocById = async (colName: string, docId: string) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const resp = await fetch(
+        `${base}/${encodeURIComponent(colName)}/${encodeURIComponent(docId)}${keyQs}`,
+        { method: 'GET', signal: controller.signal }
+      );
+      if (!resp.ok) return null;
+      const docJson: any = await resp.json();
+      return docJson && docJson.name ? docJson : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const task = (async () => {
+    try {
+      const isGyG = isServerGyGAlias(slug);
+      const posFinanceDocIds = isGyG
+        ? [
+            'pos_finance_tiendagyg',
+            'pos_finance_comercial-gyg',
+            'pos_finance_comercialgyg',
+            'pos_finance_comercial_gyg',
+            'pos_finance_gyg',
+          ]
+        : [slug === 'gosen' ? 'pos_finance_gosen' : `pos_finance_${slug}`];
+
+      const warehouseDocIds = isGyG
+        ? ['warehouses_tiendagyg', 'warehouses_comercial-gyg', 'warehouses_comercialgyg']
+        : [slug === 'gosen' ? 'warehouses_gosen' : `warehouses_${slug}`];
+
+      const restaurantDocIds = isGyG
+        ? ['restaurant_tiendagyg', 'restaurant_comercial-gyg']
+        : [slug === 'gosen' ? 'restaurant_gosen' : `restaurant_${slug}`];
+
+      const [
+        invDocs,
+        salesDocs,
+        purchaseDocs,
+        supplierDocs,
+        auditDocs,
+        posDocs,
+        whDocs,
+        restDocs,
+      ] = await Promise.all([
+        fetchAllCollectionDocs('inventory', 4000),
+        fetchAllCollectionDocs('sales', 3000),
+        fetchAllCollectionDocs('purchases', 2000),
+        fetchAllCollectionDocs('suppliers', 1000),
+        fetchAllCollectionDocs('audit_history', 1000),
+        Promise.all(posFinanceDocIds.map((id) => fetchDocById('settings', id))),
+        Promise.all(warehouseDocIds.map((id) => fetchDocById('settings', id))),
+        Promise.all(restaurantDocIds.map((id) => fetchDocById('settings', id))),
+      ]);
+
+      const tenant = getTenantStore(slug);
+      let changed = false;
+
+      const explicitDeletedInv = new Set(
+        (tenant.explicitDeletedCodes || []).map((c) => String(c || '').trim().toLowerCase())
+      );
+      const deletedSaleSet = new Set(
+        (tenant.deletedSaleIds || []).map((id) => String(id || '').trim())
+      );
+      const deletedPurchaseSet = new Set(
+        (tenant.deletedPurchaseIds || []).map((id) => String(id || '').trim())
+      );
+      const deletedSupplierSet = new Set(
+        (tenant.deletedSupplierIds || []).map((id) => String(id || '').trim())
+      );
+
+      // 1. Hydrate Inventory (union all Comercial GYG aliases + prefix-only docs)
+      for (const rawDoc of invDocs) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (!parsed) continue;
+        if (!serverDocBelongsToTenant(parsed.data.companyId, parsed.id, slug)) continue;
+        const code = String(
+          parsed.data.code ||
+            (parsed.id.includes('__') ? parsed.id.split('__').slice(1).join('__') : parsed.id)
+        ).trim();
+        const name = String(parsed.data.name || '').trim();
+        if (!code || !name) continue;
+        const codeKey = code.toLowerCase();
+        if (!isSafeRecordKey(codeKey) || explicitDeletedInv.has(codeKey)) continue;
+
+        const fsItem = {
+          ...parsed.data,
+          id: parsed.id,
+          companyId: slug,
+          code,
+          name,
+          category: String(parsed.data.category || 'Otros').trim(),
+          cost: Number(parsed.data.cost) || 0,
+          price: Number(parsed.data.price) || 0,
+          stock: Number(parsed.data.stock) || 0,
+          img: parsed.data.img || '',
+          updatedAt: Number(parsed.data.updatedAt) || 0,
+        };
+        const prev = tenant.inventory[codeKey];
+        if (!prev) {
+          tenant.inventory[codeKey] = fsItem;
+          changed = true;
+        } else {
+          const fsTs = Number(fsItem.updatedAt || 0);
+          const prevTs = Number(prev.updatedAt || 0);
+          if (fsTs > prevTs) {
+            tenant.inventory[codeKey] = {
+              ...prev,
+              ...fsItem,
+              img: fsItem.img || prev.img || '',
+              img2: fsItem.img2 || prev.img2 || undefined,
+            };
+            changed = true;
+          } else if (!prev.img && fsItem.img) {
+            tenant.inventory[codeKey] = { ...prev, img: fsItem.img };
+            changed = true;
+          }
+        }
+      }
+
+      // 2. Hydrate Sales (union all aliases, never losing newer abonos)
+      for (const rawDoc of salesDocs) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (!parsed || !isSafeRecordKey(parsed.id)) continue;
+        if (deletedSaleSet.has(parsed.id)) continue;
+        if (!serverDocBelongsToTenant(parsed.data.companyId, parsed.id, slug)) continue;
+
+        const fsSale = {
+          ...parsed.data,
+          id: parsed.id,
+          companyId: slug,
+          timestamp: Number(parsed.data.timestamp) || Date.now(),
+          updatedAt: Number(parsed.data.updatedAt || parsed.data.timestamp || 0),
+        };
+        const prev = tenant.sales[parsed.id];
+        if (!prev) {
+          tenant.sales[parsed.id] = fsSale;
+          changed = true;
+        } else {
+          const fsUpd = Number(fsSale.updatedAt || 0);
+          const prevUpd = Number(prev.updatedAt || 0);
+          const fsPayLen = Array.isArray(fsSale.creditPayments) ? fsSale.creditPayments.length : 0;
+          const prevPayLen = Array.isArray(prev.creditPayments) ? prev.creditPayments.length : 0;
+          if (fsUpd > prevUpd || (fsUpd === prevUpd && fsPayLen > prevPayLen)) {
+            tenant.sales[parsed.id] = {
+              ...prev,
+              ...fsSale,
+              creditContract: fsSale.creditContract || prev.creditContract,
+            };
+            changed = true;
+          }
+        }
+      }
+
+      // 3. Hydrate Purchases
+      for (const rawDoc of purchaseDocs) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (!parsed || !isSafeRecordKey(parsed.id)) continue;
+        if (deletedPurchaseSet.has(parsed.id)) continue;
+        if (!serverDocBelongsToTenant(parsed.data.companyId, parsed.id, slug)) continue;
+
+        const fsPurchase = {
+          ...parsed.data,
+          id: parsed.id,
+          companyId: slug,
+          timestamp: Number(parsed.data.timestamp) || Date.now(),
+          updatedAt: Number(parsed.data.updatedAt || parsed.data.timestamp || 0),
+        };
+        const prev = tenant.purchases[parsed.id];
+        if (!prev || Number(fsPurchase.updatedAt || 0) > Number(prev.updatedAt || 0)) {
+          tenant.purchases[parsed.id] = { ...(prev || {}), ...fsPurchase };
+          changed = true;
+        }
+      }
+
+      // 4. Hydrate Suppliers
+      for (const rawDoc of supplierDocs) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (!parsed || !isSafeRecordKey(parsed.id)) continue;
+        if (deletedSupplierSet.has(parsed.id)) continue;
+        if (!serverDocBelongsToTenant(parsed.data.companyId, parsed.id, slug)) continue;
+
+        const fsSup = {
+          ...parsed.data,
+          id: parsed.id,
+          companyId: slug,
+          updatedAt: Number(parsed.data.updatedAt || 0),
+        };
+        const prev = tenant.suppliers[parsed.id];
+        if (!prev || Number(fsSup.updatedAt || 0) > Number(prev.updatedAt || 0)) {
+          tenant.suppliers[parsed.id] = { ...(prev || {}), ...fsSup };
+          changed = true;
+        }
+      }
+
+      // 5. Hydrate Audit History (for Panel de Control -> Auditorías Recientes)
+      if (!tenant.auditHistory) tenant.auditHistory = {};
+      for (const rawDoc of auditDocs) {
+        const parsed = parseFirestoreRestDoc(rawDoc);
+        if (!parsed || !isSafeRecordKey(parsed.id)) continue;
+        if (!serverDocBelongsToTenant(parsed.data.companyId, parsed.id, slug)) continue;
+
+        const fsAudit = {
+          ...parsed.data,
+          id: parsed.id,
+          companyId: slug,
+          timestamp: Number(parsed.data.timestamp) || Date.now(),
+          match: Number(parsed.data.match) || 0,
+          missing: Number(parsed.data.missing) || 0,
+          extra: Number(parsed.data.extra) || 0,
+          netImpact: Number(parsed.data.netImpact) || 0,
+          totalItems: Number(parsed.data.totalItems) || 0,
+        };
+        if (!tenant.auditHistory[parsed.id]) {
+          tenant.auditHistory[parsed.id] = fsAudit;
+          changed = true;
+        }
+      }
+
+      // 6. Hydrate & Consolidate POS Finance / Expenses across ALL Comercial GYG alias docs
+      for (const rawPos of posDocs) {
+        if (!rawPos) continue;
+        const parsed = parseFirestoreRestDoc(rawPos);
+        if (!parsed) continue;
+        const mergedPos = mergeServerPosFinancePair(slug, tenant.posFinance, {
+          ...parsed.data,
+          companyId: slug,
+        });
+        if (JSON.stringify(mergedPos) !== JSON.stringify(tenant.posFinance)) {
+          tenant.posFinance = mergedPos;
+          changed = true;
+        }
+      }
+
+      // 7. Hydrate Warehouses & Restaurant
+      for (const rawWh of whDocs) {
+        if (!rawWh) continue;
+        const parsed = parseFirestoreRestDoc(rawWh);
+        if (!parsed) continue;
+        const fsTs = Number(parsed.data.updatedAt || 0);
+        const prevTs = Number(tenant.warehouses?.updatedAt || 0);
+        if (!tenant.warehouses || fsTs > prevTs) {
+          tenant.warehouses = { ...parsed.data, companyId: slug };
+          changed = true;
+        }
+      }
+
+      for (const rawRest of restDocs) {
+        if (!rawRest) continue;
+        const parsed = parseFirestoreRestDoc(rawRest);
+        if (!parsed) continue;
+        const fsTs = Number(parsed.data.updatedAt || 0);
+        const prevTs = Number(tenant.restaurant?.updatedAt || 0);
+        if (!tenant.restaurant || fsTs > prevTs) {
+          tenant.restaurant = { ...parsed.data, companyId: slug };
+          changed = true;
+        }
+      }
+
+      cleanAndDeduplicateTenantInventory(tenant);
+      hydratedTenantTimestamps.set(slug, Date.now());
+
+      if (changed) {
+        tenant.updatedAt = Math.max(tenant.updatedAt || 0, Date.now());
+        syncDbMemory.updatedAt = tenant.updatedAt;
+        schedulePersistSyncDb();
+      }
+    } catch (err) {
+      console.warn(`Tenant Firestore REST hydration warning (${slug}):`, err);
+    }
+  })().finally(() => {
+    tenantHydrationInFlight.delete(slug);
+  });
+
+  tenantHydrationInFlight.set(slug, task);
+  return task;
 }
 
 // Track failed logins per IP for brute-force protection
@@ -2635,13 +3111,20 @@ app.get('/api/cloud-sync/stream', (req, res) => {
   });
 });
 
-// 0b. Read-Only Authoritative Snapshot Pull (NEVER overwrites server with stale client cache)
-app.get('/api/cloud-sync/snapshot', requireAuthSession, (req, res) => {
+// 0b. Read-Only Authoritative Snapshot Pull (Auto-hydrates from Firestore so server NEVER returns partial subset)
+app.get('/api/cloud-sync/snapshot', requireAuthSession, async (req, res) => {
   try {
     const slug = normalizeServerCompanySlug(String(req.query.companyId || 'gosen'));
     const session = assertTenantAccess(req, res, slug);
     if (!session) return;
     const isAdminOrSa = session.role === 'admin' || session.sa;
+    const forceReconcile = String(req.query.reconcile || '') === '1';
+
+    // Ensure this tenant is fully hydrated from Firestore REST before returning any snapshot
+    if (forceReconcile || !hydratedTenantTimestamps.has(slug)) {
+      await hydrateTenantDataFromFirestoreRest(slug, forceReconcile);
+    }
+
     const tenant = getTenantStore(slug);
 
     const rawScopes = String(req.query.scopes || '').trim();
@@ -2658,6 +3141,7 @@ app.get('/api/cloud-sync/snapshot', requireAuthSession, (req, res) => {
     const response: Record<string, any> = {
       ok: true,
       companyId: slug,
+      hydratedFromCloud: hydratedTenantTimestamps.has(slug),
       updatedAt: tenant.updatedAt || 0,
       deletedSaleIds: tenant.deletedSaleIds || [],
       deletedSupplierIds: tenant.deletedSupplierIds || [],
@@ -2684,6 +3168,11 @@ app.get('/api/cloud-sync/snapshot', requireAuthSession, (req, res) => {
     if (includeScope('sales')) {
       response.sales = Object.values(tenant.sales).sort(
         (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+      );
+    }
+    if (includeScope('auditHistory')) {
+      response.auditHistory = Object.values(tenant.auditHistory || {}).sort(
+        (a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0)
       );
     }
     if (includeScope('users')) {
@@ -3060,6 +3549,7 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       suppliers,
       purchases,
       sales,
+      auditHistory,
       users,
       warehouses,
       settings,
@@ -3298,6 +3788,8 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
 
     mergeRecordList(tenant.suppliers, suppliers, 'suppliers', 'id', false, deletedSupplierSet);
     mergeRecordList(tenant.purchases, purchases, 'purchases', 'id', false, deletedPurchaseSet);
+    if (!tenant.auditHistory) tenant.auditHistory = {};
+    mergeRecordList(tenant.auditHistory, auditHistory, 'auditHistory', 'id', false);
 
     if (Array.isArray(users) && users.length > 0) {
       if (isAdminOrSa) {
@@ -3591,6 +4083,9 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       sales: Object.values(tenant.sales).sort(
         (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
       ),
+      auditHistory: Object.values(tenant.auditHistory || {}).sort(
+        (a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0)
+      ),
       deletedSaleIds: tenant.deletedSaleIds || [],
       deletedSupplierIds: tenant.deletedSupplierIds || [],
       deletedPurchaseIds: tenant.deletedPurchaseIds || [],
@@ -3636,8 +4131,15 @@ async function startServer() {
   // Bind port 3000 immediately so the platform health check never times out during cold start
   app.listen(port, '0.0.0.0', () => {
     console.log(`StockMaster Server listening on http://0.0.0.0:${port}`);
-    // Pre-hydrate auth credentials from Firestore REST in background so mobile logins never hit stale cold defaults
-    hydrateAuthFromFirestoreRest(true).catch(() => {});
+    // Pre-hydrate auth credentials AND core tenant collections from Firestore REST in background
+    hydrateAuthFromFirestoreRest(true)
+      .then(() =>
+        Promise.allSettled([
+          hydrateTenantDataFromFirestoreRest('tiendagyg', true),
+          hydrateTenantDataFromFirestoreRest('gosen', true),
+        ])
+      )
+      .catch(() => {});
   });
 
   if (!isProd) {
