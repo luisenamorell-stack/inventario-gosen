@@ -119,8 +119,46 @@ export function isQuotaOrNetworkError(error: unknown): boolean {
     isQuota ||
     code === 'unavailable' ||
     msg.includes('offline') ||
+    msg.includes('timed out') ||
     msg.includes('failed to get document')
   );
+}
+
+// Track recently written local sales so an overlapping cloud snapshot pull can never
+// momentarily hide a sale recorded seconds earlier before Firestore REST reflects it.
+const RECENT_LOCAL_SALE_TTL_MS = 120_000;
+const recentLocalSalesMap = new Map<string, { slug: string; sale: SaleRecord; writtenAt: number }>();
+
+function trackRecentLocalSale(sale: SaleRecord, slug: string): void {
+  if (!sale?.id) return;
+  const now = Date.now();
+  recentLocalSalesMap.set(`${slug}::${sale.id}`, { slug, sale, writtenAt: now });
+  for (const [k, entry] of recentLocalSalesMap.entries()) {
+    if (now - entry.writtenAt > RECENT_LOCAL_SALE_TTL_MS) {
+      recentLocalSalesMap.delete(k);
+    }
+  }
+}
+
+function clearRecentLocalSale(saleId: string, slug: string): void {
+  if (!saleId) return;
+  recentLocalSalesMap.delete(`${slug}::${saleId}`);
+}
+
+function racePromiseWithTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      }
+    );
+  });
 }
 
 export function handleFirestoreError(
@@ -2605,9 +2643,35 @@ export async function fetchAuthoritativeHubSnapshot(
       const deletedSet = getLocallyDeletedSaleIds(slug);
       let cleanSales: SaleRecord[];
       if (isCloudAuthoritative) {
-        cleanSales = data.sales
-          .filter((s) => s && s.id && !deletedSet.has(s.id))
-          .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+        const srvById = new Map<string, SaleRecord>();
+        for (const s of data.sales) {
+          if (s && s.id && !deletedSet.has(s.id)) {
+            srvById.set(s.id, s);
+          }
+        }
+        const nowMs = Date.now();
+        for (const [k, entry] of recentLocalSalesMap.entries()) {
+          if (nowMs - entry.writtenAt > RECENT_LOCAL_SALE_TTL_MS) {
+            recentLocalSalesMap.delete(k);
+            continue;
+          }
+          if (entry.slug !== slug) continue;
+          if (deletedSet.has(entry.sale.id)) {
+            recentLocalSalesMap.delete(k);
+            continue;
+          }
+          const srvMatch = srvById.get(entry.sale.id);
+          const localUpd = Number(entry.sale.updatedAt || entry.sale.timestamp || 0);
+          const srvUpd = Number(srvMatch?.updatedAt || srvMatch?.timestamp || 0);
+          if (!srvMatch || localUpd > srvUpd) {
+            srvById.set(entry.sale.id, entry.sale);
+          } else {
+            recentLocalSalesMap.delete(k);
+          }
+        }
+        cleanSales = Array.from(srvById.values()).sort(
+          (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+        );
       } else {
         const cachedSales = getCachedSales(slug) || [];
         cleanSales = mergeSalesUnion(cachedSales, data.sales, deletedSet);
@@ -5131,28 +5195,21 @@ export async function recordSaleInFirestore(
     id: saleId,
     ...payload,
   };
+  trackRecentLocalSale(createdRecord, slug);
   const prevSales = getCachedSales(slug) || [];
   const nextSalesList = [createdRecord, ...prevSales.filter((s) => s.id !== saleId)];
   setCachedSales(nextSalesList, slug);
-  syncCollectionsWithBackendHub({ sales: [createdRecord] }, slug).catch(() => {});
+  saveSalesToIndexedDB(nextSalesList, slug).catch(() => {});
 
-  try {
-    // 1. Save the sale document first so billing never fails due to an inventory doc ID mismatch
-    await setDoc(saleRef, stripUndefinedDeep(payload));
-  } catch (error) {
-    if (isQuotaOrNetworkError(error)) {
-      console.warn('Sale saved in local cache; cloud sync deferred:', error);
-    } else {
-      handleFirestoreError(error, OperationType.WRITE, `sales/${saleId}`);
-    }
-  }
+  // Prepare inventory stock deductions before awaiting network/Firestore so Hub & Firestore run in parallel
+  const invBatch = writeBatch(db);
+  const finalPayloadsByDocId = new Map<string, { ref: any; altRef?: any; payload: Record<string, any> }>();
+  const hubUpdatedProducts: Product[] = [];
 
-  // 2. Deduct stock in inventory (and in the chosen warehouse per item) unless skipped for pre-app historical sales
   if (!saleData.skipInventoryDeduction && !saleData.isHistoricalPreApp) {
     try {
       const storeWhData = getCachedStoreWarehouses(slug);
       const activeWhList = storeWhData.warehouses || getDefaultWarehousesForStore();
-      const invBatch = writeBatch(db);
       const workingByCode = new Map<string, Product>();
       for (const p of currentInventory) {
         workingByCode.set(p.code.trim().toLowerCase(), p);
@@ -5180,8 +5237,6 @@ export async function recordSaleInFirestore(
           });
         }
       }
-
-      const finalPayloadsByDocId = new Map<string, { ref: any; altRef?: any; payload: Record<string, any> }>();
 
       for (const { codeKey, warehouseId: itemWhId, qty, item } of qtyByCodeAndWh.values()) {
         const currentProd =
@@ -5236,7 +5291,6 @@ export async function recordSaleInFirestore(
         finalPayloadsByDocId.set(canonicalDocId, { ref: productRef, altRef, payload: productPayload });
       }
 
-      const hubUpdatedProducts: Product[] = [];
       for (const [docIdKey, entry] of finalPayloadsByDocId.entries()) {
         invBatch.set(entry.ref, entry.payload, { merge: true });
         if (entry.altRef) {
@@ -5250,24 +5304,54 @@ export async function recordSaleInFirestore(
             : ({ id: docIdKey, ...entry.payload } as Product)
         );
       }
-
-      if (hubUpdatedProducts.length > 0) {
-        pushProductSaveToBackendHub(undefined, undefined, slug, hubUpdatedProducts).catch(() => {});
-      }
-
-      if (finalPayloadsByDocId.size > 0) {
-        await touchInventorySyncStamp(invBatch, slug);
-        await invBatch.commit();
-      }
-    } catch (invError) {
-      console.warn('Warning updating inventory stock after sale:', invError);
+    } catch (invPrepError) {
+      console.warn('Warning preparing inventory stock deduction after sale:', invPrepError);
     }
   }
 
-  return {
-    id: saleId,
-    ...payload,
-  };
+  // Push to Backend Multi-Device Sync Hub immediately (fast local Express call, capped at 2s)
+  const hubSalePromise = racePromiseWithTimeout(
+    syncCollectionsWithBackendHub({ sales: [createdRecord] }, slug),
+    2000,
+    null
+  );
+  const hubInvPromise =
+    hubUpdatedProducts.length > 0
+      ? racePromiseWithTimeout(
+          pushProductSaveToBackendHub(undefined, undefined, slug, hubUpdatedProducts),
+          2000,
+          undefined
+        )
+      : Promise.resolve();
+
+  // Save sale document & inventory batch to Firestore in parallel, capped at 2.5s so a stalled
+  // WebChannel/multi-tab lock NEVER freezes the POS checkout (Firestore IndexedDB keeps retrying in background)
+  const firestoreSalePromise = (async () => {
+    if (isFirestoreQuotaExhausted()) return;
+    try {
+      await withFirestoreTimeout(setDoc(saleRef, stripUndefinedDeep(payload)), 2500);
+    } catch (error) {
+      if (isQuotaOrNetworkError(error)) {
+        console.warn('Sale saved in local cache & hub; cloud sync continuing in background:', error);
+      } else {
+        handleFirestoreError(error, OperationType.WRITE, `sales/${saleId}`);
+      }
+    }
+  })();
+
+  const firestoreInvPromise = (async () => {
+    if (finalPayloadsByDocId.size === 0 || isFirestoreQuotaExhausted()) return;
+    try {
+      await touchInventorySyncStamp(invBatch, slug);
+      await withFirestoreTimeout(invBatch.commit(), 2500);
+    } catch (invError) {
+      console.warn('Warning updating inventory stock in Firestore after sale:', invError);
+    }
+  })();
+
+  await Promise.all([hubSalePromise, hubInvPromise, firestoreSalePromise, firestoreInvPromise]);
+
+  return createdRecord;
 }
 
 export async function recordCreditPaymentInFirestore(
@@ -5275,7 +5359,7 @@ export async function recordCreditPaymentInFirestore(
   newAbone: CreditPaymentAbone,
   companyId = getActiveCompanyId()
 ): Promise<SaleRecord> {
-  const slug = normalizeCompanySlug(companyId);
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const saleRef = doc(db, 'sales', sale.id);
   const cleanAbone: CreditPaymentAbone = {
     id: String(newAbone.id || `abn_${Date.now()}`),
@@ -5320,39 +5404,52 @@ export async function recordCreditPaymentInFirestore(
     updatedAt: nowTs,
   };
 
+  trackRecentLocalSale(updatedSale, slug);
   const prevSales = getCachedSales(slug) || [];
-  setCachedSales(
-    prevSales.map((s) => (s.id === sale.id ? updatedSale : s)),
-    slug
-  );
-  syncCollectionsWithBackendHub({ sales: [updatedSale] }, slug).catch(() => {});
+  const nextSalesList = prevSales.map((s) => (s.id === sale.id ? updatedSale : s));
+  setCachedSales(nextSalesList, slug);
+  saveSalesToIndexedDB(nextSalesList, slug).catch(() => {});
 
-  try {
-    await setDoc(
-      saleRef,
-      stripUndefinedDeep({
-        saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
-        timestamp: Number(sale.timestamp) || nowTs,
-        date: String(sale.date || '').slice(0, 100),
-        items: Array.isArray(sale.items) ? sale.items : [],
-        total: Number(sale.total) || 0,
-        status: sale.status === 'cancelled' ? 'cancelled' : 'completed',
-        amountPaid: updatedSale.amountPaid,
-        balanceDue: updatedSale.balanceDue,
-        creditStatus: updatedSale.creditStatus,
-        creditPayments: updatedSale.creditPayments,
-        updatedAt: nowTs,
-      }),
-      { merge: true }
-    );
-    return updatedSale;
-  } catch (error) {
-    if (isQuotaOrNetworkError(error)) {
-      console.warn('Credit payment saved in local cache; cloud sync deferred:', error);
-      return updatedSale;
+  const hubPromise = racePromiseWithTimeout(
+    syncCollectionsWithBackendHub({ sales: [updatedSale] }, slug),
+    2000,
+    null
+  );
+
+  const fsPromise = (async () => {
+    if (isFirestoreQuotaExhausted()) return;
+    try {
+      await withFirestoreTimeout(
+        setDoc(
+          saleRef,
+          stripUndefinedDeep({
+            saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
+            timestamp: Number(sale.timestamp) || nowTs,
+            date: String(sale.date || '').slice(0, 100),
+            items: Array.isArray(sale.items) ? sale.items : [],
+            total: Number(sale.total) || 0,
+            status: sale.status === 'cancelled' ? 'cancelled' : 'completed',
+            amountPaid: updatedSale.amountPaid,
+            balanceDue: updatedSale.balanceDue,
+            creditStatus: updatedSale.creditStatus,
+            creditPayments: updatedSale.creditPayments,
+            updatedAt: nowTs,
+          }),
+          { merge: true }
+        ),
+        2500
+      );
+    } catch (error) {
+      if (isQuotaOrNetworkError(error)) {
+        console.warn('Credit payment saved in local cache & hub; cloud sync deferred:', error);
+      } else {
+        handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+      }
     }
-    handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
-  }
+  })();
+
+  await Promise.all([hubPromise, fsPromise]);
+  return updatedSale;
 }
 
 export async function updateSaleInFirestore(
@@ -5487,22 +5584,31 @@ export async function updateSaleInFirestore(
     id: originalSale.id,
     ...payload,
   };
+  trackRecentLocalSale(finalEditedRecord, slug);
   const prevSales = getCachedSales(slug) || [];
-  setCachedSales(
-    prevSales.map((s) => (s.id === originalSale.id ? finalEditedRecord : s)),
-    slug
+  const nextSalesList = prevSales.map((s) => (s.id === originalSale.id ? finalEditedRecord : s));
+  setCachedSales(nextSalesList, slug);
+  saveSalesToIndexedDB(nextSalesList, slug).catch(() => {});
+  const hubEditPromise = racePromiseWithTimeout(
+    syncCollectionsWithBackendHub({ sales: [finalEditedRecord] }, slug),
+    2000,
+    null
   );
-  syncCollectionsWithBackendHub({ sales: [finalEditedRecord] }, slug).catch(() => {});
 
-  try {
-    await setDoc(saleRef, stripUndefinedDeep(payload), { merge: true });
-  } catch (error) {
-    if (isQuotaOrNetworkError(error)) {
-      console.warn('Sale update saved in local cache; cloud sync deferred:', error);
-    } else {
-      handleFirestoreError(error, OperationType.UPDATE, `sales/${originalSale.id}`);
+  const fsEditPromise = (async () => {
+    if (isFirestoreQuotaExhausted()) return;
+    try {
+      await withFirestoreTimeout(setDoc(saleRef, stripUndefinedDeep(payload), { merge: true }), 2500);
+    } catch (error) {
+      if (isQuotaOrNetworkError(error)) {
+        console.warn('Sale update saved in local cache & hub; cloud sync deferred:', error);
+      } else {
+        handleFirestoreError(error, OperationType.UPDATE, `sales/${originalSale.id}`);
+      }
     }
-  }
+  })();
+
+  await Promise.all([hubEditPromise, fsEditPromise]);
 
   // Compute stock difference per (code, warehouseId) between originalSale.items and cleanItems
   try {
@@ -5619,12 +5725,16 @@ export async function updateSaleInFirestore(
     }
 
     if (hubAdjustedProducts.length > 0) {
-      pushProductSaveToBackendHub(undefined, undefined, slug, hubAdjustedProducts).catch(() => {});
+      await racePromiseWithTimeout(
+        pushProductSaveToBackendHub(undefined, undefined, slug, hubAdjustedProducts),
+        2000,
+        undefined
+      );
     }
 
-    if (finalPayloadsByDocId.size > 0) {
+    if (finalPayloadsByDocId.size > 0 && !isFirestoreQuotaExhausted()) {
       await touchInventorySyncStamp(batch, slug);
-      await batch.commit();
+      await withFirestoreTimeout(batch.commit(), 2500);
     }
   } catch (invErr) {
     console.warn('Warning adjusting inventory stock on sale edit:', invErr);
@@ -5643,34 +5753,46 @@ export async function cancelSaleInFirestore(
 
   const nowTs = Date.now();
   const cancelledRecord: SaleRecord = { ...sale, status: 'cancelled', updatedAt: nowTs };
+  trackRecentLocalSale(cancelledRecord, slug);
   const prevSales = getCachedSales(slug) || [];
-  setCachedSales(
-    prevSales.map((s) => (s.id === sale.id ? cancelledRecord : s)),
-    slug
+  const nextSalesList = prevSales.map((s) => (s.id === sale.id ? cancelledRecord : s));
+  setCachedSales(nextSalesList, slug);
+  saveSalesToIndexedDB(nextSalesList, slug).catch(() => {});
+  const hubCancelPromise = racePromiseWithTimeout(
+    syncCollectionsWithBackendHub({ sales: [cancelledRecord] }, slug),
+    2000,
+    null
   );
-  syncCollectionsWithBackendHub({ sales: [cancelledRecord] }, slug).catch(() => {});
 
-  try {
-    await setDoc(
-      saleRef,
-      stripUndefinedDeep({
-        saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
-        timestamp: Number(sale.timestamp) || nowTs,
-        date: String(sale.date || '').slice(0, 100),
-        items: Array.isArray(sale.items) ? sale.items : [],
-        total: Number(sale.total) || 0,
-        status: 'cancelled',
-        updatedAt: nowTs,
-      }),
-      { merge: true }
-    );
-  } catch (error) {
-    if (isQuotaOrNetworkError(error)) {
-      console.warn('Sale cancellation saved in local cache; cloud sync deferred:', error);
-    } else {
-      handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+  const fsCancelPromise = (async () => {
+    if (isFirestoreQuotaExhausted()) return;
+    try {
+      await withFirestoreTimeout(
+        setDoc(
+          saleRef,
+          stripUndefinedDeep({
+            saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
+            timestamp: Number(sale.timestamp) || nowTs,
+            date: String(sale.date || '').slice(0, 100),
+            items: Array.isArray(sale.items) ? sale.items : [],
+            total: Number(sale.total) || 0,
+            status: 'cancelled',
+            updatedAt: nowTs,
+          }),
+          { merge: true }
+        ),
+        2500
+      );
+    } catch (error) {
+      if (isQuotaOrNetworkError(error)) {
+        console.warn('Sale cancellation saved in local cache & hub; cloud sync deferred:', error);
+      } else {
+        handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+      }
     }
-  }
+  })();
+
+  await Promise.all([hubCancelPromise, fsCancelPromise]);
 
   if (!sale.skipInventoryDeduction && !sale.isHistoricalPreApp) {
     try {
@@ -5746,12 +5868,16 @@ export async function cancelSaleInFirestore(
       }
 
       if (hubRestoredProducts.length > 0) {
-        pushProductSaveToBackendHub(undefined, undefined, slug, hubRestoredProducts).catch(() => {});
+        await racePromiseWithTimeout(
+          pushProductSaveToBackendHub(undefined, undefined, slug, hubRestoredProducts),
+          2000,
+          undefined
+        );
       }
 
-      if (finalPayloadsByDocId.size > 0) {
+      if (finalPayloadsByDocId.size > 0 && !isFirestoreQuotaExhausted()) {
         await touchInventorySyncStamp(batch, slug);
-        await batch.commit();
+        await withFirestoreTimeout(batch.commit(), 2500);
       }
     } catch (invError) {
       console.warn('Warning restoring stock on sale cancel:', invError);
@@ -5769,34 +5895,46 @@ export async function restoreCancelledSaleInFirestore(
 
   const nowTs = Date.now();
   const restoredRecord: SaleRecord = { ...sale, status: 'completed', updatedAt: nowTs };
+  trackRecentLocalSale(restoredRecord, slug);
   const prevSales = getCachedSales(slug) || [];
-  setCachedSales(
-    prevSales.map((s) => (s.id === sale.id ? restoredRecord : s)),
-    slug
+  const nextSalesList = prevSales.map((s) => (s.id === sale.id ? restoredRecord : s));
+  setCachedSales(nextSalesList, slug);
+  saveSalesToIndexedDB(nextSalesList, slug).catch(() => {});
+  const hubRestorePromise = racePromiseWithTimeout(
+    syncCollectionsWithBackendHub({ sales: [restoredRecord] }, slug),
+    2000,
+    null
   );
-  syncCollectionsWithBackendHub({ sales: [restoredRecord] }, slug).catch(() => {});
 
-  try {
-    await setDoc(
-      saleRef,
-      stripUndefinedDeep({
-        saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
-        timestamp: Number(sale.timestamp) || nowTs,
-        date: String(sale.date || '').slice(0, 100),
-        items: Array.isArray(sale.items) ? sale.items : [],
-        total: Number(sale.total) || 0,
-        status: 'completed',
-        updatedAt: nowTs,
-      }),
-      { merge: true }
-    );
-  } catch (error) {
-    if (isQuotaOrNetworkError(error)) {
-      console.warn('Sale restoration saved in local cache; cloud sync deferred:', error);
-    } else {
-      handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+  const fsRestorePromise = (async () => {
+    if (isFirestoreQuotaExhausted()) return;
+    try {
+      await withFirestoreTimeout(
+        setDoc(
+          saleRef,
+          stripUndefinedDeep({
+            saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
+            timestamp: Number(sale.timestamp) || nowTs,
+            date: String(sale.date || '').slice(0, 100),
+            items: Array.isArray(sale.items) ? sale.items : [],
+            total: Number(sale.total) || 0,
+            status: 'completed',
+            updatedAt: nowTs,
+          }),
+          { merge: true }
+        ),
+        2500
+      );
+    } catch (error) {
+      if (isQuotaOrNetworkError(error)) {
+        console.warn('Sale restoration saved in local cache & hub; cloud sync deferred:', error);
+      } else {
+        handleFirestoreError(error, OperationType.UPDATE, `sales/${sale.id}`);
+      }
     }
-  }
+  })();
+
+  await Promise.all([hubRestorePromise, fsRestorePromise]);
 
   if (!sale.skipInventoryDeduction && !sale.isHistoricalPreApp) {
     try {
@@ -5872,12 +6010,16 @@ export async function restoreCancelledSaleInFirestore(
       }
 
       if (hubDeductedProducts.length > 0) {
-        pushProductSaveToBackendHub(undefined, undefined, slug, hubDeductedProducts).catch(() => {});
+        await racePromiseWithTimeout(
+          pushProductSaveToBackendHub(undefined, undefined, slug, hubDeductedProducts),
+          2000,
+          undefined
+        );
       }
 
-      if (finalPayloadsByDocId.size > 0) {
+      if (finalPayloadsByDocId.size > 0 && !isFirestoreQuotaExhausted()) {
         await touchInventorySyncStamp(batch, slug);
-        await batch.commit();
+        await withFirestoreTimeout(batch.commit(), 2500);
       }
     } catch (invError) {
       console.warn('Warning deducting stock on sale restore:', invError);
@@ -5892,19 +6034,24 @@ export async function deleteSaleFromFirestore(
   companyId = getActiveCompanyId()
 ): Promise<void> {
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  clearRecentLocalSale(saleId, slug);
   markSaleDeletedLocally(saleId, slug);
   const prevSales = getCachedSales(slug) || [];
   const filteredSales = prevSales.filter((s) => s.id !== saleId);
   setCachedSales(filteredSales, slug);
   await saveSalesToIndexedDB(filteredSales, slug).catch(() => {});
-  await syncCollectionsWithBackendHub({ deleteSaleId: saleId }, slug).catch(() => null);
+  await racePromiseWithTimeout(
+    syncCollectionsWithBackendHub({ deleteSaleId: saleId }, slug),
+    2000,
+    null
+  );
 
   if (isFirestoreQuotaExhausted()) {
     return;
   }
 
   try {
-    await deleteDoc(doc(db, 'sales', saleId));
+    await withFirestoreTimeout(deleteDoc(doc(db, 'sales', saleId)), 2500);
   } catch (error) {
     if (isQuotaOrNetworkError(error)) {
       console.warn('Sale deletion deferred due to quota/network:', error);
@@ -5998,12 +6145,16 @@ export async function deleteSaleAccountInFirestore(
       }
 
       if (hubDeletedSaleProducts.length > 0) {
-        pushProductSaveToBackendHub(undefined, undefined, slug, hubDeletedSaleProducts).catch(() => {});
+        await racePromiseWithTimeout(
+          pushProductSaveToBackendHub(undefined, undefined, slug, hubDeletedSaleProducts),
+          2000,
+          undefined
+        );
       }
 
-      if (finalPayloadsByDocId.size > 0) {
+      if (finalPayloadsByDocId.size > 0 && !isFirestoreQuotaExhausted()) {
         await touchInventorySyncStamp(batch, slug);
-        await batch.commit();
+        await withFirestoreTimeout(batch.commit(), 2500);
       }
     } catch (invError) {
       console.warn('Warning restoring stock on sale delete:', invError);
@@ -8550,34 +8701,42 @@ export async function savePOSFinanceDataToFirestore(
   };
 
   setCachedPOSFinanceData(normalized, slug);
-  syncCollectionsWithBackendHub({ posFinance: normalized }, slug).catch(() => {});
+  const hubPromise = racePromiseWithTimeout(
+    syncCollectionsWithBackendHub({ posFinance: normalized }, slug),
+    2000,
+    null
+  );
 
   if (isFirestoreQuotaExhausted()) {
+    await hubPromise;
     return normalized;
   }
 
   try {
-    await withFirestoreTimeout(
-      setDoc(
-        docRef,
-        stripUndefinedDeep({
-          storeName: `Finanzas POS ${slug}`.slice(0, 190), // satisfies isValidStoreSettings
-          companyId: slug,
-          shifts: normalized.shifts,
-          expenses: normalized.expenses,
-          creditAccountControls: normalized.creditAccountControls,
-          routeCollectorConfig: normalized.routeCollectorConfig,
-          routeCollectorAlerts: normalized.routeCollectorAlerts,
-          onlineCustomers: normalized.onlineCustomers,
-          loyaltyConfig: normalized.loyaltyConfig,
-          loyaltyCustomers: normalized.loyaltyCustomers,
-          quotations: normalized.quotations,
-          updatedAt: normalized.updatedAt,
-        }),
-        { merge: true }
+    await Promise.all([
+      hubPromise,
+      withFirestoreTimeout(
+        setDoc(
+          docRef,
+          stripUndefinedDeep({
+            storeName: `Finanzas POS ${slug}`.slice(0, 190), // satisfies isValidStoreSettings
+            companyId: slug,
+            shifts: normalized.shifts,
+            expenses: normalized.expenses,
+            creditAccountControls: normalized.creditAccountControls,
+            routeCollectorConfig: normalized.routeCollectorConfig,
+            routeCollectorAlerts: normalized.routeCollectorAlerts,
+            onlineCustomers: normalized.onlineCustomers,
+            loyaltyConfig: normalized.loyaltyConfig,
+            loyaltyCustomers: normalized.loyaltyCustomers,
+            quotations: normalized.quotations,
+            updatedAt: normalized.updatedAt,
+          }),
+          { merge: true }
+        ),
+        2000
       ),
-      2000
-    );
+    ]);
     return normalized;
   } catch (error) {
     if (isQuotaOrNetworkError(error) || String(error).includes('timed out')) {

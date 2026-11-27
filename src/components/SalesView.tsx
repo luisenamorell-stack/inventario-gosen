@@ -2364,14 +2364,18 @@ export const SalesView: React.FC<SalesViewProps> = ({
             )
           : posFinanceData.quotations;
 
-        await onSavePOSFinanceData({
-          ...posFinanceData,
-          loyaltyCustomers: updatedCustomersList,
-          creditAccountControls: nextControls,
-          ...(nextQuotations ? { quotations: nextQuotations } : {}),
-          ...(nextRouteConfig ? { routeCollectorConfig: nextRouteConfig } : {}),
-          updatedAt: nowMs,
-        });
+        try {
+          await onSavePOSFinanceData({
+            ...posFinanceData,
+            loyaltyCustomers: updatedCustomersList,
+            creditAccountControls: nextControls,
+            ...(nextQuotations ? { quotations: nextQuotations } : {}),
+            ...(nextRouteConfig ? { routeCollectorConfig: nextRouteConfig } : {}),
+            updatedAt: nowMs,
+          });
+        } catch (posFinErr) {
+          console.warn('Warning saving post-sale POS finance metadata:', posFinErr);
+        }
       }
 
       setCompletedSale(recorded);

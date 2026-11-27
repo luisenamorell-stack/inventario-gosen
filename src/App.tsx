@@ -1599,7 +1599,16 @@ export const App: React.FC = () => {
             (snap.deletedSaleIds?.length || 0) > 0)
         ) {
           if (isCloudAuthoritative) {
-            setSales(snap.sales);
+            setSales((prev) => {
+              const nowMs = Date.now();
+              const recentLocal = prev.filter((s) => {
+                if (!s?.id || delSalesSet.has(s.id)) return false;
+                const ts = Number(s.updatedAt || s.timestamp || 0);
+                return ts > 0 && nowMs - ts < 90_000;
+              });
+              if (recentLocal.length === 0) return snap.sales || [];
+              return mergeSalesUnion(recentLocal, snap.sales || [], delSalesSet);
+            });
           } else {
             setSales((prev) => mergeSalesUnion(prev, snap.sales || [], delSalesSet));
           }
@@ -2696,7 +2705,6 @@ export const App: React.FC = () => {
       if (updatedByCode.size > 0) {
         updatedByCode.forEach((updatedProd) => {
           recordLocalProductSave(updatedProd, updatedProd.code, activeCompanyId);
-          pushProductSaveToBackendHub(updatedProd, updatedProd.code, activeCompanyId).catch(() => {});
         });
 
         // Update local inventory stock & warehouseStocks & cache idempotently

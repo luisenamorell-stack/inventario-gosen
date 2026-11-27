@@ -2126,11 +2126,12 @@ async function hydrateTenantDataFromFirestoreRest(
         }
       }
 
+      const SALES_IN_FLIGHT_WRITE_GRACE_MS = 10 * 60 * 1000;
       if (salesQuery.ok && fsSaleIds.size > 0) {
         for (const [saleId, prev] of Object.entries(tenant.sales)) {
           if (fsSaleIds.has(saleId)) continue;
           const prevTs = Number(prev?.updatedAt || prev?.timestamp || 0);
-          if (prevTs > 0 && reconcileNow - prevTs < IN_FLIGHT_WRITE_GRACE_MS) continue;
+          if (prevTs > 0 && reconcileNow - prevTs < SALES_IN_FLIGHT_WRITE_GRACE_MS) continue;
           delete tenant.sales[saleId];
           if (!deletedSaleSet.has(saleId)) {
             deletedSaleSet.add(saleId);
