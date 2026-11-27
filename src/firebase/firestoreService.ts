@@ -2554,9 +2554,11 @@ export async function fetchAuthoritativeHubSnapshot(
     }
 
     const hasServerState = Number(data.updatedAt || 0) > 0;
+    const isCloudAuthoritative = Boolean(data.hydratedFromCloud);
     const explicitScopes = new Set(Array.isArray(scopes) ? scopes : []);
 
-    // Non-destructive bidirectional union for inventory: NEVER drop valid local/Firestore items missing on server
+    // When server has hydrated from live Firestore Cloud, treat server snapshot as the exact single source of truth
+    // (preserving only genuinely unsynced local mutations via applyPendingMutationsToInventory, never resurrecting stale localStorage zombies)
     if (Array.isArray(data.inventory)) {
       for (const srvItem of data.inventory) {
         const ck = (srvItem.code || '').trim().toLowerCase();
@@ -2574,34 +2576,20 @@ export async function fetchAuthoritativeHubSnapshot(
         (mut.deletedIds || []).map((id) => String(id || '').trim()).filter(Boolean)
       );
 
-      const idbInv = await loadInventoryFromIndexedDB(slug).catch(() => null);
-      const lsInv = getCachedInventory(slug) || [];
-      const localBaseInv = mergeInventoryUnion(lsInv, idbInv || [], deletedCodesSet, deletedIdsSet);
-
-      const serverCodeMap = new Map<string, Product>();
-      for (const srvItem of data.inventory) {
-        const ck = (srvItem.code || '').trim().toLowerCase();
-        if (ck) serverCodeMap.set(ck, srvItem);
+      let mergedInv: Product[];
+      if (isCloudAuthoritative) {
+        mergedInv = applyPendingMutationsToInventory(data.inventory, slug, true);
+      } else {
+        const idbInv = await loadInventoryFromIndexedDB(slug).catch(() => null);
+        const lsInv = getCachedInventory(slug) || [];
+        const localBaseInv = mergeInventoryUnion(lsInv, idbInv || [], deletedCodesSet, deletedIdsSet);
+        mergedInv = applyPendingMutationsToInventory(
+          mergeInventoryUnion(localBaseInv, data.inventory, deletedCodesSet, deletedIdsSet),
+          slug,
+          true
+        );
       }
-
-      const mergedInv = applyPendingMutationsToInventory(
-        mergeInventoryUnion(localBaseInv, data.inventory, deletedCodesSet, deletedIdsSet),
-        slug,
-        true
-      );
       data.inventory = mergedInv;
-
-      // Push any valid non-deleted local items missing from server up to the Hub so other devices receive them
-      const missingOnServer = localBaseInv.filter((localItem) => {
-        const ck = (localItem.code || '').trim().toLowerCase();
-        if (!ck || deletedCodesSet.has(ck)) return false;
-        const srv = serverCodeMap.get(ck);
-        if (!srv) return true;
-        return Number(localItem.updatedAt || 0) > Number(srv.updatedAt || 0);
-      });
-      if (missingOnServer.length > 0 && missingOnServer.length <= 500) {
-        pushProductSaveToBackendHub(undefined, undefined, slug, missingOnServer).catch(() => {});
-      }
 
       if (
         hasServerState &&
@@ -2615,27 +2603,16 @@ export async function fetchAuthoritativeHubSnapshot(
 
     if (Array.isArray(data.sales)) {
       const deletedSet = getLocallyDeletedSaleIds(slug);
-      const cachedSales = getCachedSales(slug) || [];
-      const serverSalesMap = new Map<string, SaleRecord>();
-      for (const s of data.sales) {
-        if (s && s.id) serverSalesMap.set(s.id, s);
+      let cleanSales: SaleRecord[];
+      if (isCloudAuthoritative) {
+        cleanSales = data.sales
+          .filter((s) => s && s.id && !deletedSet.has(s.id))
+          .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+      } else {
+        const cachedSales = getCachedSales(slug) || [];
+        cleanSales = mergeSalesUnion(cachedSales, data.sales, deletedSet);
       }
-
-      const cleanSales = mergeSalesUnion(cachedSales, data.sales, deletedSet);
       data.sales = cleanSales;
-
-      const missingOrNewerLocalSales = cachedSales.filter((localSale) => {
-        if (!localSale || !localSale.id || deletedSet.has(localSale.id)) return false;
-        const srv = serverSalesMap.get(localSale.id);
-        if (!srv) return true;
-        const lPay = Array.isArray(localSale.creditPayments) ? localSale.creditPayments.length : 0;
-        const sPay = Array.isArray(srv.creditPayments) ? srv.creditPayments.length : 0;
-        if (lPay > sPay) return true;
-        return Number(localSale.updatedAt || 0) > Number(srv.updatedAt || 0);
-      });
-      if (missingOrNewerLocalSales.length > 0) {
-        syncCollectionsWithBackendHub({ sales: missingOrNewerLocalSales }, slug).catch(() => {});
-      }
 
       if (
         hasServerState &&
@@ -2653,38 +2630,16 @@ export async function fetchAuthoritativeHubSnapshot(
       const mergedPos = mergePOSFinanceObjects(slug, cachedPos, sanitizedPos);
       data.posFinance = mergedPos;
       setCachedPOSFinanceData(mergedPos, slug);
-
-      // If local cache had expenses/shifts/controls missing on server, push consolidated state up
-      const srvExpenseIds = new Set((sanitizedPos.expenses || []).map((e) => e.id));
-      const hasMissingLocalExpenses = (cachedPos.expenses || []).some(
-        (e) => e && e.id && !srvExpenseIds.has(e.id)
-      );
-      const srvShiftIds = new Set((sanitizedPos.shifts || []).map((s) => s.id));
-      const hasMissingLocalShifts = (cachedPos.shifts || []).some(
-        (s) => s && s.id && !srvShiftIds.has(s.id)
-      );
-      const srvCtrlKeys = new Set(Object.keys(sanitizedPos.creditAccountControls || {}));
-      const hasMissingLocalCtrls = Object.keys(cachedPos.creditAccountControls || {}).some(
-        (k) => !srvCtrlKeys.has(k)
-      );
-      if (hasMissingLocalExpenses || hasMissingLocalShifts || hasMissingLocalCtrls) {
-        syncCollectionsWithBackendHub({ posFinance: mergedPos }, slug).catch(() => {});
-      }
     }
 
     if (Array.isArray(data.purchases)) {
       const delPurchases = new Set((data.deletedPurchaseIds || []).map((id) => String(id).trim()));
-      const cachedPurchases = getCachedPurchases(slug) || [];
-      const serverPurchaseIds = new Set(data.purchases.map((p) => p?.id).filter(Boolean));
-      const cleanPurchases = mergePurchasesUnion(cachedPurchases, data.purchases, delPurchases);
+      const cleanPurchases = isCloudAuthoritative
+        ? data.purchases
+            .filter((p) => p && p.id && !delPurchases.has(p.id))
+            .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0))
+        : mergePurchasesUnion(getCachedPurchases(slug) || [], data.purchases, delPurchases);
       data.purchases = cleanPurchases;
-
-      const missingLocalPurchases = cachedPurchases.filter(
-        (p) => p && p.id && !delPurchases.has(p.id) && !serverPurchaseIds.has(p.id)
-      );
-      if (missingLocalPurchases.length > 0) {
-        syncCollectionsWithBackendHub({ purchases: missingLocalPurchases }, slug).catch(() => {});
-      }
 
       if (
         hasServerState &&
@@ -2698,17 +2653,12 @@ export async function fetchAuthoritativeHubSnapshot(
 
     if (Array.isArray(data.suppliers)) {
       const delSuppliers = new Set((data.deletedSupplierIds || []).map((id) => String(id).trim()));
-      const cachedSuppliers = getCachedSuppliers(slug) || [];
-      const serverSupplierIds = new Set(data.suppliers.map((s) => s?.id).filter(Boolean));
-      const cleanSuppliers = mergeSuppliersUnion(cachedSuppliers, data.suppliers, delSuppliers);
+      const cleanSuppliers = isCloudAuthoritative
+        ? data.suppliers
+            .filter((s) => s && s.id && !delSuppliers.has(s.id))
+            .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' }))
+        : mergeSuppliersUnion(getCachedSuppliers(slug) || [], data.suppliers, delSuppliers);
       data.suppliers = cleanSuppliers;
-
-      const missingLocalSuppliers = cachedSuppliers.filter(
-        (s) => s && s.id && !delSuppliers.has(s.id) && !serverSupplierIds.has(s.id)
-      );
-      if (missingLocalSuppliers.length > 0) {
-        syncCollectionsWithBackendHub({ suppliers: missingLocalSuppliers }, slug).catch(() => {});
-      }
 
       if (
         hasServerState &&
@@ -2721,17 +2671,12 @@ export async function fetchAuthoritativeHubSnapshot(
     }
 
     if (Array.isArray(data.auditHistory)) {
-      const cachedAudit = getCachedAuditHistory(slug) || [];
-      const serverAuditIds = new Set(data.auditHistory.map((a) => a?.id).filter(Boolean));
-      const cleanAudit = mergeAuditHistoryUnion(cachedAudit, data.auditHistory);
+      const cleanAudit = isCloudAuthoritative
+        ? [...data.auditHistory].sort(
+            (a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0)
+          )
+        : mergeAuditHistoryUnion(getCachedAuditHistory(slug) || [], data.auditHistory);
       data.auditHistory = cleanAudit;
-
-      const missingLocalAudit = cachedAudit.filter(
-        (a) => a && a.id && !serverAuditIds.has(a.id)
-      );
-      if (missingLocalAudit.length > 0) {
-        syncCollectionsWithBackendHub({ auditHistory: missingLocalAudit }, slug).catch(() => {});
-      }
 
       if (hasServerState && (cleanAudit.length > 0 || explicitScopes.has('auditHistory'))) {
         setCachedAuditHistory(cleanAudit, slug);
@@ -3141,10 +3086,18 @@ export function subscribeToInventory(
       const isFromServer = !snapshot.metadata?.fromCache;
       const items = parseInventorySnapshotDocs(snapshot, slug, isFromServer);
       setCachedInventory(items, undefined, slug);
-      if (isFromServer) {
-        syncInventoryWithBackendHub(items, slug).catch(() => {});
-      }
       onData(items);
+      if (isFromServer) {
+        syncInventoryWithBackendHub(items, slug)
+          .then((hubItems) => {
+            if (hubItems && hubItems.length > 0) {
+              const cleanHub = applyPendingMutationsToInventory(hubItems, slug, true);
+              setCachedInventory(cleanHub, undefined, slug);
+              onData(cleanHub);
+            }
+          })
+          .catch(() => {});
+      }
     },
     async (error) => {
       isQuotaOrNetworkError(error);

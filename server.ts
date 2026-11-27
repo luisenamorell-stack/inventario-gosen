@@ -1387,7 +1387,9 @@ function fromFirestoreRestValue(val: any): any {
   return undefined;
 }
 
-function parseFirestoreRestDoc(docObj: any): { id: string; data: Record<string, any> } | null {
+function parseFirestoreRestDoc(
+  docObj: any
+): { id: string; data: Record<string, any>; updateTimeMs: number } | null {
   if (!docObj || typeof docObj !== 'object' || !docObj.name) return null;
   const id = String(docObj.name).split('/').pop() || '';
   const data: Record<string, any> = {};
@@ -1397,7 +1399,9 @@ function parseFirestoreRestDoc(docObj: any): { id: string; data: Record<string, 
       data[k] = fromFirestoreRestValue(v);
     }
   }
-  return { id, data };
+  const parsedTime = docObj.updateTime ? Date.parse(String(docObj.updateTime)) : 0;
+  const updateTimeMs = Number.isFinite(parsedTime) && parsedTime > 0 ? parsedTime : 0;
+  return { id, data, updateTimeMs };
 }
 
 let lastFirestoreAuthHydrationAt = 0;
@@ -1829,27 +1833,80 @@ async function hydrateTenantDataFromFirestoreRest(
   const base = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents`;
   const keyQs = fbKey ? `?key=${encodeURIComponent(fbKey)}` : '';
 
-  const fetchAllCollectionDocs = async (colName: string, maxDocs = 3000) => {
+  const GYG_COMPANY_ID_VARIANTS = [
+    'tiendagyg',
+    'comercial-gyg',
+    'comercialgyg',
+    'comercial_gyg',
+    'gyg',
+    'GYG',
+    'tienda-gyg',
+    'tienda_gyg',
+    'comercial gyg',
+    'Comercial GYG',
+    'Comercial GyG',
+    'COMERCIAL GYG',
+    'Comercial-GYG',
+    'comercial-GYG',
+    'COMERCIAL-GYG',
+    'Tienda GYG',
+    'Tienda GyG',
+    'TIENDA GYG',
+    'TIENDAGYG',
+    'comercialgyghn',
+  ];
+
+  const fetchTenantCollectionDocs = async (
+    colName: string,
+    maxDocs = 4000
+  ): Promise<{ ok: boolean; docs: any[] }> => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 9000);
+    const timer = setTimeout(() => controller.abort(), 9500);
     try {
+      const structuredQuery: Record<string, any> = {
+        from: [{ collectionId: colName }],
+        limit: maxDocs,
+      };
+      if (isServerGyGAlias(slug)) {
+        structuredQuery.where = {
+          fieldFilter: {
+            field: { fieldPath: 'companyId' },
+            op: 'IN',
+            value: {
+              arrayValue: {
+                values: GYG_COMPANY_ID_VARIANTS.map((v) => ({ stringValue: v })),
+              },
+            },
+          },
+        };
+      } else if (slug !== 'gosen') {
+        const variants = Array.from(new Set([slug, targetSlug].filter(Boolean)));
+        structuredQuery.where = {
+          fieldFilter: {
+            field: { fieldPath: 'companyId' },
+            op: 'IN',
+            value: {
+              arrayValue: {
+                values: variants.map((v) => ({ stringValue: v })),
+              },
+            },
+          },
+        };
+      }
+
       const resp = await fetch(`${base}:runQuery${keyQs}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          structuredQuery: {
-            from: [{ collectionId: colName }],
-            limit: maxDocs,
-          },
-        }),
+        body: JSON.stringify({ structuredQuery }),
         signal: controller.signal,
       });
-      if (!resp.ok) return [];
+      if (!resp.ok) return { ok: false, docs: [] };
       const json: any = await resp.json();
-      if (!Array.isArray(json)) return [];
-      return json.filter((row: any) => row && row.document).map((row: any) => row.document);
+      if (!Array.isArray(json)) return { ok: false, docs: [] };
+      const docs = json.filter((row: any) => row && row.document).map((row: any) => row.document);
+      return { ok: true, docs };
     } catch {
-      return [];
+      return { ok: false, docs: [] };
     } finally {
       clearTimeout(timer);
     }
@@ -1895,27 +1952,36 @@ async function hydrateTenantDataFromFirestoreRest(
         : [slug === 'gosen' ? 'restaurant_gosen' : `restaurant_${slug}`];
 
       const [
-        invDocs,
-        salesDocs,
-        purchaseDocs,
-        supplierDocs,
-        auditDocs,
+        invQuery,
+        salesQuery,
+        purchaseQuery,
+        supplierQuery,
+        auditQuery,
         posDocs,
         whDocs,
         restDocs,
       ] = await Promise.all([
-        fetchAllCollectionDocs('inventory', 4000),
-        fetchAllCollectionDocs('sales', 3000),
-        fetchAllCollectionDocs('purchases', 2000),
-        fetchAllCollectionDocs('suppliers', 1000),
-        fetchAllCollectionDocs('audit_history', 1000),
+        fetchTenantCollectionDocs('inventory', slug === 'gosen' ? 6000 : 4000),
+        fetchTenantCollectionDocs('sales', 3000),
+        fetchTenantCollectionDocs('purchases', 2000),
+        fetchTenantCollectionDocs('suppliers', 1000),
+        fetchTenantCollectionDocs('audit_history', 1000),
         Promise.all(posFinanceDocIds.map((id) => fetchDocById('settings', id))),
         Promise.all(warehouseDocIds.map((id) => fetchDocById('settings', id))),
         Promise.all(restaurantDocIds.map((id) => fetchDocById('settings', id))),
       ]);
 
+      const invDocs = invQuery.docs;
+      const salesDocs = salesQuery.docs;
+      const purchaseDocs = purchaseQuery.docs;
+      const supplierDocs = supplierQuery.docs;
+      const auditDocs = auditQuery.docs;
+
       const tenant = getTenantStore(slug);
       let changed = false;
+      const changedScopes = new Set<string>();
+      const reconcileNow = Date.now();
+      const IN_FLIGHT_WRITE_GRACE_MS = 60_000;
 
       const explicitDeletedInv = new Set(
         (tenant.explicitDeletedCodes || []).map((c) => String(c || '').trim().toLowerCase())
@@ -1930,7 +1996,8 @@ async function hydrateTenantDataFromFirestoreRest(
         (tenant.deletedSupplierIds || []).map((id) => String(id || '').trim())
       );
 
-      // 1. Hydrate Inventory (union all Comercial GYG aliases + prefix-only docs)
+      // 1. Reconcile Inventory with Firestore (using authoritative Firestore updateTimeMs + pruning deleted zombies)
+      const fsInvCodeKeys = new Set<string>();
       for (const rawDoc of invDocs) {
         const parsed = parseFirestoreRestDoc(rawDoc);
         if (!parsed) continue;
@@ -1942,8 +2009,11 @@ async function hydrateTenantDataFromFirestoreRest(
         const name = String(parsed.data.name || '').trim();
         if (!code || !name) continue;
         const codeKey = code.toLowerCase();
-        if (!isSafeRecordKey(codeKey) || explicitDeletedInv.has(codeKey)) continue;
+        if (!isSafeRecordKey(codeKey)) continue;
+        fsInvCodeKeys.add(codeKey);
+        if (explicitDeletedInv.has(codeKey)) continue;
 
+        const fsEffectiveTs = Math.max(Number(parsed.data.updatedAt) || 0, parsed.updateTimeMs || 0);
         const fsItem = {
           ...parsed.data,
           id: parsed.id,
@@ -1951,106 +2021,206 @@ async function hydrateTenantDataFromFirestoreRest(
           code,
           name,
           category: String(parsed.data.category || 'Otros').trim(),
+          supplier: String(parsed.data.supplier || '').trim(),
+          size: String(parsed.data.size || '').trim(),
           cost: Number(parsed.data.cost) || 0,
           price: Number(parsed.data.price) || 0,
           stock: Number(parsed.data.stock) || 0,
           img: parsed.data.img || '',
-          updatedAt: Number(parsed.data.updatedAt) || 0,
+          updatedAt: fsEffectiveTs,
         };
         const prev = tenant.inventory[codeKey];
         if (!prev) {
           tenant.inventory[codeKey] = fsItem;
           changed = true;
+          changedScopes.add('inventory');
         } else {
-          const fsTs = Number(fsItem.updatedAt || 0);
           const prevTs = Number(prev.updatedAt || 0);
-          if (fsTs > prevTs) {
-            tenant.inventory[codeKey] = {
+          if (fsEffectiveTs > prevTs || prevTs === 0) {
+            const nextItem = {
               ...prev,
               ...fsItem,
               img: fsItem.img || prev.img || '',
               img2: fsItem.img2 || prev.img2 || undefined,
+              updatedAt: Math.max(fsEffectiveTs, prevTs),
             };
-            changed = true;
+            if (
+              Number(nextItem.stock) !== Number(prev.stock) ||
+              Number(nextItem.cost) !== Number(prev.cost) ||
+              Number(nextItem.price) !== Number(prev.price) ||
+              nextItem.name !== prev.name ||
+              nextItem.category !== prev.category ||
+              nextItem.img !== prev.img ||
+              Number(nextItem.updatedAt) !== Number(prev.updatedAt)
+            ) {
+              tenant.inventory[codeKey] = nextItem;
+              changed = true;
+              changedScopes.add('inventory');
+            }
           } else if (!prev.img && fsItem.img) {
             tenant.inventory[codeKey] = { ...prev, img: fsItem.img };
             changed = true;
+            changedScopes.add('inventory');
           }
         }
       }
 
-      // 2. Hydrate Sales (union all aliases, never losing newer abonos)
+      // Prune stale zombie inventory records that no longer exist in live Firestore
+      if (invQuery.ok && fsInvCodeKeys.size > 0) {
+        for (const [codeKey, prev] of Object.entries(tenant.inventory)) {
+          if (fsInvCodeKeys.has(codeKey)) continue;
+          const prevTs = Number(prev?.updatedAt || 0);
+          // Only keep if created/modified within the last 60s (in-flight write not yet flushed to Firestore)
+          if (prevTs > 0 && reconcileNow - prevTs < IN_FLIGHT_WRITE_GRACE_MS) {
+            continue;
+          }
+          delete tenant.inventory[codeKey];
+          if (!explicitDeletedInv.has(codeKey)) {
+            explicitDeletedInv.add(codeKey);
+            tenant.explicitDeletedCodes.push(codeKey);
+          }
+          changed = true;
+          changedScopes.add('inventory');
+        }
+      }
+
+      // 2. Reconcile Sales (using updateTimeMs + preserving richer creditPayments + pruning deleted zombies)
+      const fsSaleIds = new Set<string>();
       for (const rawDoc of salesDocs) {
         const parsed = parseFirestoreRestDoc(rawDoc);
         if (!parsed || !isSafeRecordKey(parsed.id)) continue;
-        if (deletedSaleSet.has(parsed.id)) continue;
         if (!serverDocBelongsToTenant(parsed.data.companyId, parsed.id, slug)) continue;
+        fsSaleIds.add(parsed.id);
+        if (deletedSaleSet.has(parsed.id)) continue;
 
+        const fsEffectiveTs = Math.max(
+          Number(parsed.data.updatedAt || 0),
+          parsed.updateTimeMs || 0,
+          Number(parsed.data.timestamp || 0)
+        );
         const fsSale = {
           ...parsed.data,
           id: parsed.id,
           companyId: slug,
           timestamp: Number(parsed.data.timestamp) || Date.now(),
-          updatedAt: Number(parsed.data.updatedAt || parsed.data.timestamp || 0),
+          updatedAt: fsEffectiveTs,
         };
         const prev = tenant.sales[parsed.id];
         if (!prev) {
           tenant.sales[parsed.id] = fsSale;
           changed = true;
+          changedScopes.add('sales');
         } else {
-          const fsUpd = Number(fsSale.updatedAt || 0);
-          const prevUpd = Number(prev.updatedAt || 0);
+          const prevUpd = Number(prev.updatedAt || prev.timestamp || 0);
           const fsPayLen = Array.isArray(fsSale.creditPayments) ? fsSale.creditPayments.length : 0;
           const prevPayLen = Array.isArray(prev.creditPayments) ? prev.creditPayments.length : 0;
-          if (fsUpd > prevUpd || (fsUpd === prevUpd && fsPayLen > prevPayLen)) {
+          if (fsEffectiveTs > prevUpd || (fsEffectiveTs === prevUpd && fsPayLen > prevPayLen)) {
             tenant.sales[parsed.id] = {
               ...prev,
               ...fsSale,
               creditContract: fsSale.creditContract || prev.creditContract,
             };
             changed = true;
+            changedScopes.add('sales');
           }
         }
       }
 
-      // 3. Hydrate Purchases
+      if (salesQuery.ok && fsSaleIds.size > 0) {
+        for (const [saleId, prev] of Object.entries(tenant.sales)) {
+          if (fsSaleIds.has(saleId)) continue;
+          const prevTs = Number(prev?.updatedAt || prev?.timestamp || 0);
+          if (prevTs > 0 && reconcileNow - prevTs < IN_FLIGHT_WRITE_GRACE_MS) continue;
+          delete tenant.sales[saleId];
+          if (!deletedSaleSet.has(saleId)) {
+            deletedSaleSet.add(saleId);
+            tenant.deletedSaleIds.push(saleId);
+          }
+          changed = true;
+          changedScopes.add('sales');
+        }
+      }
+
+      // 3. Reconcile Purchases
+      const fsPurchaseIds = new Set<string>();
       for (const rawDoc of purchaseDocs) {
         const parsed = parseFirestoreRestDoc(rawDoc);
         if (!parsed || !isSafeRecordKey(parsed.id)) continue;
-        if (deletedPurchaseSet.has(parsed.id)) continue;
         if (!serverDocBelongsToTenant(parsed.data.companyId, parsed.id, slug)) continue;
+        fsPurchaseIds.add(parsed.id);
+        if (deletedPurchaseSet.has(parsed.id)) continue;
 
+        const fsEffectiveTs = Math.max(
+          Number(parsed.data.updatedAt || 0),
+          parsed.updateTimeMs || 0,
+          Number(parsed.data.timestamp || 0)
+        );
         const fsPurchase = {
           ...parsed.data,
           id: parsed.id,
           companyId: slug,
           timestamp: Number(parsed.data.timestamp) || Date.now(),
-          updatedAt: Number(parsed.data.updatedAt || parsed.data.timestamp || 0),
+          updatedAt: fsEffectiveTs,
         };
         const prev = tenant.purchases[parsed.id];
-        if (!prev || Number(fsPurchase.updatedAt || 0) > Number(prev.updatedAt || 0)) {
+        if (!prev || fsEffectiveTs > Number(prev.updatedAt || prev.timestamp || 0)) {
           tenant.purchases[parsed.id] = { ...(prev || {}), ...fsPurchase };
           changed = true;
+          changedScopes.add('purchases');
         }
       }
 
-      // 4. Hydrate Suppliers
+      if (purchaseQuery.ok && fsPurchaseIds.size > 0) {
+        for (const [pid, prev] of Object.entries(tenant.purchases)) {
+          if (fsPurchaseIds.has(pid)) continue;
+          const prevTs = Number(prev?.updatedAt || prev?.timestamp || 0);
+          if (prevTs > 0 && reconcileNow - prevTs < IN_FLIGHT_WRITE_GRACE_MS) continue;
+          delete tenant.purchases[pid];
+          if (!deletedPurchaseSet.has(pid)) {
+            deletedPurchaseSet.add(pid);
+            tenant.deletedPurchaseIds.push(pid);
+          }
+          changed = true;
+          changedScopes.add('purchases');
+        }
+      }
+
+      // 4. Reconcile Suppliers
+      const fsSupplierIds = new Set<string>();
       for (const rawDoc of supplierDocs) {
         const parsed = parseFirestoreRestDoc(rawDoc);
         if (!parsed || !isSafeRecordKey(parsed.id)) continue;
-        if (deletedSupplierSet.has(parsed.id)) continue;
         if (!serverDocBelongsToTenant(parsed.data.companyId, parsed.id, slug)) continue;
+        fsSupplierIds.add(parsed.id);
+        if (deletedSupplierSet.has(parsed.id)) continue;
 
+        const fsEffectiveTs = Math.max(Number(parsed.data.updatedAt || 0), parsed.updateTimeMs || 0);
         const fsSup = {
           ...parsed.data,
           id: parsed.id,
           companyId: slug,
-          updatedAt: Number(parsed.data.updatedAt || 0),
+          updatedAt: fsEffectiveTs,
         };
         const prev = tenant.suppliers[parsed.id];
-        if (!prev || Number(fsSup.updatedAt || 0) > Number(prev.updatedAt || 0)) {
+        if (!prev || fsEffectiveTs > Number(prev.updatedAt || 0)) {
           tenant.suppliers[parsed.id] = { ...(prev || {}), ...fsSup };
           changed = true;
+          changedScopes.add('suppliers');
+        }
+      }
+
+      if (supplierQuery.ok && fsSupplierIds.size > 0) {
+        for (const [sid, prev] of Object.entries(tenant.suppliers)) {
+          if (fsSupplierIds.has(sid)) continue;
+          const prevTs = Number(prev?.updatedAt || 0);
+          if (prevTs > 0 && reconcileNow - prevTs < IN_FLIGHT_WRITE_GRACE_MS) continue;
+          delete tenant.suppliers[sid];
+          if (!deletedSupplierSet.has(sid)) {
+            deletedSupplierSet.add(sid);
+            tenant.deletedSupplierIds.push(sid);
+          }
+          changed = true;
+          changedScopes.add('suppliers');
         }
       }
 
@@ -2075,6 +2245,7 @@ async function hydrateTenantDataFromFirestoreRest(
         if (!tenant.auditHistory[parsed.id]) {
           tenant.auditHistory[parsed.id] = fsAudit;
           changed = true;
+          changedScopes.add('auditHistory');
         }
       }
 
@@ -2086,10 +2257,12 @@ async function hydrateTenantDataFromFirestoreRest(
         const mergedPos = mergeServerPosFinancePair(slug, tenant.posFinance, {
           ...parsed.data,
           companyId: slug,
+          updatedAt: Math.max(Number(parsed.data.updatedAt) || 0, parsed.updateTimeMs || 0),
         });
         if (JSON.stringify(mergedPos) !== JSON.stringify(tenant.posFinance)) {
           tenant.posFinance = mergedPos;
           changed = true;
+          changedScopes.add('posFinance');
         }
       }
 
@@ -2098,11 +2271,12 @@ async function hydrateTenantDataFromFirestoreRest(
         if (!rawWh) continue;
         const parsed = parseFirestoreRestDoc(rawWh);
         if (!parsed) continue;
-        const fsTs = Number(parsed.data.updatedAt || 0);
+        const fsTs = Math.max(Number(parsed.data.updatedAt || 0), parsed.updateTimeMs || 0);
         const prevTs = Number(tenant.warehouses?.updatedAt || 0);
         if (!tenant.warehouses || fsTs > prevTs) {
-          tenant.warehouses = { ...parsed.data, companyId: slug };
+          tenant.warehouses = { ...parsed.data, companyId: slug, updatedAt: fsTs };
           changed = true;
+          changedScopes.add('warehouses');
         }
       }
 
@@ -2110,21 +2284,27 @@ async function hydrateTenantDataFromFirestoreRest(
         if (!rawRest) continue;
         const parsed = parseFirestoreRestDoc(rawRest);
         if (!parsed) continue;
-        const fsTs = Number(parsed.data.updatedAt || 0);
+        const fsTs = Math.max(Number(parsed.data.updatedAt || 0), parsed.updateTimeMs || 0);
         const prevTs = Number(tenant.restaurant?.updatedAt || 0);
         if (!tenant.restaurant || fsTs > prevTs) {
-          tenant.restaurant = { ...parsed.data, companyId: slug };
+          tenant.restaurant = { ...parsed.data, companyId: slug, updatedAt: fsTs };
           changed = true;
+          changedScopes.add('restaurant');
         }
       }
 
       cleanAndDeduplicateTenantInventory(tenant);
-      hydratedTenantTimestamps.set(slug, Date.now());
+      if (invQuery.ok || salesQuery.ok) {
+        hydratedTenantTimestamps.set(slug, Date.now());
+      }
 
       if (changed) {
-        tenant.updatedAt = Math.max(tenant.updatedAt || 0, Date.now());
+        tenant.updatedAt = Math.max((tenant.updatedAt || 0) + 1, Date.now());
         syncDbMemory.updatedAt = tenant.updatedAt;
         schedulePersistSyncDb();
+        if (changedScopes.size > 0) {
+          broadcastTenantSyncEvent(slug, Array.from(changedScopes), tenant.updatedAt);
+        }
       }
     } catch (err) {
       console.warn(`Tenant Firestore REST hydration warning (${slug}):`, err);
@@ -3329,8 +3509,13 @@ app.post('/api/cloud-sync/inventory', requireAuthSession, (req, res) => {
       const existing = tenant.inventory[codeKey];
       const incomingTs = Number(safeItem.updatedAt) || 0;
       const existingTs = Number(existing?.updatedAt) || 0;
+      const isServerCloudHydrated = hydratedTenantTimestamps.has(slug);
 
       if (!existing) {
+        // Prevent stale client caches (non-upsert items) from resurrecting deleted/recoded SKUs once cloud-hydrated
+        if (!isUpsert && !unsyncedSet.has(codeKey) && isServerCloudHydrated) {
+          return;
+        }
         tenant.inventory[codeKey] = {
           ...safeItem,
           id: safeItem.id || `${slug === 'gosen' ? '' : `${slug}__`}${code.replace(/\//g, '_')}`,

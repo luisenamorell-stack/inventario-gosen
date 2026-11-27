@@ -1574,6 +1574,8 @@ export const App: React.FC = () => {
           (snap.deletedSupplierIds || []).map((id) => String(id || '').trim()).filter(Boolean)
         );
 
+        const isCloudAuthoritative = Boolean(snap.hydratedFromCloud);
+
         if (
           srvTs > 0 &&
           Array.isArray(snap.inventory) &&
@@ -1581,9 +1583,13 @@ export const App: React.FC = () => {
             scopeSet.has('inventory') ||
             (snap.explicitDeletedCodes?.length || 0) > 0)
         ) {
-          setInventory((prev) =>
-            mergeInventoryUnion(prev, snap.inventory || [], delCodesSet, delIdsSet)
-          );
+          if (isCloudAuthoritative) {
+            setInventory(snap.inventory);
+          } else {
+            setInventory((prev) =>
+              mergeInventoryUnion(prev, snap.inventory || [], delCodesSet, delIdsSet)
+            );
+          }
         }
         if (
           srvTs > 0 &&
@@ -1592,7 +1598,11 @@ export const App: React.FC = () => {
             scopeSet.has('sales') ||
             (snap.deletedSaleIds?.length || 0) > 0)
         ) {
-          setSales((prev) => mergeSalesUnion(prev, snap.sales || [], delSalesSet));
+          if (isCloudAuthoritative) {
+            setSales(snap.sales);
+          } else {
+            setSales((prev) => mergeSalesUnion(prev, snap.sales || [], delSalesSet));
+          }
         }
         if (snap.posFinance) {
           setPosFinanceData((prev) =>
@@ -1604,7 +1614,11 @@ export const App: React.FC = () => {
           Array.isArray(snap.auditHistory) &&
           (snap.auditHistory.length > 0 || scopeSet.has('auditHistory'))
         ) {
-          setAuditHistory((prev) => mergeAuditHistoryUnion(prev, snap.auditHistory || []));
+          if (isCloudAuthoritative) {
+            setAuditHistory(snap.auditHistory);
+          } else {
+            setAuditHistory((prev) => mergeAuditHistoryUnion(prev, snap.auditHistory || []));
+          }
         }
         if (snap.warehouses) {
           setWarehousesData(snap.warehouses);
@@ -1616,9 +1630,13 @@ export const App: React.FC = () => {
             scopeSet.has('purchases') ||
             (snap.deletedPurchaseIds?.length || 0) > 0)
         ) {
-          setPurchases((prev) =>
-            mergePurchasesUnion(prev, snap.purchases || [], delPurchasesSet)
-          );
+          if (isCloudAuthoritative) {
+            setPurchases(snap.purchases);
+          } else {
+            setPurchases((prev) =>
+              mergePurchasesUnion(prev, snap.purchases || [], delPurchasesSet)
+            );
+          }
         }
         if (
           srvTs > 0 &&
@@ -1627,9 +1645,13 @@ export const App: React.FC = () => {
             scopeSet.has('suppliers') ||
             (snap.deletedSupplierIds?.length || 0) > 0)
         ) {
-          setSuppliers((prev) =>
-            mergeSuppliersUnion(prev, snap.suppliers || [], delSuppliersSet)
-          );
+          if (isCloudAuthoritative) {
+            setSuppliers(snap.suppliers);
+          } else {
+            setSuppliers((prev) =>
+              mergeSuppliersUnion(prev, snap.suppliers || [], delSuppliersSet)
+            );
+          }
         }
         if (snap.settings) {
           setStoreSettings((prev) => {
@@ -1855,8 +1877,15 @@ export const App: React.FC = () => {
     if (isSyncing) return;
     setIsSyncing(true);
     try {
+      // Step 1: Force full server-side Firestore reconciliation FIRST so tombstones & updateTimeMs are exact
+      const reconciledSnap = await fetchAuthoritativeHubSnapshot(
+        activeCompanyId,
+        undefined,
+        true
+      ).catch(() => null);
+
+      // Step 2: Refresh all Firestore collections in parallel
       const [
-        reconciledSnap,
         invResult,
         settings,
         freshWarehouses,
@@ -1868,7 +1897,6 @@ export const App: React.FC = () => {
         freshUsers,
         freshRestaurant,
       ] = await Promise.all([
-        fetchAuthoritativeHubSnapshot(activeCompanyId, undefined, true).catch(() => null),
         fetchInventorySmart(true, activeCompanyId),
         fetchStoreSettingsOnce(activeCompanyId),
         fetchStoreWarehousesOnce(activeCompanyId),
@@ -1903,36 +1931,48 @@ export const App: React.FC = () => {
           .filter(Boolean)
       );
 
-      const mergedInv = mergeInventoryUnion(
-        reconciledSnap?.inventory || [],
-        invResult.items || [],
-        delCodesSet,
-        delIdsSet
-      );
-      const mergedSales = mergeSalesUnion(
-        reconciledSnap?.sales || [],
-        freshSales || [],
-        delSalesSet
-      );
+      const mergedInv =
+        reconciledSnap?.hydratedFromCloud &&
+        Array.isArray(reconciledSnap.inventory) &&
+        reconciledSnap.inventory.length > 0 &&
+        invResult.fromCache
+          ? reconciledSnap.inventory
+          : reconciledSnap?.hydratedFromCloud &&
+            Array.isArray(reconciledSnap.inventory) &&
+            reconciledSnap.inventory.length > 0
+          ? mergeInventoryUnion(
+              invResult.items || [],
+              reconciledSnap.inventory,
+              delCodesSet,
+              delIdsSet
+            )
+          : mergeInventoryUnion(
+              reconciledSnap?.inventory || [],
+              invResult.items || [],
+              delCodesSet,
+              delIdsSet
+            );
+      const mergedSales =
+        reconciledSnap?.hydratedFromCloud && Array.isArray(reconciledSnap.sales)
+          ? reconciledSnap.sales
+          : mergeSalesUnion(reconciledSnap?.sales || [], freshSales || [], delSalesSet);
       const mergedFinance = mergePOSFinanceObjects(
         activeCompanyId,
         reconciledSnap?.posFinance || null,
         freshPosFinance
       );
-      const mergedAudit = mergeAuditHistoryUnion(
-        reconciledSnap?.auditHistory || [],
-        freshAudit || []
-      );
-      const mergedPurchases = mergePurchasesUnion(
-        reconciledSnap?.purchases || [],
-        freshPurchases || [],
-        delPurchasesSet
-      );
-      const mergedSuppliers = mergeSuppliersUnion(
-        reconciledSnap?.suppliers || [],
-        freshSuppliers || [],
-        delSuppliersSet
-      );
+      const mergedAudit =
+        reconciledSnap?.hydratedFromCloud && Array.isArray(reconciledSnap.auditHistory)
+          ? reconciledSnap.auditHistory
+          : mergeAuditHistoryUnion(reconciledSnap?.auditHistory || [], freshAudit || []);
+      const mergedPurchases =
+        reconciledSnap?.hydratedFromCloud && Array.isArray(reconciledSnap.purchases)
+          ? reconciledSnap.purchases
+          : mergePurchasesUnion(reconciledSnap?.purchases || [], freshPurchases || [], delPurchasesSet);
+      const mergedSuppliers =
+        reconciledSnap?.hydratedFromCloud && Array.isArray(reconciledSnap.suppliers)
+          ? reconciledSnap.suppliers
+          : mergeSuppliersUnion(reconciledSnap?.suppliers || [], freshSuppliers || [], delSuppliersSet);
 
       setInventory(mergedInv);
       setStoreSettings(settings);
