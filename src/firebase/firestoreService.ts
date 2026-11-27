@@ -98,7 +98,11 @@ export function isFirestoreQuotaExhausted(): boolean {
 }
 
 export function markFirestoreQuotaExhausted(): void {
-  firestoreReadQuotaExhaustedUntil = Date.now() + 10 * 60 * 1000;
+  firestoreReadQuotaExhaustedUntil = Date.now() + 3 * 60 * 1000;
+}
+
+export function resetFirestoreQuotaState(): void {
+  firestoreReadQuotaExhaustedUntil = 0;
 }
 
 export function isQuotaOrNetworkError(error: unknown): boolean {
@@ -1475,9 +1479,25 @@ export function getLocallyDeletedSaleIds(companyId = getActiveCompanyId()): Set<
 export function markSaleDeletedLocally(saleId: string, companyId = getActiveCompanyId()): void {
   const cleanId = String(saleId || '').trim();
   if (!cleanId) return;
+  markSalesDeletedLocally([cleanId], companyId);
+}
+
+export function markSalesDeletedLocally(
+  saleIds: string[],
+  companyId = getActiveCompanyId()
+): void {
+  if (!Array.isArray(saleIds) || saleIds.length === 0) return;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const nextSet = getLocallyDeletedSaleIds(slug);
-  nextSet.add(cleanId);
+  let added = false;
+  for (const raw of saleIds) {
+    const cleanId = String(raw || '').trim();
+    if (cleanId && !nextSet.has(cleanId)) {
+      nextSet.add(cleanId);
+      added = true;
+    }
+  }
+  if (!added) return;
   memoryDeletedSaleIds.set(slug, nextSet);
   try {
     const bounded = Array.from(nextSet).slice(-500);
@@ -1767,6 +1787,7 @@ function parseInventorySnapshotDocs(snapshot: any, slug: string, fromServer = tr
       colorStocks: normalizeColorStocks(parsedColors || [], data.colorStocks),
       img: data.img || '',
       img2: data.img2 || undefined,
+      updatedAt: Number(data.updatedAt) || 0,
     });
   });
   return applyPendingMutationsToInventory(items, slug, fromServer);
@@ -1980,9 +2001,16 @@ export function getAuthToken(): string | null {
   return null;
 }
 
+const SYNC_CLIENT_ID = `cl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+export function getSyncClientId(): string {
+  return SYNC_CLIENT_ID;
+}
+
 export function getAuthHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'X-Sync-Client-Id': SYNC_CLIENT_ID,
     ...(extraHeaders || {}),
   };
   const token = getAuthToken();
@@ -2171,6 +2199,305 @@ export async function syncInventoryWithBackendHub(
   }
 }
 
+export interface HubSyncEvent {
+  type: 'connected' | 'sync';
+  companyId: string;
+  scopes?: string[];
+  updatedAt: number;
+  sourceClientId?: string;
+}
+
+export interface AuthoritativeHubSnapshot {
+  ok: boolean;
+  companyId: string;
+  updatedAt: number;
+  inventory?: Product[];
+  suppliers?: Supplier[];
+  purchases?: PurchaseInvoice[];
+  sales?: SaleRecord[];
+  users?: UserAccount[];
+  allUsers?: UserAccount[];
+  warehouses?: StoreWarehousesData | null;
+  settings?: StoreSettings | null;
+  posFinance?: POSFinanceStoreData | null;
+  restaurant?: RestaurantStoreData | null;
+  companies?: CompanyTenant[];
+  deletedSaleIds?: string[];
+  deletedSupplierIds?: string[];
+  deletedPurchaseIds?: string[];
+  deletedUserIds?: string[];
+  explicitDeletedCodes?: string[];
+  deletedCodes?: string[];
+  deletedIds?: string[];
+}
+
+export function subscribeToBackendSyncStream(
+  companyId: string,
+  onEvent: (event: HubSyncEvent) => void
+): () => void {
+  if (typeof window === 'undefined' || !hasBackendAuthSession || typeof EventSource === 'undefined') {
+    return () => {};
+  }
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  let es: EventSource | null = null;
+  let closed = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryDelayMs = 1500;
+
+  const connect = () => {
+    if (closed || !hasBackendAuthSession) return;
+    try {
+      const token = getAuthToken();
+      const params = new URLSearchParams({
+        companyId: slug,
+        clientId: SYNC_CLIENT_ID,
+      });
+      if (token) {
+        params.set('token', token);
+      }
+      es = new EventSource(`/api/cloud-sync/stream?${params.toString()}`, {
+        withCredentials: true,
+      });
+
+      es.addEventListener('connected', (ev: MessageEvent) => {
+        retryDelayMs = 1500;
+        try {
+          const parsed = JSON.parse(ev.data);
+          onEvent({
+            type: 'connected',
+            companyId: parsed.companyId || slug,
+            updatedAt: Number(parsed.updatedAt || 0),
+          });
+        } catch {}
+      });
+
+      es.addEventListener('sync', (ev: MessageEvent) => {
+        retryDelayMs = 1500;
+        try {
+          const parsed = JSON.parse(ev.data);
+          onEvent({
+            type: 'sync',
+            companyId: parsed.companyId || slug,
+            scopes: Array.isArray(parsed.scopes) ? parsed.scopes : undefined,
+            updatedAt: Number(parsed.updatedAt || 0),
+            sourceClientId: parsed.sourceClientId || '',
+          });
+        } catch {}
+      });
+
+      es.onerror = () => {
+        if (es) {
+          try {
+            es.close();
+          } catch {}
+          es = null;
+        }
+        if (closed || !hasBackendAuthSession) return;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
+          retryDelayMs = Math.min(retryDelayMs * 1.6, 12000);
+          connect();
+        }, retryDelayMs);
+      };
+    } catch {}
+  };
+
+  connect();
+
+  return () => {
+    closed = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (es) {
+      try {
+        es.close();
+      } catch {}
+      es = null;
+    }
+  };
+}
+
+export async function fetchAuthoritativeHubSnapshot(
+  companyId = getActiveCompanyId(),
+  scopes?: string[]
+): Promise<AuthoritativeHubSnapshot | null> {
+  if (typeof window === 'undefined' || !hasBackendAuthSession) return null;
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  try {
+    const params = new URLSearchParams({ companyId: slug });
+    if (Array.isArray(scopes) && scopes.length > 0) {
+      params.set('scopes', scopes.join(','));
+    }
+    const res = await fetch(`/api/cloud-sync/snapshot?${params.toString()}`, {
+      credentials: 'include',
+      headers: getAuthHeaders(),
+      cache: 'no-store',
+    });
+    if (res.status === 401) {
+      hasBackendAuthSession = false;
+      return null;
+    }
+    if (!res.ok) return null;
+    const data = (await res.json()) as AuthoritativeHubSnapshot;
+    if (!data?.ok) return null;
+
+    // Immediately sync server tombstones to local storage so deleted items never reappear on mobile/PC
+    if (Array.isArray(data.deletedSaleIds) && data.deletedSaleIds.length > 0) {
+      markSalesDeletedLocally(data.deletedSaleIds, slug);
+    }
+
+    const mut = getPendingMutations(slug);
+    let mutChanged = false;
+    if (Array.isArray(data.explicitDeletedCodes)) {
+      mut.explicitDeletedCodes = Array.from(
+        new Set([...(mut.explicitDeletedCodes || []), ...data.explicitDeletedCodes])
+      );
+      mutChanged = true;
+    }
+    if (Array.isArray(data.deletedCodes)) {
+      mut.deletedCodes = Array.from(new Set([...(mut.deletedCodes || []), ...data.deletedCodes]));
+      mutChanged = true;
+    }
+    if (Array.isArray(data.deletedIds)) {
+      mut.deletedIds = Array.from(new Set([...(mut.deletedIds || []), ...data.deletedIds]));
+      mutChanged = true;
+    }
+    if (mutChanged) {
+      savePendingMutations(mut, slug);
+    }
+
+    const hasServerState = Number(data.updatedAt || 0) > 0;
+    const explicitScopes = new Set(Array.isArray(scopes) ? scopes : []);
+
+    // Update local caches with authoritative server slices (guarding against cold-empty server state)
+    if (Array.isArray(data.inventory)) {
+      for (const srvItem of data.inventory) {
+        const ck = (srvItem.code || '').trim().toLowerCase();
+        if (!ck) continue;
+        if (srvItem.img) memoryImageMap.set(`${slug}__${ck}`, srvItem.img);
+        if (srvItem.img2) memoryImage2Map.set(`${slug}__${ck}`, srvItem.img2);
+      }
+      const cleanInv = applyPendingMutationsToInventory(data.inventory, slug, true);
+      data.inventory = cleanInv;
+      if (
+        hasServerState &&
+        (cleanInv.length > 0 ||
+          explicitScopes.has('inventory') ||
+          (data.explicitDeletedCodes?.length || 0) > 0)
+      ) {
+        setCachedInventory(cleanInv, data.updatedAt || Date.now(), slug);
+      }
+    }
+
+    if (Array.isArray(data.sales)) {
+      const deletedSet = getLocallyDeletedSaleIds(slug);
+      const cleanSales = data.sales
+        .filter((s) => s && s.id && !deletedSet.has(s.id))
+        .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+      data.sales = cleanSales;
+      if (
+        hasServerState &&
+        (cleanSales.length > 0 ||
+          explicitScopes.has('sales') ||
+          (data.deletedSaleIds?.length || 0) > 0)
+      ) {
+        setCachedSales(cleanSales, slug);
+      }
+    }
+
+    if (data.posFinance) {
+      const sanitizedPos = sanitizePOSFinanceDoc(slug, data.posFinance as Record<string, any>);
+      data.posFinance = sanitizedPos;
+      setCachedPOSFinanceData(sanitizedPos, slug);
+    }
+
+    if (Array.isArray(data.purchases)) {
+      const delPurchases = new Set((data.deletedPurchaseIds || []).map((id) => String(id).trim()));
+      const cleanPurchases = data.purchases.filter((p) => p && p.id && !delPurchases.has(p.id));
+      data.purchases = cleanPurchases;
+      if (
+        hasServerState &&
+        (cleanPurchases.length > 0 ||
+          explicitScopes.has('purchases') ||
+          (data.deletedPurchaseIds?.length || 0) > 0)
+      ) {
+        setCachedPurchases(cleanPurchases, slug);
+      }
+    }
+
+    if (Array.isArray(data.suppliers)) {
+      const delSuppliers = new Set((data.deletedSupplierIds || []).map((id) => String(id).trim()));
+      const cleanSuppliers = data.suppliers.filter((s) => s && s.id && !delSuppliers.has(s.id));
+      data.suppliers = cleanSuppliers;
+      if (
+        hasServerState &&
+        (cleanSuppliers.length > 0 ||
+          explicitScopes.has('suppliers') ||
+          (data.deletedSupplierIds?.length || 0) > 0)
+      ) {
+        setCachedSuppliers(cleanSuppliers, slug);
+      }
+    }
+
+    if (data.warehouses) {
+      setCachedStoreWarehouses(data.warehouses, slug);
+    }
+
+    if (data.settings) {
+      setCachedStoreSettings(data.settings, slug);
+    }
+
+    if (data.restaurant) {
+      setCachedRestaurantData(data.restaurant, slug);
+    }
+
+    if (Array.isArray(data.users) && data.users.length > 0) {
+      setCachedUsers(data.users, slug);
+    }
+
+    if (Array.isArray(data.companies) && data.companies.length > 0) {
+      setCachedCompanies(data.companies);
+    }
+
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// Lightweight retry queue for mobile network blips so mutations NEVER get lost
+interface PendingHubTask {
+  url: string;
+  body: Record<string, any>;
+}
+const pendingHubQueue: PendingHubTask[] = [];
+
+export async function flushPendingHubQueue(): Promise<void> {
+  if (typeof window === 'undefined' || !hasBackendAuthSession || pendingHubQueue.length === 0) {
+    return;
+  }
+  const tasks = pendingHubQueue.splice(0, pendingHubQueue.length);
+  for (const task of tasks) {
+    try {
+      const res = await fetch(task.url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(task.body),
+      });
+      if (res.status === 401) {
+        hasBackendAuthSession = false;
+        return;
+      }
+      if (!res.ok) {
+        pendingHubQueue.push(task);
+      }
+    } catch {
+      pendingHubQueue.push(task);
+      break;
+    }
+  }
+}
+
 export async function pushProductSaveToBackendHub(
   product?: Product,
   oldCode?: string,
@@ -2179,20 +2506,27 @@ export async function pushProductSaveToBackendHub(
 ): Promise<void> {
   if (typeof window === 'undefined' || !hasBackendAuthSession) return;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const body = {
+    companyId: slug,
+    product,
+    products,
+    oldCode,
+  };
   try {
     const res = await fetch('/api/cloud-sync/product-save', {
       method: 'POST',
       credentials: 'include',
       headers: getAuthHeaders(),
-      body: JSON.stringify({
-        companyId: slug,
-        product,
-        products,
-        oldCode,
-      }),
+      body: JSON.stringify(body),
     });
-    if (res.status === 401) hasBackendAuthSession = false;
-  } catch {}
+    if (res.status === 401) {
+      hasBackendAuthSession = false;
+    } else if (!res.ok) {
+      pendingHubQueue.push({ url: '/api/cloud-sync/product-save', body });
+    }
+  } catch {
+    pendingHubQueue.push({ url: '/api/cloud-sync/product-save', body });
+  }
 }
 
 export async function pushProductDeleteToBackendHub(
@@ -2202,19 +2536,26 @@ export async function pushProductDeleteToBackendHub(
 ): Promise<void> {
   if (typeof window === 'undefined' || !hasBackendAuthSession) return;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const body = {
+    companyId: slug,
+    id,
+    code,
+  };
   try {
     const res = await fetch('/api/cloud-sync/product-delete', {
       method: 'POST',
       credentials: 'include',
       headers: getAuthHeaders(),
-      body: JSON.stringify({
-        companyId: slug,
-        id,
-        code,
-      }),
+      body: JSON.stringify(body),
     });
-    if (res.status === 401) hasBackendAuthSession = false;
-  } catch {}
+    if (res.status === 401) {
+      hasBackendAuthSession = false;
+    } else if (!res.ok) {
+      pendingHubQueue.push({ url: '/api/cloud-sync/product-delete', body });
+    }
+  } catch {
+    pendingHubQueue.push({ url: '/api/cloud-sync/product-delete', body });
+  }
 }
 
 export async function syncCollectionsWithBackendHub(
@@ -2238,6 +2579,10 @@ export async function syncCollectionsWithBackendHub(
   suppliers: Supplier[];
   purchases: PurchaseInvoice[];
   sales: SaleRecord[];
+  deletedSaleIds?: string[];
+  deletedSupplierIds?: string[];
+  deletedPurchaseIds?: string[];
+  deletedUserIds?: string[];
   users: UserAccount[];
   allUsers?: UserAccount[];
   warehouses: StoreWarehousesData | null;
@@ -2249,25 +2594,37 @@ export async function syncCollectionsWithBackendHub(
 } | null> {
   if (typeof window === 'undefined' || !hasBackendAuthSession) return null;
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const body = {
+    companyId: slug,
+    ...payload,
+  };
   try {
     const res = await fetch('/api/cloud-sync/collections', {
       method: 'POST',
       credentials: 'include',
       headers: getAuthHeaders(),
-      body: JSON.stringify({
-        companyId: slug,
-        ...payload,
-      }),
+      body: JSON.stringify(body),
     });
     if (res.status === 401) {
       hasBackendAuthSession = false;
       return null;
     }
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (Object.keys(payload).length > 0) {
+        pendingHubQueue.push({ url: '/api/cloud-sync/collections', body });
+      }
+      return null;
+    }
     const data = await res.json();
     if (!data?.ok) return null;
+    if (Array.isArray(data.deletedSaleIds) && data.deletedSaleIds.length > 0) {
+      markSalesDeletedLocally(data.deletedSaleIds, slug);
+    }
     return data;
   } catch {
+    if (Object.keys(payload).length > 0) {
+      pendingHubQueue.push({ url: '/api/cloud-sync/collections', body });
+    }
     return null;
   }
 }
@@ -2479,9 +2836,12 @@ export function subscribeToInventory(
   return onSnapshot(
     scopedQuery,
     (snapshot) => {
-      const items = parseInventorySnapshotDocs(snapshot, slug, true);
+      const isFromServer = !snapshot.metadata?.fromCache;
+      const items = parseInventorySnapshotDocs(snapshot, slug, isFromServer);
       setCachedInventory(items, undefined, slug);
-      syncInventoryWithBackendHub(items, slug).catch(() => {});
+      if (isFromServer) {
+        syncInventoryWithBackendHub(items, slug).catch(() => {});
+      }
       onData(items);
     },
     async (error) => {
@@ -3847,6 +4207,7 @@ function parseSaleDocsFromSnapshot(snapshot: any, slug: string): SaleRecord[] {
       companyId: data.companyId || slug,
       saleNumber: data.saleNumber || `VTA-${docSnap.id.slice(-6)}`,
       timestamp: Number(data.timestamp) || Date.now(),
+      updatedAt: Number(data.updatedAt || data.timestamp || 0),
       date: data.date || '',
       items: Array.isArray(data.items)
         ? data.items.map((it: any) => {
@@ -4096,23 +4457,46 @@ function mergeSaleRecordsWithCache(
               };
             })
           : loc.items || [];
+        const srvUpd = Number(srv.updatedAt || 0);
+        const locUpd = Number(loc.updatedAt || 0);
         const srvPaymentsLen = srv.creditPayments?.length || 0;
         const locPaymentsLen = loc.creditPayments?.length || 0;
-        const useLocPayments = locPaymentsLen > srvPaymentsLen;
+        const locStrictlyNewer = locUpd > srvUpd;
+        const useLocPayments =
+          locStrictlyNewer || (locUpd === srvUpd && locPaymentsLen > srvPaymentsLen);
+
+        // Union unique creditPayments when timestamps tie so abonos from two devices never disappear
+        let finalPayments = useLocPayments ? loc.creditPayments : srv.creditPayments;
+        if (locUpd === srvUpd && srvPaymentsLen > 0 && locPaymentsLen > 0 && srvPaymentsLen !== locPaymentsLen) {
+          const payMap = new Map<string, CreditPaymentAbone>();
+          for (const p of [...(srv.creditPayments || []), ...(loc.creditPayments || [])]) {
+            if (p && p.id) payMap.set(p.id, p);
+          }
+          finalPayments = Array.from(payMap.values()).sort(
+            (a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0)
+          );
+        }
+
+        const primary = locStrictlyNewer ? loc : srv;
+        const secondary = locStrictlyNewer ? srv : loc;
+
         byId.set(loc.id, {
-          ...loc,
-          ...srv,
-          items: mergedItems,
+          ...secondary,
+          ...primary,
+          items: locStrictlyNewer ? loc.items || mergedItems : mergedItems,
           creditContract: mergedContract,
           warrantyInfo: mergedWarranty,
+          updatedAt: Math.max(srvUpd, locUpd, Number(srv.timestamp || loc.timestamp || 0)),
           ...(useLocPayments
             ? {
-                creditPayments: loc.creditPayments,
+                creditPayments: finalPayments,
                 amountPaid: loc.amountPaid,
                 balanceDue: loc.balanceDue,
                 creditStatus: loc.creditStatus,
               }
-            : {}),
+            : {
+                creditPayments: finalPayments,
+              }),
         });
       }
     }
@@ -4282,13 +4666,16 @@ export function subscribeToSales(
     scopedQuery,
     (snapshot) => {
       const serverRecords = parseSaleDocsFromSnapshot(snapshot, slug);
+      const isFromServer = !snapshot.metadata?.fromCache;
       const cached = getCachedSales(slug) || [];
       const { merged, missingOnServer } = mergeSaleRecordsWithCache(serverRecords, cached, slug);
       setCachedSales(merged, slug);
-      if (missingOnServer.length > 0) {
+      if (isFromServer && missingOnServer.length > 0) {
         recoverUnsyncedSalesToFirestore(missingOnServer, slug).catch(() => {});
       }
-      syncCollectionsWithBackendHub({ sales: merged }, slug).catch(() => {});
+      if (isFromServer) {
+        syncCollectionsWithBackendHub({ sales: serverRecords }, slug).catch(() => {});
+      }
       onData(merged);
     },
     async (error) => {
@@ -4430,6 +4817,7 @@ export async function recordSaleInFirestore(
       saleData.loyaltyPointsBalanceAfter !== undefined
         ? Number(saleData.loyaltyPointsBalanceAfter)
         : undefined,
+    updatedAt: Date.now(),
   };
 
   const createdRecord: SaleRecord = {
@@ -4529,6 +4917,7 @@ export async function recordSaleInFirestore(
           stock: newStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
+          updatedAt: Date.now(),
         };
 
         const altRef =
@@ -4540,11 +4929,23 @@ export async function recordSaleInFirestore(
         finalPayloadsByDocId.set(canonicalDocId, { ref: productRef, altRef, payload: productPayload });
       }
 
-      for (const entry of finalPayloadsByDocId.values()) {
+      const hubUpdatedProducts: Product[] = [];
+      for (const [docIdKey, entry] of finalPayloadsByDocId.entries()) {
         invBatch.set(entry.ref, entry.payload, { merge: true });
         if (entry.altRef) {
           invBatch.set(entry.altRef, entry.payload, { merge: true });
         }
+        const ck = String(entry.payload.code || '').trim().toLowerCase();
+        const fullProd = workingByCode.get(ck);
+        hubUpdatedProducts.push(
+          fullProd
+            ? { ...fullProd, ...entry.payload, id: fullProd.id || docIdKey }
+            : ({ id: docIdKey, ...entry.payload } as Product)
+        );
+      }
+
+      if (hubUpdatedProducts.length > 0) {
+        pushProductSaveToBackendHub(undefined, undefined, slug, hubUpdatedProducts).catch(() => {});
       }
 
       if (finalPayloadsByDocId.size > 0) {
@@ -4601,6 +5002,7 @@ export async function recordCreditPaymentInFirestore(
   const newCreditStatus: 'pending' | 'paid' =
     sale.isCreditPricingPending || newBalanceDue > 0.01 ? 'pending' : 'paid';
 
+  const nowTs = Date.now();
   const updatedSale: SaleRecord = {
     ...sale,
     companyId: sale.companyId || slug,
@@ -4608,6 +5010,7 @@ export async function recordCreditPaymentInFirestore(
     balanceDue: newBalanceDue,
     creditStatus: newCreditStatus,
     creditPayments: updatedPayments,
+    updatedAt: nowTs,
   };
 
   const prevSales = getCachedSales(slug) || [];
@@ -4622,7 +5025,7 @@ export async function recordCreditPaymentInFirestore(
       saleRef,
       stripUndefinedDeep({
         saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
-        timestamp: Number(sale.timestamp) || Date.now(),
+        timestamp: Number(sale.timestamp) || nowTs,
         date: String(sale.date || '').slice(0, 100),
         items: Array.isArray(sale.items) ? sale.items : [],
         total: Number(sale.total) || 0,
@@ -4631,6 +5034,7 @@ export async function recordCreditPaymentInFirestore(
         balanceDue: updatedSale.balanceDue,
         creditStatus: updatedSale.creditStatus,
         creditPayments: updatedSale.creditPayments,
+        updatedAt: nowTs,
       }),
       { merge: true }
     );
@@ -4769,6 +5173,7 @@ export async function updateSaleInFirestore(
     cashierUsername: updatedSale.cashierUsername || originalSale.cashierUsername || undefined,
     lastEditedBy: String(updatedSale.lastEditedBy || 'Administrador').slice(0, 150),
     lastEditedAt: String(updatedSale.lastEditedAt || new Date().toLocaleString()).slice(0, 100),
+    updatedAt: Date.now(),
   };
 
   const finalEditedRecord: SaleRecord = {
@@ -4889,12 +5294,25 @@ export async function updateSaleInFirestore(
           stock: adjustedStock,
           ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
           ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
+          updatedAt: Date.now(),
         },
       });
     }
 
-    for (const e of finalPayloadsByDocId.values()) {
+    const hubAdjustedProducts: Product[] = [];
+    for (const [docIdKey, e] of finalPayloadsByDocId.entries()) {
       batch.set(e.ref, e.payload, { merge: true });
+      const ck = String(e.payload.code || '').trim().toLowerCase();
+      const fullProd = workingByCode.get(ck);
+      hubAdjustedProducts.push(
+        fullProd
+          ? { ...fullProd, ...e.payload, id: fullProd.id || docIdKey }
+          : ({ id: docIdKey, ...e.payload } as Product)
+      );
+    }
+
+    if (hubAdjustedProducts.length > 0) {
+      pushProductSaveToBackendHub(undefined, undefined, slug, hubAdjustedProducts).catch(() => {});
     }
 
     if (finalPayloadsByDocId.size > 0) {
@@ -4916,7 +5334,8 @@ export async function cancelSaleInFirestore(
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const saleRef = doc(db, 'sales', sale.id);
 
-  const cancelledRecord: SaleRecord = { ...sale, status: 'cancelled' };
+  const nowTs = Date.now();
+  const cancelledRecord: SaleRecord = { ...sale, status: 'cancelled', updatedAt: nowTs };
   const prevSales = getCachedSales(slug) || [];
   setCachedSales(
     prevSales.map((s) => (s.id === sale.id ? cancelledRecord : s)),
@@ -4929,11 +5348,12 @@ export async function cancelSaleInFirestore(
       saleRef,
       stripUndefinedDeep({
         saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
-        timestamp: Number(sale.timestamp) || Date.now(),
+        timestamp: Number(sale.timestamp) || nowTs,
         date: String(sale.date || '').slice(0, 100),
         items: Array.isArray(sale.items) ? sale.items : [],
         total: Number(sale.total) || 0,
         status: 'cancelled',
+        updatedAt: nowTs,
       }),
       { merge: true }
     );
@@ -5001,12 +5421,25 @@ export async function cancelSaleInFirestore(
             stock: restoredStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
             ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
+            updatedAt: Date.now(),
           },
         });
       }
 
-      for (const e of finalPayloadsByDocId.values()) {
+      const hubRestoredProducts: Product[] = [];
+      for (const [docIdKey, e] of finalPayloadsByDocId.entries()) {
         batch.set(e.ref, e.payload, { merge: true });
+        const ck = String(e.payload.code || '').trim().toLowerCase();
+        const fullProd = workingByCode.get(ck);
+        hubRestoredProducts.push(
+          fullProd
+            ? { ...fullProd, ...e.payload, id: fullProd.id || docIdKey }
+            : ({ id: docIdKey, ...e.payload } as Product)
+        );
+      }
+
+      if (hubRestoredProducts.length > 0) {
+        pushProductSaveToBackendHub(undefined, undefined, slug, hubRestoredProducts).catch(() => {});
       }
 
       if (finalPayloadsByDocId.size > 0) {
@@ -5027,7 +5460,8 @@ export async function restoreCancelledSaleInFirestore(
   const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
   const saleRef = doc(db, 'sales', sale.id);
 
-  const restoredRecord: SaleRecord = { ...sale, status: 'completed' };
+  const nowTs = Date.now();
+  const restoredRecord: SaleRecord = { ...sale, status: 'completed', updatedAt: nowTs };
   const prevSales = getCachedSales(slug) || [];
   setCachedSales(
     prevSales.map((s) => (s.id === sale.id ? restoredRecord : s)),
@@ -5040,11 +5474,12 @@ export async function restoreCancelledSaleInFirestore(
       saleRef,
       stripUndefinedDeep({
         saleNumber: String(sale.saleNumber || 'VTA').slice(0, 50),
-        timestamp: Number(sale.timestamp) || Date.now(),
+        timestamp: Number(sale.timestamp) || nowTs,
         date: String(sale.date || '').slice(0, 100),
         items: Array.isArray(sale.items) ? sale.items : [],
         total: Number(sale.total) || 0,
         status: 'completed',
+        updatedAt: nowTs,
       }),
       { merge: true }
     );
@@ -5112,12 +5547,25 @@ export async function restoreCancelledSaleInFirestore(
             stock: deductedStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
             ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
+            updatedAt: Date.now(),
           },
         });
       }
 
-      for (const e of finalPayloadsByDocId.values()) {
+      const hubDeductedProducts: Product[] = [];
+      for (const [docIdKey, e] of finalPayloadsByDocId.entries()) {
         batch.set(e.ref, e.payload, { merge: true });
+        const ck = String(e.payload.code || '').trim().toLowerCase();
+        const fullProd = workingByCode.get(ck);
+        hubDeductedProducts.push(
+          fullProd
+            ? { ...fullProd, ...e.payload, id: fullProd.id || docIdKey }
+            : ({ id: docIdKey, ...e.payload } as Product)
+        );
+      }
+
+      if (hubDeductedProducts.length > 0) {
+        pushProductSaveToBackendHub(undefined, undefined, slug, hubDeductedProducts).catch(() => {});
       }
 
       if (finalPayloadsByDocId.size > 0) {
@@ -5225,12 +5673,25 @@ export async function deleteSaleAccountInFirestore(
             stock: restoredStock,
             ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
             ...(newColorStocks ? { colorStocks: newColorStocks } : {}),
+            updatedAt: Date.now(),
           },
         });
       }
 
-      for (const e of finalPayloadsByDocId.values()) {
+      const hubDeletedSaleProducts: Product[] = [];
+      for (const [docIdKey, e] of finalPayloadsByDocId.entries()) {
         batch.set(e.ref, e.payload, { merge: true });
+        const ck = String(e.payload.code || '').trim().toLowerCase();
+        const fullProd = workingByCode.get(ck);
+        hubDeletedSaleProducts.push(
+          fullProd
+            ? { ...fullProd, ...e.payload, id: fullProd.id || docIdKey }
+            : ({ id: docIdKey, ...e.payload } as Product)
+        );
+      }
+
+      if (hubDeletedSaleProducts.length > 0) {
+        pushProductSaveToBackendHub(undefined, undefined, slug, hubDeletedSaleProducts).catch(() => {});
       }
 
       if (finalPayloadsByDocId.size > 0) {
@@ -5539,6 +6000,18 @@ export async function recordPurchaseInFirestore(
       }
     }
 
+    const hubPurchasedProducts: Product[] = [];
+    for (const item of purchaseData.items || []) {
+      const ck = (item.code || '').trim().toLowerCase();
+      const updatedP = workingByCode.get(ck);
+      if (updatedP) {
+        hubPurchasedProducts.push({ ...updatedP, updatedAt: Date.now() });
+      }
+    }
+    if (hubPurchasedProducts.length > 0) {
+      pushProductSaveToBackendHub(undefined, undefined, slug, hubPurchasedProducts).catch(() => {});
+    }
+
     await touchInventorySyncStamp(batch, slug);
     await batch.commit();
     const purchasedCodes = (purchaseData.items || [])
@@ -5562,7 +6035,12 @@ export async function cancelPurchaseInFirestore(
   const slug = normalizeCompanySlug(companyId);
   const purchaseRef = doc(db, 'purchases', purchase.id);
 
-  const cancelledPurchase: PurchaseInvoice = { ...purchase, status: 'cancelled' };
+  const nowCancelTs = Date.now();
+  const cancelledPurchase: PurchaseInvoice = {
+    ...purchase,
+    status: 'cancelled',
+    updatedAt: nowCancelTs,
+  };
   const prevPurchases = getCachedPurchases(slug) || [];
   setCachedPurchases(
     prevPurchases.map((p) => (p.id === purchase.id ? cancelledPurchase : p)),
@@ -5578,12 +6056,13 @@ export async function cancelPurchaseInFirestore(
         supplierId: String(purchase.supplierId || 'sup').slice(0, 128),
         supplierName: String(purchase.supplierName || 'Proveedor').slice(0, 200),
         date: String(purchase.date || '').slice(0, 100),
-        timestamp: Number(purchase.timestamp) || Date.now(),
+        timestamp: Number(purchase.timestamp) || nowCancelTs,
         warehouseId: purchase.warehouseId || undefined,
         warehouseName: purchase.warehouseName || undefined,
         items: Array.isArray(purchase.items) ? purchase.items : [],
         total: Number(purchase.total) || 0,
         status: 'cancelled',
+        updatedAt: nowCancelTs,
       }),
       { merge: true }
     );
@@ -5604,6 +6083,7 @@ export async function cancelPurchaseInFirestore(
       'principal';
 
     const batch = writeBatch(db);
+    const hubRevertedProducts: Product[] = [];
     for (const item of purchase.items || []) {
       const productDocId = getScopedDocId(item.code, slug);
       const productRef = doc(db, 'inventory', productDocId);
@@ -5620,20 +6100,27 @@ export async function cancelPurchaseInFirestore(
         activeWhList
       );
 
-      batch.set(
-        productRef,
-        {
-          companyId: slug,
-          code: (existing?.code || item.code).trim().slice(0, 100),
-          name: (existing?.name || item.name || 'Producto').trim().slice(0, 200),
-          category: (existing?.category || item.category || 'General').trim().slice(0, 100),
-          price: Number(existing?.price ?? item.salePrice ?? item.cost) || 0,
-          cost: Number(existing?.cost ?? item.cost) || 0,
-          stock: newStock,
-          ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
-        },
-        { merge: true }
+      const revertPayload = {
+        companyId: slug,
+        code: (existing?.code || item.code).trim().slice(0, 100),
+        name: (existing?.name || item.name || 'Producto').trim().slice(0, 200),
+        category: (existing?.category || item.category || 'General').trim().slice(0, 100),
+        price: Number(existing?.price ?? item.salePrice ?? item.cost) || 0,
+        cost: Number(existing?.cost ?? item.cost) || 0,
+        stock: newStock,
+        ...(newWarehouseStocks ? { warehouseStocks: newWarehouseStocks } : {}),
+        updatedAt: Date.now(),
+      };
+      batch.set(productRef, revertPayload, { merge: true });
+      hubRevertedProducts.push(
+        existing
+          ? { ...existing, ...revertPayload, id: existing.id || productDocId }
+          : ({ id: productDocId, ...revertPayload } as Product)
       );
+    }
+
+    if (hubRevertedProducts.length > 0) {
+      pushProductSaveToBackendHub(undefined, undefined, slug, hubRevertedProducts).catch(() => {});
     }
 
     await touchInventorySyncStamp(batch, slug);
@@ -5643,7 +6130,17 @@ export async function cancelPurchaseInFirestore(
   }
 }
 
-export async function deletePurchaseFromFirestore(purchaseId: string): Promise<void> {
+export async function deletePurchaseFromFirestore(
+  purchaseId: string,
+  companyId = getActiveCompanyId()
+): Promise<void> {
+  const slug = isGyGAlias(companyId) ? 'tiendagyg' : normalizeCompanySlug(companyId);
+  const prevPurchases = getCachedPurchases(slug) || [];
+  setCachedPurchases(
+    prevPurchases.filter((p) => p.id !== purchaseId),
+    slug
+  );
+  syncCollectionsWithBackendHub({ deletePurchaseId: purchaseId }, slug).catch(() => {});
   try {
     await deleteDoc(doc(db, 'purchases', purchaseId));
   } catch (error) {
@@ -5657,7 +6154,7 @@ export async function deletePurchaseFromFirestore(purchaseId: string): Promise<v
 
 // ----------------- COLLABORATORS & USERS MANAGEMENT -----------------
 
-function withFirestoreTimeout<T>(promise: Promise<T>, ms = 2000): Promise<T> {
+function withFirestoreTimeout<T>(promise: Promise<T>, ms = 6500): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('Firestore operation timed out (offline/unavailable)'));
@@ -7444,10 +7941,23 @@ function mergePOSFinanceObjects(
   const primary = bTs >= aTs ? b : a;
   const secondary = bTs >= aTs ? a : b;
 
-  const mergedControls: Record<string, any> = {
-    ...(secondary.creditAccountControls || {}),
-    ...(primary.creditAccountControls || {}),
-  };
+  const mergedControls: Record<string, any> = {};
+  const secControls = secondary.creditAccountControls || {};
+  const priControls = primary.creditAccountControls || {};
+  const allCtrlKeys = new Set([...Object.keys(secControls), ...Object.keys(priControls)]);
+  for (const key of allCtrlKeys) {
+    const sCtrl = secControls[key];
+    const pCtrl = priControls[key];
+    if (sCtrl && !pCtrl) {
+      mergedControls[key] = sCtrl;
+    } else if (pCtrl && !sCtrl) {
+      mergedControls[key] = pCtrl;
+    } else if (sCtrl && pCtrl) {
+      const sTs = Number(sCtrl.updatedAt || 0);
+      const pTs = Number(pCtrl.updatedAt || 0);
+      mergedControls[key] = pTs >= sTs ? { ...sCtrl, ...pCtrl } : { ...pCtrl, ...sCtrl };
+    }
+  }
 
   const collectorSet = new Set<string>(
     (
@@ -7533,7 +8043,7 @@ function mergePOSFinanceObjects(
       ...(primary.routeCollectorConfig || {}),
       enabledCollectorUsernames: Array.from(collectorSet),
     },
-    updatedAt: Math.max(aTs, bTs, Date.now()),
+    updatedAt: Math.max(aTs, bTs),
   });
 }
 
@@ -7563,7 +8073,7 @@ export async function fetchPOSFinanceDataOnce(
 
   try {
     const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
-    const snap = await withFirestoreTimeout(getDoc(docRef), 2000);
+    const snap = await withFirestoreTimeout(getDoc(docRef), 6500);
     if (snap.exists()) {
       const parsed = sanitizePOSFinanceDoc(slug, snap.data());
       const merged = mergePOSFinanceObjects(slug, mergePOSFinanceObjects(slug, cached, hubFinance), parsed);
@@ -7598,10 +8108,13 @@ export function subscribeToPOSFinanceData(
       (snap) => {
         if (snap.exists()) {
           const parsed = sanitizePOSFinanceDoc(slug, snap.data());
+          const isFromServer = !snap.metadata?.fromCache;
           const cached = getCachedPOSFinanceData(slug);
           const merged = mergePOSFinanceObjects(slug, cached, parsed);
           setCachedPOSFinanceData(merged, slug);
-          syncCollectionsWithBackendHub({ posFinance: merged }, slug).catch(() => {});
+          if (isFromServer) {
+            syncCollectionsWithBackendHub({ posFinance: parsed }, slug).catch(() => {});
+          }
           onData(merged);
         } else {
           fetchPOSFinanceDataOnce(slug).then(onData).catch(() => {});
@@ -7627,10 +8140,22 @@ export async function savePOSFinanceDataToFirestore(
     : normalizeCompanySlug(data.companyId || companyId);
   const docRef = doc(db, 'settings', getPOSFinanceDocId(slug));
 
-  const controls =
+  const nowTs = Date.now();
+  const prevCached = getCachedPOSFinanceData(slug);
+  const prevControls = prevCached?.creditAccountControls || {};
+  const rawControls =
     data.creditAccountControls && typeof data.creditAccountControls === 'object'
       ? data.creditAccountControls
       : {};
+  const controls: Record<string, any> = {};
+  for (const [k, ctrl] of Object.entries(rawControls)) {
+    if (!ctrl || typeof ctrl !== 'object') continue;
+    const prevCtrl = prevControls[k];
+    const hasChanged = !prevCtrl || JSON.stringify(prevCtrl) !== JSON.stringify(ctrl);
+    controls[k] = hasChanged
+      ? { ...ctrl, updatedAt: nowTs }
+      : { ...ctrl, updatedAt: Number(ctrl.updatedAt || prevCtrl?.updatedAt || 0) || undefined };
+  }
 
   // Auto-include any assigned collector usernames from creditAccountControls into enabledCollectorUsernames
   const collectorSet = new Set<string>(

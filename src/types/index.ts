@@ -19,6 +19,7 @@ export interface Product {
   colorStocks?: Record<string, number>;
   img?: string;
   img2?: string;
+  updatedAt?: number;
 }
 
 export interface Supplier {
@@ -29,6 +30,7 @@ export interface Supplier {
   phone?: string;
   email?: string;
   address?: string;
+  updatedAt?: number;
 }
 
 export interface AuditSessionItem {
@@ -594,6 +596,7 @@ export interface SaleRecord {
   loyaltyPointsRedeemed?: number;
   loyaltyDiscountAmount?: number;
   loyaltyPointsBalanceAfter?: number;
+  updatedAt?: number;
 }
 
 export interface LoyaltyTransactionLog {
@@ -739,6 +742,7 @@ export interface CreditAccountControlMeta {
   lastNoticeType?: string;
   noticeCount?: number;
   notices?: CreditCollectionNoticeLog[];
+  updatedAt?: number;
 }
 
 export interface RouteCollectorAlert {
@@ -878,6 +882,7 @@ export interface PurchaseInvoice {
   notes?: string;
   status: 'completed' | 'cancelled';
   receivedBy?: string;
+  updatedAt?: number;
 }
 
 export type PrinterPaperFormat = '80mm' | '58mm' | 'letter' | 'half-letter';

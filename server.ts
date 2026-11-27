@@ -1016,6 +1016,9 @@ interface ServerTenantStore {
   deletedCodes: string[];
   deletedIds: string[];
   deletedSaleIds?: string[];
+  deletedSupplierIds?: string[];
+  deletedPurchaseIds?: string[];
+  deletedUserIds?: string[];
   suppliers: Record<string, any>;
   purchases: Record<string, any>;
   sales: Record<string, any>;
@@ -1139,6 +1142,9 @@ function getTenantStore(companyId?: string): ServerTenantStore {
       deletedCodes: [],
       deletedIds: [],
       deletedSaleIds: [],
+      deletedSupplierIds: [],
+      deletedPurchaseIds: [],
+      deletedUserIds: [],
       suppliers: {},
       purchases: {},
       sales: {},
@@ -1152,6 +1158,15 @@ function getTenantStore(companyId?: string): ServerTenantStore {
   }
   if (!Array.isArray(syncDbMemory.tenants[slug].deletedSaleIds)) {
     syncDbMemory.tenants[slug].deletedSaleIds = [];
+  }
+  if (!Array.isArray(syncDbMemory.tenants[slug].deletedSupplierIds)) {
+    syncDbMemory.tenants[slug].deletedSupplierIds = [];
+  }
+  if (!Array.isArray(syncDbMemory.tenants[slug].deletedPurchaseIds)) {
+    syncDbMemory.tenants[slug].deletedPurchaseIds = [];
+  }
+  if (!Array.isArray(syncDbMemory.tenants[slug].deletedUserIds)) {
+    syncDbMemory.tenants[slug].deletedUserIds = [];
   }
   return syncDbMemory.tenants[slug];
 }
@@ -2480,11 +2495,248 @@ function assertTenantAccess(
   return session;
 }
 
-// 1. Lightweight status check for real-time cross-device polling
+// ============================================================================
+// REAL-TIME SSE PUSH REGISTRY (Sub-second sync across PC, Tablet & Mobile)
+// ============================================================================
+interface SseClientEntry {
+  res: express.Response;
+  slug: string;
+  clientId: string;
+  isSuperAdmin: boolean;
+}
+
+const sseClientsByTenant = new Map<string, Set<SseClientEntry>>();
+
+function broadcastTenantSyncEvent(
+  slug: string,
+  scopes: string[],
+  updatedAt: number,
+  sourceClientId = ''
+) {
+  const cleanScopes = Array.from(new Set(scopes.filter(Boolean)));
+  if (cleanScopes.length === 0) return;
+
+  const payload = JSON.stringify({
+    type: 'sync',
+    companyId: slug,
+    scopes: cleanScopes,
+    updatedAt,
+    sourceClientId,
+  });
+  const frame = `event: sync\ndata: ${payload}\n\n`;
+
+  const targets = new Set<SseClientEntry>();
+  const directSet = sseClientsByTenant.get(slug);
+  if (directSet) {
+    for (const c of directSet) targets.add(c);
+  }
+  // If global companies directory changed, notify all super-admin listeners across tenants
+  if (cleanScopes.includes('companies')) {
+    for (const [, set] of sseClientsByTenant.entries()) {
+      for (const c of set) {
+        if (c.isSuperAdmin) targets.add(c);
+      }
+    }
+  }
+
+  for (const client of targets) {
+    if (sourceClientId && client.clientId && client.clientId === sourceClientId) {
+      continue;
+    }
+    try {
+      client.res.write(frame);
+    } catch {
+      const bucket = sseClientsByTenant.get(client.slug);
+      bucket?.delete(client);
+    }
+  }
+}
+
+function getSyncClientId(req: express.Request): string {
+  const fromHeader = String(req.headers['x-sync-client-id'] || '').trim();
+  const fromQuery = String(req.query.clientId || '').trim();
+  return (fromHeader || fromQuery).slice(0, 80);
+}
+
+// 0. Real-Time Server-Sent Events Stream for Instant Multi-Device Sync
+app.get('/api/cloud-sync/stream', (req, res) => {
+  let session = getAuthenticatedSession(req);
+  if (!session && typeof req.query.token === 'string' && req.query.token.trim()) {
+    session = verifySessionToken(req.query.token.trim());
+  }
+  if (!session) {
+    return res.status(401).json({
+      ok: false,
+      code: 'SESSION_REQUIRED',
+      error: 'Sesión requerida para canal en tiempo real.',
+    });
+  }
+
+  const slug = normalizeServerCompanySlug(String(req.query.companyId || session.cid || 'gosen'));
+  if (!session.sa && session.cid !== slug) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Acceso denegado a este canal de sincronización.',
+    });
+  }
+
+  const clientId = getSyncClientId(req);
+  const tenant = getTenantStore(slug);
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof (res as any).flushHeaders === 'function') {
+    (res as any).flushHeaders();
+  }
+
+  const entry: SseClientEntry = {
+    res,
+    slug,
+    clientId,
+    isSuperAdmin: Boolean(session.sa),
+  };
+
+  if (!sseClientsByTenant.has(slug)) {
+    sseClientsByTenant.set(slug, new Set());
+  }
+  sseClientsByTenant.get(slug)!.add(entry);
+
+  // Immediately send current authoritative version so reconnecting devices catch up in <50ms
+  try {
+    res.write(
+      `event: connected\ndata: ${JSON.stringify({
+        companyId: slug,
+        updatedAt: tenant.updatedAt || 0,
+        serverTime: Date.now(),
+      })}\n\n`
+    );
+  } catch {}
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(`: ping ${Date.now()}\n\n`);
+    } catch {
+      clearInterval(heartbeat);
+      sseClientsByTenant.get(slug)?.delete(entry);
+    }
+  }, 20000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    const bucket = sseClientsByTenant.get(slug);
+    if (bucket) {
+      bucket.delete(entry);
+      if (bucket.size === 0) {
+        sseClientsByTenant.delete(slug);
+      }
+    }
+  });
+});
+
+// 0b. Read-Only Authoritative Snapshot Pull (NEVER overwrites server with stale client cache)
+app.get('/api/cloud-sync/snapshot', requireAuthSession, (req, res) => {
+  try {
+    const slug = normalizeServerCompanySlug(String(req.query.companyId || 'gosen'));
+    const session = assertTenantAccess(req, res, slug);
+    if (!session) return;
+    const isAdminOrSa = session.role === 'admin' || session.sa;
+    const tenant = getTenantStore(slug);
+
+    const rawScopes = String(req.query.scopes || '').trim();
+    const requestedScopes = rawScopes
+      ? new Set(
+          rawScopes
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        )
+      : null;
+    const includeScope = (name: string) => !requestedScopes || requestedScopes.has(name);
+
+    const response: Record<string, any> = {
+      ok: true,
+      companyId: slug,
+      updatedAt: tenant.updatedAt || 0,
+      deletedSaleIds: tenant.deletedSaleIds || [],
+      deletedSupplierIds: tenant.deletedSupplierIds || [],
+      deletedPurchaseIds: tenant.deletedPurchaseIds || [],
+      deletedUserIds: tenant.deletedUserIds || [],
+      explicitDeletedCodes: tenant.explicitDeletedCodes || [],
+      deletedCodes: tenant.deletedCodes || [],
+      deletedIds: tenant.deletedIds || [],
+    };
+
+    if (includeScope('inventory')) {
+      response.inventory = cleanAndDeduplicateTenantInventory(tenant);
+    }
+    if (includeScope('suppliers')) {
+      response.suppliers = Object.values(tenant.suppliers).sort((a, b) =>
+        String(a.name || '').localeCompare(String(b.name || ''))
+      );
+    }
+    if (includeScope('purchases')) {
+      response.purchases = Object.values(tenant.purchases).sort(
+        (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+      );
+    }
+    if (includeScope('sales')) {
+      response.sales = Object.values(tenant.sales).sort(
+        (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+      );
+    }
+    if (includeScope('users')) {
+      response.users = isAdminOrSa
+        ? Object.values(tenant.users)
+            .map(redactUserForResponse)
+            .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+        : [];
+      response.allUsers = session.sa
+        ? Object.entries(syncDbMemory.tenants).flatMap(([tSlug, tData]) =>
+            Object.values(tData.users || {}).map((u: any) =>
+              redactUserForResponse({
+                ...u,
+                companyId: u.companyId || tSlug,
+              })
+            )
+          )
+        : [];
+    }
+    if (includeScope('warehouses')) {
+      response.warehouses = tenant.warehouses;
+    }
+    if (includeScope('settings')) {
+      response.settings = redactSettingsForResponse(tenant.settings);
+    }
+    if (includeScope('posFinance')) {
+      response.posFinance = tenant.posFinance;
+    }
+    if (includeScope('restaurant')) {
+      response.restaurant = tenant.restaurant;
+    }
+    if (includeScope('companies')) {
+      response.companies = session.sa
+        ? Object.values(syncDbMemory.companies).map(redactCompanyForResponse)
+        : syncDbMemory.companies[slug]
+        ? [redactCompanyForResponse(syncDbMemory.companies[slug])]
+        : [];
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(response);
+  } catch (err: any) {
+    console.error('Error in /api/cloud-sync/snapshot:', err);
+    return res.status(500).json({ ok: false, error: err?.message || 'Snapshot error' });
+  }
+});
+
+// 1. Lightweight status check for real-time cross-device fallback polling
 app.get('/api/cloud-sync/status', requireAuthSession, (req, res) => {
   const slug = normalizeServerCompanySlug(String(req.query.companyId || 'gosen'));
   if (!assertTenantAccess(req, res, slug)) return;
   const tenant = getTenantStore(slug);
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     ok: true,
     companyId: slug,
@@ -2687,6 +2939,9 @@ app.post('/api/cloud-sync/inventory', requireAuthSession, (req, res) => {
       tenant.updatedAt = Date.now();
       syncDbMemory.updatedAt = tenant.updatedAt;
       schedulePersistSyncDb();
+      if (changed) {
+        broadcastTenantSyncEvent(slug, ['inventory'], tenant.updatedAt, getSyncClientId(req));
+      }
     }
 
     return res.json({
@@ -2752,6 +3007,7 @@ app.post('/api/cloud-sync/product-save', requireAuthSession, (req, res) => {
     tenant.updatedAt = now;
     syncDbMemory.updatedAt = now;
     schedulePersistSyncDb();
+    broadcastTenantSyncEvent(slug, ['inventory'], now, getSyncClientId(req));
 
     return res.json({ ok: true, count: mergedList.length, updatedAt: now });
   } catch (err: any) {
@@ -2788,6 +3044,7 @@ app.post('/api/cloud-sync/product-delete', requireAuthSession, (req, res) => {
     tenant.updatedAt = Date.now();
     syncDbMemory.updatedAt = tenant.updatedAt;
     schedulePersistSyncDb();
+    broadcastTenantSyncEvent(slug, ['inventory'], tenant.updatedAt, getSyncClientId(req));
 
     return res.json({ ok: true, updatedAt: tenant.updatedAt });
   } catch (err: any) {
@@ -2821,22 +3078,39 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
     const isAdminOrSa = session.role === 'admin' || session.sa;
     const tenant = getTenantStore(slug);
     let changed = false;
+    const changedScopes = new Set<string>();
 
     if (deleteSupplierId) {
-      delete tenant.suppliers[String(deleteSupplierId)];
-      changed = true;
+      const delId = String(deleteSupplierId).trim();
+      if (delId && isSafeRecordKey(delId)) {
+        delete tenant.suppliers[delId];
+        tenant.deletedSupplierIds = Array.from(
+          new Set([...(tenant.deletedSupplierIds || []), delId])
+        ).slice(-500);
+        changed = true;
+        changedScopes.add('suppliers');
+      }
     }
     if (deletePurchaseId) {
-      delete tenant.purchases[String(deletePurchaseId)];
-      changed = true;
+      const delId = String(deletePurchaseId).trim();
+      if (delId && isSafeRecordKey(delId)) {
+        delete tenant.purchases[delId];
+        tenant.deletedPurchaseIds = Array.from(
+          new Set([...(tenant.deletedPurchaseIds || []), delId])
+        ).slice(-500);
+        changed = true;
+        changedScopes.add('purchases');
+      }
     }
     if (deleteSaleId) {
       const delId = String(deleteSaleId).trim();
       if (delId && isSafeRecordKey(delId)) {
         delete tenant.sales[delId];
-        const nextDeleted = Array.from(new Set([...(tenant.deletedSaleIds || []), delId])).slice(-500);
-        tenant.deletedSaleIds = nextDeleted;
+        tenant.deletedSaleIds = Array.from(
+          new Set([...(tenant.deletedSaleIds || []), delId])
+        ).slice(-500);
         changed = true;
+        changedScopes.add('sales');
       }
     }
     if (deleteUserId) {
@@ -2852,23 +3126,131 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
         });
         return res.status(403).json({ ok: false, error: 'Solo administradores pueden eliminar usuarios.' });
       }
-      delete tenant.users[String(deleteUserId)];
-      changed = true;
+      const delId = String(deleteUserId).trim();
+      if (delId && isSafeRecordKey(delId)) {
+        delete tenant.users[delId];
+        tenant.deletedUserIds = Array.from(
+          new Set([...(tenant.deletedUserIds || []), delId])
+        ).slice(-500);
+        changed = true;
+        changedScopes.add('users');
+      }
     }
 
     const deletedSaleSet = new Set(
       (tenant.deletedSaleIds || []).map((id) => String(id || '').trim()).filter(Boolean)
     );
+    const deletedSupplierSet = new Set(
+      (tenant.deletedSupplierIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+    );
+    const deletedPurchaseSet = new Set(
+      (tenant.deletedPurchaseIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+    );
+    const deletedUserSet = new Set(
+      (tenant.deletedUserIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+    );
+
     for (const delId of deletedSaleSet) {
       if (tenant.sales[delId]) {
         delete tenant.sales[delId];
         changed = true;
+        changedScopes.add('sales');
+      }
+    }
+
+    // Conflict-free smart merge for Sales (prevents stale cache from erasing newer credit abonos or edits)
+    if (Array.isArray(sales)) {
+      for (const rawItem of sales) {
+        if (!rawItem || typeof rawItem !== 'object') continue;
+        const item = stripUnsafeKeys(rawItem);
+        const id = String(item.id || item.saleNumber || '').trim();
+        if (!id || !isSafeRecordKey(id)) continue;
+        if (deletedSaleSet.has(id)) continue;
+
+        const prev = tenant.sales[id];
+        if (!prev) {
+          tenant.sales[id] = {
+            ...item,
+            companyId: slug,
+            updatedAt: Number(item.updatedAt || item.timestamp || Date.now()),
+          };
+          changed = true;
+          changedScopes.add('sales');
+          continue;
+        }
+
+        const incUpd = Number(item.updatedAt || 0);
+        const prevUpd = Number(prev.updatedAt || 0);
+        const incPayLen = Array.isArray(item.creditPayments) ? item.creditPayments.length : 0;
+        const prevPayLen = Array.isArray(prev.creditPayments) ? prev.creditPayments.length : 0;
+        const incPaid = Number(item.amountPaid || 0);
+        const prevPaid = Number(prev.amountPaid || 0);
+
+        // Determine winner strictly: newer updatedAt wins; on tie (e.g. legacy records), prefer more abonos / higher paid
+        let incomingWins = false;
+        if (incUpd > prevUpd) {
+          incomingWins = true;
+        } else if (incUpd === prevUpd) {
+          if (incPayLen > prevPayLen || (incPayLen === prevPayLen && incPaid > prevPaid)) {
+            incomingWins = true;
+          } else if (
+            incUpd === 0 &&
+            prevUpd === 0 &&
+            item.status === 'cancelled' &&
+            prev.status !== 'cancelled'
+          ) {
+            incomingWins = true;
+          } else if (
+            incPayLen === prevPayLen &&
+            incPaid === prevPaid &&
+            item.lastEditedAt &&
+            item.lastEditedAt !== prev.lastEditedAt
+          ) {
+            incomingWins = true;
+          }
+        }
+
+        // Union creditPayments safely if timestamps are close/equal so two devices adding abonos never lose one
+        let mergedCreditPayments = incomingWins ? item.creditPayments : prev.creditPayments;
+        if (
+          incUpd === prevUpd &&
+          (incPayLen > 0 || prevPayLen > 0) &&
+          incPayLen !== prevPayLen
+        ) {
+          const payMap = new Map<string, any>();
+          for (const p of [...(prev.creditPayments || []), ...(item.creditPayments || [])]) {
+            if (p && p.id) payMap.set(String(p.id), p);
+          }
+          mergedCreditPayments = Array.from(payMap.values()).sort(
+            (a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0)
+          );
+        }
+
+        const primary = incomingWins ? item : prev;
+        const secondary = incomingWins ? prev : item;
+        const nextRec: Record<string, any> = {
+          ...secondary,
+          ...primary,
+          companyId: slug,
+          creditContract: primary.creditContract || secondary.creditContract,
+          creditPayments: Array.isArray(mergedCreditPayments)
+            ? mergedCreditPayments
+            : primary.creditPayments || [],
+          updatedAt: Math.max(incUpd, prevUpd, Number(prev.timestamp || item.timestamp || 0)),
+        };
+
+        if (JSON.stringify(nextRec) !== JSON.stringify(prev)) {
+          tenant.sales[id] = nextRec;
+          changed = true;
+          changedScopes.add('sales');
+        }
       }
     }
 
     const mergeRecordList = (
       targetMap: Record<string, any>,
       incomingList: any[] | undefined,
+      scopeName: string,
       idField = 'id',
       isUsersCollection = false,
       blockedIds?: Set<string>
@@ -2881,26 +3263,45 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
         if (!id || !isSafeRecordKey(id)) continue;
         if (blockedIds && blockedIds.has(id)) continue;
         const prev = targetMap[id];
+        const incUpd = Number(item.updatedAt || 0);
+        const prevUpd = Number(prev?.updatedAt || 0);
         const incTs = Number(item.updatedAt || item.timestamp || 0);
         const prevTs = Number(prev?.updatedAt || prev?.timestamp || 0);
-        if (!prev || incTs >= prevTs || item.status !== prev.status) {
-          const nextRec = { ...(prev || {}), ...item, companyId: slug };
+
+        const shouldAccept =
+          !prev ||
+          incUpd > prevUpd ||
+          (incUpd === prevUpd && incTs > prevTs) ||
+          (incUpd === 0 &&
+            prevUpd === 0 &&
+            item.status === 'cancelled' &&
+            prev.status !== 'cancelled');
+
+        if (shouldAccept) {
+          const nextRec = {
+            ...(prev || {}),
+            ...item,
+            companyId: slug,
+            updatedAt: Math.max(incUpd, prevUpd, Number(item.timestamp || prev?.timestamp || 0)),
+          };
           if (isUsersCollection) {
             nextRec.password = resolvePasswordWrite(item.password, prev?.password);
           }
-          targetMap[id] = nextRec;
-          changed = true;
+          if (!prev || JSON.stringify(nextRec) !== JSON.stringify(prev)) {
+            targetMap[id] = nextRec;
+            changed = true;
+            changedScopes.add(scopeName);
+          }
         }
       }
     };
 
-    mergeRecordList(tenant.suppliers, suppliers);
-    mergeRecordList(tenant.purchases, purchases);
-    mergeRecordList(tenant.sales, sales, 'id', false, deletedSaleSet);
+    mergeRecordList(tenant.suppliers, suppliers, 'suppliers', 'id', false, deletedSupplierSet);
+    mergeRecordList(tenant.purchases, purchases, 'purchases', 'id', false, deletedPurchaseSet);
 
     if (Array.isArray(users) && users.length > 0) {
       if (isAdminOrSa) {
-        mergeRecordList(tenant.users, users, 'id', true);
+        mergeRecordList(tenant.users, users, 'users', 'id', true, deletedUserSet);
       } else {
         recordSecurityEvent({
           type: 'privilege_escalation_attempt',
@@ -2920,14 +3321,17 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       const prevTs = Number(tenant.warehouses?.updatedAt || 0);
       if (
         !tenant.warehouses ||
-        incTs >= prevTs ||
-        (Array.isArray(safeWarehouses.transfers) &&
-          safeWarehouses.transfers.length > (tenant.warehouses.transfers?.length || 0)) ||
-        (Array.isArray(safeWarehouses.warehouses) &&
-          safeWarehouses.warehouses.length !== (tenant.warehouses.warehouses?.length || 0))
+        incTs > prevTs ||
+        (incTs === prevTs &&
+          Array.isArray(safeWarehouses.transfers) &&
+          safeWarehouses.transfers.length > (tenant.warehouses.transfers?.length || 0))
       ) {
-        tenant.warehouses = { ...safeWarehouses, companyId: slug };
-        changed = true;
+        const nextWh = { ...safeWarehouses, companyId: slug };
+        if (JSON.stringify(nextWh) !== JSON.stringify(tenant.warehouses)) {
+          tenant.warehouses = nextWh;
+          changed = true;
+          changedScopes.add('warehouses');
+        }
       }
     }
 
@@ -2936,17 +3340,21 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
         const safeSettings = stripUnsafeKeys(settings);
         const incTs = Number(safeSettings.updatedAt || 0);
         const prevTs = Number(tenant.settings?.updatedAt || 0);
-        if (!tenant.settings || incTs >= prevTs) {
+        if (!tenant.settings || incTs > prevTs || (incTs === 0 && prevTs === 0)) {
           const hashedPass = resolvePasswordWrite(
             safeSettings.accessPassword,
             tenant.settings?.accessPassword || syncDbMemory.companies[slug]?.adminPassword
           );
-          tenant.settings = {
+          const nextSettings = {
             ...safeSettings,
             companyId: slug,
             ...(hashedPass ? { accessPassword: hashedPass } : {}),
           };
-          changed = true;
+          if (JSON.stringify(nextSettings) !== JSON.stringify(tenant.settings)) {
+            tenant.settings = nextSettings;
+            changed = true;
+            changedScopes.add('settings');
+          }
         }
       }
     }
@@ -2959,15 +3367,38 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       if (!prev) {
         tenant.posFinance = { ...safePosFinance, companyId: slug };
         changed = true;
+        changedScopes.add('posFinance');
       } else {
-        const isIncomingNewer = incTs >= prevTs;
+        const isIncomingNewer = incTs > prevTs;
         const primary = isIncomingNewer ? safePosFinance : prev;
         const secondary = isIncomingNewer ? prev : safePosFinance;
 
-        const mergedControls: Record<string, any> = {
-          ...(secondary.creditAccountControls || {}),
-          ...(primary.creditAccountControls || {}),
-        };
+        // Per-account timestamp-aware merge for creditAccountControls (preserves GPS, collectors, dates across devices)
+        const mergedControls: Record<string, any> = {};
+        const prevControls = prev.creditAccountControls || {};
+        const incControls = safePosFinance.creditAccountControls || {};
+        const allCtrlKeys = new Set([...Object.keys(prevControls), ...Object.keys(incControls)]);
+        for (const key of allCtrlKeys) {
+          const pCtrl = prevControls[key];
+          const iCtrl = incControls[key];
+          if (pCtrl && !iCtrl) {
+            mergedControls[key] = pCtrl;
+          } else if (iCtrl && !pCtrl) {
+            mergedControls[key] = iCtrl;
+          } else if (pCtrl && iCtrl) {
+            const pCtrlTs = Number(pCtrl.updatedAt || 0);
+            const iCtrlTs = Number(iCtrl.updatedAt || 0);
+            if (iCtrlTs > pCtrlTs) {
+              mergedControls[key] = { ...pCtrl, ...iCtrl };
+            } else if (pCtrlTs > iCtrlTs) {
+              mergedControls[key] = { ...iCtrl, ...pCtrl };
+            } else {
+              mergedControls[key] = isIncomingNewer
+                ? { ...pCtrl, ...iCtrl }
+                : { ...iCtrl, ...pCtrl };
+            }
+          }
+        }
 
         const alertMap = new Map<string, any>();
         for (const a of [
@@ -2989,7 +3420,11 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
         for (const s of [...(secondary.shifts || []), ...(primary.shifts || [])]) {
           if (s && s.id) {
             const existing = shiftMap.get(s.id);
-            if (!existing || s.status === 'closed' || (s.cashMovements?.length || 0) >= (existing.cashMovements?.length || 0)) {
+            if (
+              !existing ||
+              s.status === 'closed' ||
+              (s.cashMovements?.length || 0) > (existing.cashMovements?.length || 0)
+            ) {
               shiftMap.set(s.id, s);
             }
           }
@@ -3004,6 +3439,24 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
         }
         const mergedExpenses = Array.from(expMap.values()).sort(
           (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+        );
+
+        const quotationMap = new Map<string, any>();
+        for (const q of [...(secondary.quotations || []), ...(primary.quotations || [])]) {
+          if (!q || !q.id) continue;
+          const existing = quotationMap.get(q.id);
+          if (!existing) {
+            quotationMap.set(q.id, q);
+          } else {
+            const exTs = Number(existing.updatedAt || existing.createdAt || 0);
+            const qTs = Number(q.updatedAt || q.createdAt || 0);
+            if (qTs > exTs || (q.status === 'converted' && existing.status !== 'converted')) {
+              quotationMap.set(q.id, q);
+            }
+          }
+        }
+        const mergedQuotations = Array.from(quotationMap.values()).sort(
+          (a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0)
         );
 
         // Merge enabledCollectorUsernames from primary + any assigned collectors in creditAccountControls
@@ -3028,6 +3481,7 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
           companyId: slug,
           shifts: mergedShifts,
           expenses: mergedExpenses,
+          quotations: mergedQuotations,
           creditAccountControls: mergedControls,
           routeCollectorAlerts: mergedAlerts,
           routeCollectorConfig: {
@@ -3041,6 +3495,7 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
         if (JSON.stringify(mergedPosFinance) !== JSON.stringify(prev)) {
           tenant.posFinance = mergedPosFinance;
           changed = true;
+          changedScopes.add('posFinance');
         }
       }
     }
@@ -3050,9 +3505,13 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       const incTs = Number(safeRestaurant.updatedAt || 0);
       const prev = tenant.restaurant;
       const prevTs = Number(prev?.updatedAt || 0);
-      if (!prev || incTs >= prevTs) {
-        tenant.restaurant = { ...safeRestaurant, companyId: slug };
-        changed = true;
+      if (!prev || incTs > prevTs) {
+        const nextRest = { ...safeRestaurant, companyId: slug };
+        if (JSON.stringify(nextRest) !== JSON.stringify(prev)) {
+          tenant.restaurant = nextRest;
+          changed = true;
+          changedScopes.add('restaurant');
+        }
       }
     }
 
@@ -3065,10 +3524,15 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
             if (!isSafeRecordKey(cSlug)) continue;
             if (!session.sa && cSlug !== slug) continue;
             const prevComp = syncDbMemory.companies[cSlug];
+            const incCompTs = Number(comp.updatedAt || 0);
+            const prevCompTs = Number(prevComp?.updatedAt || 0);
+            if (prevComp && incCompTs > 0 && prevCompTs > 0 && incCompTs < prevCompTs) {
+              continue;
+            }
             const nextComp: Record<string, any> = {
               ...(prevComp || {}),
               ...comp,
-              updatedAt: Number(comp.updatedAt) || Date.now(),
+              updatedAt: Math.max(incCompTs, prevCompTs, Date.now()),
               adminPassword: resolvePasswordWrite(
                 comp.adminPassword,
                 prevComp?.adminPassword,
@@ -3076,8 +3540,11 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
               ),
             };
             delete nextComp._isDefaultFallback;
-            syncDbMemory.companies[cSlug] = nextComp;
-            changed = true;
+            if (!prevComp || JSON.stringify(nextComp) !== JSON.stringify(prevComp)) {
+              syncDbMemory.companies[cSlug] = nextComp;
+              changed = true;
+              changedScopes.add('companies');
+            }
           }
         }
       }
@@ -3087,6 +3554,12 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       tenant.updatedAt = Date.now();
       syncDbMemory.updatedAt = tenant.updatedAt;
       schedulePersistSyncDb();
+      broadcastTenantSyncEvent(
+        slug,
+        Array.from(changedScopes),
+        tenant.updatedAt,
+        getSyncClientId(req)
+      );
     }
 
     const scopedCompanies = session.sa
@@ -3118,6 +3591,10 @@ app.post('/api/cloud-sync/collections', requireAuthSession, (req, res) => {
       sales: Object.values(tenant.sales).sort(
         (a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
       ),
+      deletedSaleIds: tenant.deletedSaleIds || [],
+      deletedSupplierIds: tenant.deletedSupplierIds || [],
+      deletedPurchaseIds: tenant.deletedPurchaseIds || [],
+      deletedUserIds: tenant.deletedUserIds || [],
       users: isAdminOrSa
         ? Object.values(tenant.users)
             .map(redactUserForResponse)

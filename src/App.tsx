@@ -125,9 +125,11 @@ import {
   fetchStoreSettingsOnce,
   subscribeToStoreSettings,
   fetchSuppliersOnce,
+  subscribeToSuppliers,
   fetchSalesOnce,
   subscribeToSales,
   fetchPurchasesOnce,
+  subscribeToPurchases,
   fetchAuditHistoryOnce,
   fetchUsersOnce,
   subscribeToUsers,
@@ -169,6 +171,11 @@ import {
   seedInitialDataIfEmpty,
   pingFirestore,
   fetchBackendSyncStatus,
+  subscribeToBackendSyncStream,
+  fetchAuthoritativeHubSnapshot,
+  flushPendingHubQueue,
+  getSyncClientId,
+  resetFirestoreQuotaState,
   pushProductSaveToBackendHub,
   setBackendSessionAuthenticated,
   getAuthHeaders,
@@ -1268,6 +1275,8 @@ export const App: React.FC = () => {
     let unsubscribeRestaurant: (() => void) | undefined;
     let unsubscribeInventory: (() => void) | undefined;
     let unsubscribeUsers: (() => void) | undefined;
+    let unsubscribePurchases: (() => void) | undefined;
+    let unsubscribeSuppliers: (() => void) | undefined;
 
     // Subscribe to real-time inventory & POS collections only when authenticated or in public catalog mode
     if (isAuthenticated || isPublicCatalogMode) {
@@ -1329,6 +1338,26 @@ export const App: React.FC = () => {
         },
         activeCompanyId
       );
+
+      unsubscribePurchases = subscribeToPurchases(
+        (livePurchases) => {
+          setPurchases(livePurchases);
+        },
+        (err) => {
+          console.warn('Purchases realtime listener warning:', err);
+        },
+        activeCompanyId
+      );
+
+      unsubscribeSuppliers = subscribeToSuppliers(
+        (liveSuppliers) => {
+          setSuppliers(liveSuppliers);
+        },
+        (err) => {
+          console.warn('Suppliers realtime listener warning:', err);
+        },
+        activeCompanyId
+      );
     }
 
     return () => {
@@ -1341,6 +1370,8 @@ export const App: React.FC = () => {
       if (unsubscribeWarehouses) unsubscribeWarehouses();
       if (unsubscribeRestaurant) unsubscribeRestaurant();
       if (unsubscribeUsers) unsubscribeUsers();
+      if (unsubscribePurchases) unsubscribePurchases();
+      if (unsubscribeSuppliers) unsubscribeSuppliers();
     };
   }, [activeCompanyId, isPublicCatalogMode, isSalesLandingMode, isAuthenticated]);
 
@@ -1463,13 +1494,112 @@ export const App: React.FC = () => {
     loadTabDependencies();
   }, [activeTab, isAuthenticated, isPublicCatalogMode, activeCompanyId]);
 
-  // 4. Real-Time Multi-Device Sync Polling (every 6s + on tab focus, 0 Firestore reads!)
+  // 4. Instant Real-Time Multi-Device Sync (SSE Push <150ms + Authoritative Snapshot Pull + Focus/Online Recovery)
   const lastHubUpdatedAtRef = useRef<number>(0);
   useEffect(() => {
-    if (isSalesLandingMode && !isPublicCatalogMode) return;
+    if ((isSalesLandingMode && !isPublicCatalogMode) || !isAuthenticated || !sessionVerified) {
+      return;
+    }
 
     let isMounted = true;
+    let pullInFlight = false;
+    let queuedScopes: Set<string> | null = null;
+    const myClientId = getSyncClientId();
     lastHubUpdatedAtRef.current = 0;
+
+    const applyAuthoritativeSnapshot = async (scopes?: string[]) => {
+      if (!isMounted) return;
+      if (pullInFlight) {
+        if (!scopes || scopes.length === 0) {
+          queuedScopes = new Set(); // empty set signals full pull
+        } else if (queuedScopes === null) {
+          queuedScopes = new Set(scopes);
+        } else if (queuedScopes.size > 0) {
+          scopes.forEach((s) => queuedScopes!.add(s));
+        }
+        return;
+      }
+
+      pullInFlight = true;
+      try {
+        const snap = await fetchAuthoritativeHubSnapshot(activeCompanyId, scopes);
+        if (!isMounted || !snap?.ok) return;
+        const srvTs = Number(snap.updatedAt || 0);
+        if (srvTs > lastHubUpdatedAtRef.current) {
+          lastHubUpdatedAtRef.current = srvTs;
+        }
+        const scopeSet = new Set(Array.isArray(scopes) ? scopes : []);
+
+        if (
+          srvTs > 0 &&
+          Array.isArray(snap.inventory) &&
+          (snap.inventory.length > 0 ||
+            scopeSet.has('inventory') ||
+            (snap.explicitDeletedCodes?.length || 0) > 0)
+        ) {
+          setInventory(snap.inventory);
+        }
+        if (
+          srvTs > 0 &&
+          Array.isArray(snap.sales) &&
+          (snap.sales.length > 0 ||
+            scopeSet.has('sales') ||
+            (snap.deletedSaleIds?.length || 0) > 0)
+        ) {
+          setSales(snap.sales);
+        }
+        if (snap.posFinance) {
+          setPosFinanceData(snap.posFinance);
+        }
+        if (snap.warehouses) {
+          setWarehousesData(snap.warehouses);
+        }
+        if (
+          srvTs > 0 &&
+          Array.isArray(snap.purchases) &&
+          (snap.purchases.length > 0 ||
+            scopeSet.has('purchases') ||
+            (snap.deletedPurchaseIds?.length || 0) > 0)
+        ) {
+          setPurchases(snap.purchases);
+        }
+        if (
+          srvTs > 0 &&
+          Array.isArray(snap.suppliers) &&
+          (snap.suppliers.length > 0 ||
+            scopeSet.has('suppliers') ||
+            (snap.deletedSupplierIds?.length || 0) > 0)
+        ) {
+          setSuppliers(snap.suppliers);
+        }
+        if (snap.settings) {
+          setStoreSettings((prev) => {
+            const nextSettings = { ...prev, ...snap.settings };
+            setCachedStoreSettings(nextSettings, activeCompanyId);
+            return nextSettings;
+          });
+        }
+        if (Array.isArray(snap.users) && snap.users.length > 0) {
+          setUsers(snap.users);
+        }
+        if (snap.restaurant) {
+          setRestaurantData(snap.restaurant);
+        }
+        if (Array.isArray(snap.companies) && snap.companies.length > 0) {
+          setCompanies(snap.companies);
+        }
+        setIsFirebaseConnected(true);
+        setLastSyncTime(new Date());
+      } catch {
+      } finally {
+        pullInFlight = false;
+        if (isMounted && queuedScopes !== null) {
+          const nextScopes = queuedScopes.size > 0 ? Array.from(queuedScopes) : undefined;
+          queuedScopes = null;
+          applyAuthoritativeSnapshot(nextScopes);
+        }
+      }
+    };
 
     const checkHubUpdates = async (force = false) => {
       try {
@@ -1477,69 +1607,83 @@ export const App: React.FC = () => {
         if (!isMounted || !status?.ok) return;
         const serverTs = Number(status.updatedAt || 0);
         if (force || (serverTs > 0 && serverTs > lastHubUpdatedAtRef.current)) {
-          const isInitial = lastHubUpdatedAtRef.current === 0;
-          lastHubUpdatedAtRef.current = serverTs;
-          if (!isInitial || force) {
-            const [
-              invRes,
-              freshWarehouses,
-              freshPurchases,
-              freshSuppliers,
-              freshSettings,
-              freshCompanies,
-              freshPosFinance,
-              freshUsers,
-              freshSales,
-              freshRestaurant,
-            ] = await Promise.all([
-              fetchInventorySmart(false, activeCompanyId),
-              fetchStoreWarehousesOnce(activeCompanyId),
-              fetchPurchasesOnce(false, activeCompanyId),
-              fetchSuppliersOnce(false, activeCompanyId),
-              fetchStoreSettingsOnce(activeCompanyId),
-              fetchCompaniesOnce(false),
-              fetchPOSFinanceDataOnce(activeCompanyId),
-              fetchUsersOnce(false, activeCompanyId),
-              fetchSalesOnce(false, activeCompanyId),
-              fetchRestaurantDataOnce(activeCompanyId),
-            ]);
-            if (!isMounted) return;
-            setInventory(invRes.items);
-            setWarehousesData(freshWarehouses);
-            setPurchases(freshPurchases);
-            setSuppliers(freshSuppliers);
-            setStoreSettings(freshSettings);
-            setCompanies(freshCompanies);
-            setPosFinanceData(freshPosFinance);
-            setUsers(freshUsers);
-            setSales(freshSales);
-            setRestaurantData(freshRestaurant);
-            setLastSyncTime(new Date());
-          }
+          lastHubUpdatedAtRef.current = Math.max(lastHubUpdatedAtRef.current, serverTs);
+          await applyAuthoritativeSnapshot();
         }
       } catch {}
     };
 
-    checkHubUpdates(false);
+    // 1. Open instant SSE real-time push stream (sub-second sync between PC & Mobile)
+    const unsubscribeStream = subscribeToBackendSyncStream(activeCompanyId, (event) => {
+      if (!isMounted) return;
+      if (event.type === 'connected') {
+        if (event.updatedAt > lastHubUpdatedAtRef.current) {
+          lastHubUpdatedAtRef.current = event.updatedAt;
+          applyAuthoritativeSnapshot();
+        }
+        return;
+      }
+      if (event.type === 'sync') {
+        if (event.updatedAt > lastHubUpdatedAtRef.current) {
+          lastHubUpdatedAtRef.current = event.updatedAt;
+        }
+        if (event.sourceClientId && event.sourceClientId === myClientId) {
+          return;
+        }
+        applyAuthoritativeSnapshot(event.scopes);
+      }
+    });
+
+    // 2. Immediate initial authoritative catch-up upon authentication
+    applyAuthoritativeSnapshot();
+
+    // 3. Lightweight fallback heartbeat every 15s (guards against silent cellular NAT drops)
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         checkHubUpdates(false);
       }
-    }, 6000);
+    }, 15000);
 
+    // 4. Instant wake-up sync when returning to the app on Mobile / switching tabs / reconnecting internet
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         lastVisibilityCheckRef.current = Date.now();
-        checkHubUpdates(true);
+        flushPendingHubQueue()
+          .then(() => applyAuthoritativeSnapshot())
+          .catch(() => {});
       }
     };
+
+    const handleWindowFocus = () => {
+      const now = Date.now();
+      if (now - lastVisibilityCheckRef.current > 1500) {
+        lastVisibilityCheckRef.current = now;
+        flushPendingHubQueue()
+          .then(() => checkHubUpdates(true))
+          .catch(() => {});
+      }
+    };
+
+    const handleOnline = () => {
+      resetFirestoreQuotaState();
+      flushPendingHubQueue()
+        .then(() => applyAuthoritativeSnapshot())
+        .catch(() => {});
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleWindowFocus);
+    window.addEventListener('online', handleOnline);
+
     return () => {
       isMounted = false;
+      unsubscribeStream();
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('online', handleOnline);
     };
-  }, [activeCompanyId, isSalesLandingMode, isPublicCatalogMode]);
+  }, [activeCompanyId, isSalesLandingMode, isPublicCatalogMode, isAuthenticated, sessionVerified]);
 
   // Live-sync active collaborator session when Admin updates their permissions or Route Collector assignment
   const prevRouteCollectorStatusRef = useRef<boolean>(false);
